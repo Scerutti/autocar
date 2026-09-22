@@ -14,6 +14,34 @@ function compactMoney(n: number) {
   return `$${Math.round(n)}`
 }
 
+/** Tarjeta de gráfico: siempre con título y una línea que explica qué se ve y cómo leerlo. */
+export function ChartCard({
+  title,
+  description,
+  legend,
+  children,
+  className,
+}: {
+  title: string
+  description: string
+  legend?: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <section className={cn('rounded-2xl border border-white/8 bg-card/60 p-5', className)}>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+        </div>
+        {legend}
+      </div>
+      {children}
+    </section>
+  )
+}
+
 export function Legend({ items }: { items: { label: string; color: string }[] }) {
   return (
     <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
@@ -165,6 +193,8 @@ export function KmChart({ readings }: { readings: { km: number; date: Date }[] }
   const h = hover != null ? points[hover] : null
   return (
     <div>
+      {/* Escala: km más alto arriba y más bajo abajo, para leer el gráfico sin adivinar */}
+      <div className="mb-1 text-[11px] tabular-nums text-muted-foreground">{formatKm(k1)}</div>
       <div className="relative">
         <svg
           viewBox={`0 0 ${W} ${H}`}
@@ -198,6 +228,7 @@ export function KmChart({ readings }: { readings: { km: number; date: Date }[] }
           />
         )}
       </div>
+      <div className="mt-1 text-[11px] tabular-nums text-muted-foreground">{formatKm(k0)}</div>
       <div className="mt-2 flex justify-between text-xs text-muted-foreground">
         {h ? (
           <span className="w-full text-center text-foreground">

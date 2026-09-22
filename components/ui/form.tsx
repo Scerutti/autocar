@@ -13,22 +13,6 @@ export function Textarea({ className, ...props }: React.ComponentProps<'textarea
   return <textarea data-slot="textarea" className={cn(control, 'min-h-20 py-2.5', className)} {...props} />
 }
 
-export function Select({ className, children, ...props }: React.ComponentProps<'select'>) {
-  return (
-    <select
-      data-slot="select"
-      className={cn(
-        control,
-        "h-11 appearance-none bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23a1a1a1' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E\")] bg-[position:right_0.75rem_center] bg-no-repeat pr-9",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </select>
-  )
-}
-
 export function Field({
   label,
   hint,
@@ -76,39 +60,6 @@ export function Checkbox({
         {description && <span className="text-xs text-muted-foreground">{description}</span>}
       </span>
     </label>
-  )
-}
-
-/** Grupo de botones tipo "segmented control". */
-export function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-  className,
-}: {
-  value: T
-  onChange: (v: T) => void
-  options: { value: T; label: React.ReactNode }[]
-  className?: string
-}) {
-  return (
-    <div className={cn('grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-muted p-1', className)} role="radiogroup">
-      {options.map(o => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            'h-9 rounded-lg px-3 text-sm font-medium transition',
-            value === o.value ? 'bg-background text-foreground shadow-sm ring-1 ring-border' : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
 

@@ -1,4 +1,4 @@
-import type { ISODate } from './types'
+import type { ISODate, TimeInterval } from './types'
 
 const DAY_MS = 86_400_000
 
@@ -50,4 +50,23 @@ export function daysBetween(from: ISODate, to: ISODate): number {
 
 export function daysBetweenInstants(from: Date, to: Date): number {
   return (to.getTime() - from.getTime()) / DAY_MS
+}
+
+/** Suma un lapso ("3 semanas", "6 meses", "1 año") a una fecha. */
+export function addInterval(date: ISODate, { amount, unit }: TimeInterval): ISODate {
+  switch (unit) {
+    case 'day':
+      return addDays(date, amount)
+    case 'week':
+      return addDays(date, amount * 7)
+    case 'month':
+      return addMonths(date, amount)
+    case 'year':
+      return addMonths(date, amount * 12)
+  }
+}
+
+/** Duración aproximada en días (para márgenes de aviso). */
+export function intervalDays({ amount, unit }: TimeInterval): number {
+  return amount * { day: 1, week: 7, month: 30.44, year: 365.25 }[unit]
 }

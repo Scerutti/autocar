@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { buttonVariants } from '@/components/ui/button'
-import { Segmented } from '@/components/ui/form'
+import { Segmented } from '@/components/ui/choice'
 import { useData } from '@/components/providers/data-provider'
 import { formatMoney, MONTHS_SHORT } from '@/lib/format'
 

@@ -2,37 +2,44 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Trash2 } from 'lucide-react'
+import { Fuel, Trash2 } from 'lucide-react'
+import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
-import { Checkbox, Field, FormError, Input, Segmented } from '@/components/ui/form'
+import { FieldGroup, Segmented } from '@/components/ui/choice'
+import { Checkbox, Field, FormError, Input } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { toISODate } from '@/lib/dates'
 import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
-import { resolveFuelAmounts } from '@/lib/fuel'
-import { formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput } from '@/lib/format'
-import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type FuelType } from '@/lib/types'
+import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
+import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput } from '@/lib/format'
+import { FUEL_LABELS, FUEL_UNITS, NAFTA_GRADE_LABELS, type Car, type FuelLoad, type FuelType, type NaftaGrade } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
 type PriceMode = 'unit' | 'total'
 
 export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
+  const confirm = useConfirm()
   const { uid, today, odometer } = useData()
   const { fuel: carFuel } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
-  const lastOf = (t: FuelType) => carFuel.find(f => f.fuelType === t)
-  const initialType = load?.fuelType ?? carFuel[0]?.fuelType ?? car.fuelTypes[0]
+  const hasGnc = car.fuelTypes.includes('gnc')
+  // La carga más reciente de ese combustible (y de esa nafta, si se indica): sugiere precio y estación.
+  const lastOf = (t: FuelType, g?: NaftaGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
+  const initialType: FuelType = load?.fuelType ?? (hasGnc ? (carFuel[0]?.fuelType ?? 'nafta') : 'nafta')
+  const initialGrade: NaftaGrade = load?.grade ?? lastOf('nafta')?.grade ?? 'super'
+  const initialLast = lastOf(initialType, initialType === 'nafta' ? initialGrade : null)
+
   const [fuelType, setFuelType] = useState<FuelType>(initialType)
+  const [grade, setGrade] = useState<NaftaGrade>(initialGrade)
   const [date, setDate] = useState(load?.date ?? toISODate(new Date()))
   const [km, setKm] = useState(load ? (load.km != null ? String(load.km) : '') : String(car.currentKm))
   const [quantity, setQuantity] = useState(load ? String(load.quantity) : '')
   const [mode, setMode] = useState<PriceMode>(load ? 'total' : 'unit')
-  const [price, setPrice] = useState(
-    load ? String(load.total) : lastOf(initialType)?.unitPrice ? String(lastOf(initialType)!.unitPrice) : '',
-  )
+  const [price, setPrice] = useState(load ? String(load.total) : initialLast?.unitPrice ? String(initialLast.unitPrice) : '')
   const [fullTank, setFullTank] = useState(load?.fullTank ?? true)
-  const [station, setStation] = useState(load?.station ?? lastOf(initialType)?.station ?? '')
+  const [station, setStation] = useState(load?.station ?? initialLast?.station ?? '')
 
   const unit = FUEL_UNITS[fuelType]
   const priceNum = parseNumberInput(price)
@@ -42,12 +49,22 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
     total: mode === 'total' ? priceNum : null,
   })
 
+  // Al cambiar de combustible o de nafta, sugerir el último precio que pagaste por esa.
+  function suggestFrom(t: FuelType, g: NaftaGrade | null) {
+    if (load) return
+    const last = lastOf(t, g)
+    if (mode === 'unit') setPrice(last?.unitPrice ? String(last.unitPrice) : '')
+    if (last?.station) setStation(last.station)
+  }
+
   function changeType(t: FuelType) {
     setFuelType(t)
-    // Sugerir el último precio conocido de ese combustible.
-    const last = lastOf(t)
-    if (!load && mode === 'unit') setPrice(last?.unitPrice ? String(last.unitPrice) : '')
-    if (!load && last?.station) setStation(last.station)
+    suggestFrom(t, t === 'nafta' ? grade : null)
+  }
+
+  function changeGrade(g: NaftaGrade) {
+    setGrade(g)
+    suggestFrom('nafta', g)
   }
 
   function changeMode(m: PriceMode) {
@@ -63,36 +80,56 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
     if (kmNum != null && (kmNum < 0 || !Number.isInteger(kmNum))) return setError('Los km no son válidos.')
     if (date > today) return setError('La fecha no puede ser futura.')
 
+    const data = {
+      carId: car.id,
+      date,
+      km: kmNum,
+      fuelType,
+      grade: fuelType === 'nafta' ? grade : null,
+      ...amounts,
+      fullTank: fuelType === 'gnc' ? true : fullTank,
+      station: station.trim() || null,
+    }
+    const confirmed = await confirm({
+      title: load ? '¿Guardar los cambios de la carga?' : '¿Guardar esta carga?',
+      description: 'Revisá que los datos estén bien.',
+      details: [
+        { label: 'Combustible', value: fuelLabel(data) },
+        { label: 'Cantidad', value: `${formatNumber(amounts.quantity)} ${unit}` },
+        { label: `Precio por ${unit}`, value: formatMoneyPrecise(amounts.unitPrice) },
+        { label: 'Total', value: formatMoney(amounts.total) },
+        { label: 'Fecha', value: formatDate(date) },
+        ...(kmNum != null ? [{ label: 'Km', value: formatKm(kmNum) }] : []),
+        ...(fuelType === 'nafta' ? [{ label: 'Tanque lleno', value: fullTank ? 'Sí' : 'No' }] : []),
+        ...(data.station ? [{ label: 'Estación', value: data.station }] : []),
+      ],
+      confirmLabel: 'Sí, guardar',
+      icon: Fuel,
+    })
+    if (!confirmed) return
+
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(
-        saveFuel(
-          uid,
-          { car, readings: odometer },
-          {
-            carId: car.id,
-            date,
-            km: kmNum,
-            fuelType,
-            ...amounts,
-            fullTank: fuelType === 'gnc' ? true : fullTank,
-            station: station.trim() || null,
-          },
-          load?.id,
-        ),
-      )
+      status = await settle(saveFuel(uid, { car, readings: odometer }, data, load?.id))
     })
     if (!ok) return
     toastSaved(
       load ? 'Carga actualizada' : 'Carga guardada',
       status,
-      `${FUEL_LABELS[fuelType]} · ${formatNumber(amounts.quantity)} ${unit} · ${formatMoney(amounts.total)}`,
+      `${fuelLabel(data)} · ${formatNumber(amounts.quantity)} ${unit} · ${formatMoney(amounts.total)}`,
     )
     router.replace(`/autos/${car.id}?tab=combustible`)
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!load) return
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: '¿Borrar esta carga?',
+      description: `${fuelLabel(load)} · ${formatNumber(load.quantity)} ${FUEL_UNITS[load.fuelType]} · ${formatMoney(load.total)} · ${formatDate(load.date)}.`,
+      confirmLabel: 'Sí, borrar',
+    })
+    if (!confirmed) return
     router.replace(`/autos/${car.id}?tab=combustible`)
     removeWithUndo({
       message: 'Carga borrada',
@@ -102,15 +139,25 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   }
 
   return (
-    <form onSubmit={submit} className="mx-auto max-w-xl space-y-6">
-      {car.fuelTypes.length > 1 && (
-        <Field label="Combustible">
+    <form onSubmit={submit} className="mx-auto max-w-xl space-y-6" noValidate>
+      {hasGnc && (
+        <FieldGroup label="¿Qué cargaste?">
           <Segmented
             value={fuelType}
             onChange={changeType}
-            options={car.fuelTypes.map(t => ({ value: t, label: FUEL_LABELS[t] }))}
+            options={(['nafta', 'gnc'] as const).map(t => ({ value: t, label: FUEL_LABELS[t] }))}
           />
-        </Field>
+        </FieldGroup>
+      )}
+
+      {fuelType === 'nafta' && (
+        <FieldGroup label="¿Qué nafta?">
+          <Segmented
+            value={grade}
+            onChange={changeGrade}
+            options={(['super', 'premium'] as const).map(g => ({ value: g, label: NAFTA_GRADE_LABELS[g] }))}
+          />
+        </FieldGroup>
       )}
 
       <div className="grid grid-cols-2 gap-4">
@@ -133,7 +180,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
         />
       </Field>
 
-      <div className="space-y-3">
+      <FieldGroup label="¿Cuánto pagaste?">
         <Segmented
           value={mode}
           onChange={changeMode}
@@ -163,7 +210,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
             )}
           </p>
         )}
-      </div>
+      </FieldGroup>
 
       {fuelType === 'nafta' && (
         <Checkbox

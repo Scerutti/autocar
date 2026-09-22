@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { computeCostPerKm, computeFuelStats, resolveFuelAmounts } from './fuel'
+import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
+import { fuelTypesFromDoc } from './parse'
 import { computeAvgKmPerDay, validateKmReading } from './odometer'
 import { summarizeExpenses } from './expenses'
 import { everyWeekday, parseNumberInput } from './format'
@@ -13,6 +14,7 @@ function load(p: Partial<FuelLoad>): FuelLoad {
     date: '2026-01-01',
     km: null,
     fuelType: 'nafta',
+    grade: 'super',
     quantity: 40,
     unitPrice: 1000,
     total: 40000,
@@ -136,5 +138,31 @@ describe('everyWeekday', () => {
     expect(everyWeekday(0)).toBe('los domingos')
     expect(everyWeekday(2)).toBe('los martes')
     expect(everyWeekday(6)).toBe('los sábados')
+  })
+})
+
+describe('nafta súper/premium y GNC', () => {
+  it('arma la etiqueta', () => {
+    expect(fuelLabel({ fuelType: 'nafta', grade: 'premium' })).toBe('Nafta Premium')
+    expect(fuelLabel({ fuelType: 'nafta', grade: null })).toBe('Nafta')
+    expect(fuelLabel({ fuelType: 'gnc', grade: null })).toBe('GNC')
+  })
+  it('último precio por variante', () => {
+    const loads = [
+      load({ date: '2026-09-01', grade: 'super', unitPrice: 1100 }),
+      load({ date: '2026-09-10', grade: 'super', unitPrice: 1200 }),
+      load({ date: '2026-09-05', grade: 'premium', unitPrice: 1450 }),
+      load({ date: '2026-09-08', fuelType: 'gnc', grade: null, unitPrice: 480 }),
+    ]
+    expect(lastPrices(loads).map(p => [p.fuelType, p.grade, p.unitPrice])).toEqual([
+      ['nafta', 'super', 1200],
+      ['gnc', null, 480],
+      ['nafta', 'premium', 1450],
+    ])
+  })
+  it('un auto viejo "sólo GNC" pasa a nafta + GNC', () => {
+    expect(fuelTypesFromDoc(['gnc'])).toEqual(['nafta', 'gnc'])
+    expect(fuelTypesFromDoc(['nafta'])).toEqual(['nafta'])
+    expect(fuelTypesFromDoc(undefined)).toEqual(['nafta'])
   })
 })

@@ -137,6 +137,13 @@
     @apply bg-background text-foreground;
     -webkit-tap-highlight-color: transparent;
   }
+  /* Si algún <select> nativo quedara, que su lista no salga blanca con texto claro (Windows) */
+  select,
+  option {
+    color-scheme: dark;
+    background-color: var(--popover);
+    color: var(--popover-foreground);
+  }
   /* Sin flechitas en inputs numéricos */
   input[type='number']::-webkit-inner-spin-button,
   input[type='number']::-webkit-outer-spin-button {

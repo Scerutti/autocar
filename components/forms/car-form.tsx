@@ -3,34 +3,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Camera, CarFront, Trash2, X } from 'lucide-react'
-import {
-  AlertDialog,
-  AlertDialogClose,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
+import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
-import { Field, FormError, Input, Segmented } from '@/components/ui/form'
+import { FieldGroup, Segmented } from '@/components/ui/choice'
+import { Field, FormError, Input } from '@/components/ui/form'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, uploadImage } from '@/lib/cloudinary-client'
 import { createCar, deleteCar, newId, updateCar, type CarInput } from '@/lib/db'
-import { parseNumberInput } from '@/lib/format'
+import { formatKm, parseNumberInput } from '@/lib/format'
 import type { Car, FuelType } from '@/lib/types'
 import { toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
-type FuelChoice = 'nafta' | 'gnc' | 'dual'
+// Un auto anda a nafta o a nafta + GNC (no existen los que andan sólo a GNC).
+type FuelChoice = 'nafta' | 'dual'
 
-const toChoice = (f: FuelType[]): FuelChoice => (f.includes('nafta') && f.includes('gnc') ? 'dual' : f[0] === 'gnc' ? 'gnc' : 'nafta')
-const fromChoice = (c: FuelChoice): FuelType[] => (c === 'dual' ? ['nafta', 'gnc'] : [c])
+const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gnc') ? 'dual' : 'nafta')
+const fromChoice = (c: FuelChoice): FuelType[] => (c === 'dual' ? ['nafta', 'gnc'] : ['nafta'])
+const FUEL_CHOICE_LABELS: Record<FuelChoice, string> = { nafta: 'Sólo nafta', dual: 'Nafta + GNC' }
 
 export function CarForm({ car }: { car?: Car }) {
   const router = useRouter()
+  const confirm = useConfirm()
   const { getToken } = useAuth()
   const { uid } = useData()
   const { saving, error, setError, run } = useSaver()
@@ -80,15 +76,32 @@ export function CarForm({ car }: { car?: Car }) {
     }
     if (!car && (kmNum == null || kmNum < 0 || !Number.isInteger(kmNum))) return setError('Ingresá los km actuales.')
 
+    const data: CarInput = {
+      brand: brand.trim(),
+      model: model.trim(),
+      version: version.trim() || null,
+      year: yearNum,
+      plate: plate.trim().toUpperCase() || null,
+      fuelTypes: fromChoice(fuel),
+    }
+    const photoLabel = photoFile ? (car?.photoUrl ? 'Se cambia' : 'Sí') : removePhoto ? 'Se quita' : currentPhoto ? 'Sí' : 'Sin foto'
+    const confirmed = await confirm({
+      title: car ? '¿Guardar los cambios?' : '¿Agregar este auto?',
+      description: 'Revisá que los datos estén bien.',
+      details: [
+        { label: 'Auto', value: [data.brand, data.model, data.version].filter(Boolean).join(' ') },
+        ...(data.year ? [{ label: 'Año', value: String(data.year) }] : []),
+        ...(data.plate ? [{ label: 'Patente', value: data.plate }] : []),
+        { label: 'Combustible', value: FUEL_CHOICE_LABELS[fuel] },
+        ...(!car ? [{ label: 'Km actuales', value: formatKm(kmNum!) }] : []),
+        { label: 'Foto', value: photoLabel },
+      ],
+      confirmLabel: car ? 'Sí, guardar' : 'Sí, agregar',
+      icon: CarFront,
+    })
+    if (!confirmed) return
+
     const ok = await run(async () => {
-      const data: CarInput = {
-        brand: brand.trim(),
-        model: model.trim(),
-        version: version.trim() || null,
-        year: yearNum,
-        plate: plate.trim().toUpperCase() || null,
-        fuelTypes: fromChoice(fuel),
-      }
       const oldPublicId = car?.photoPublicId ?? null
       if (photoFile) {
         setStatus('Subiendo foto…')
@@ -114,7 +127,7 @@ export function CarForm({ car }: { car?: Car }) {
   }
 
   return (
-    <form onSubmit={submit} className="mx-auto max-w-xl space-y-6">
+    <form onSubmit={submit} className="mx-auto max-w-xl space-y-6" noValidate>
       <div>
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
         {currentPhoto ? (
@@ -163,23 +176,22 @@ export function CarForm({ car }: { car?: Car }) {
           <Input value={plate} onChange={e => setPlate(e.target.value)} placeholder="AC 123 CD" autoCapitalize="characters" />
         </Field>
         {!car && (
-          <Field label="Km actuales" className="col-span-2 sm:col-span-1">
+          <Field label="Km actuales" hint="Los que marca el tablero hoy" className="col-span-2 sm:col-span-1">
             <Input value={km} onChange={e => setKm(e.target.value)} inputMode="numeric" placeholder="86420" required />
           </Field>
         )}
       </div>
 
-      <Field label="Combustible" hint="Si tiene equipo de GNC elegí Nafta + GNC.">
+      <FieldGroup label="Combustible" hint="Si el auto tiene equipo de GNC, elegí Nafta + GNC.">
         <Segmented
           value={fuel}
           onChange={setFuel}
           options={[
-            { value: 'nafta', label: 'Nafta' },
-            { value: 'gnc', label: 'GNC' },
-            { value: 'dual', label: 'Nafta + GNC' },
+            { value: 'nafta', label: FUEL_CHOICE_LABELS.nafta },
+            { value: 'dual', label: FUEL_CHOICE_LABELS.dual },
           ]}
         />
-      </Field>
+      </FieldGroup>
 
       <FormError>{error}</FormError>
 
@@ -199,26 +211,35 @@ export function CarForm({ car }: { car?: Car }) {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-/** Borrar un auto borra todo su historial y la foto: es la única acción que pide confirmación. */
+/** Borrar un auto borra todo su historial y la foto: no se puede deshacer. */
 function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
+  const confirm = useConfirm()
   const { getToken } = useAuth()
   const { uid } = useData()
   const { rules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
-  const counts = [
-    [rules.length, 'mantenimiento', 'mantenimientos'],
-    [jobs.length, 'trabajo', 'trabajos'],
-    [fuel.length, 'carga', 'cargas'],
-    [readings.length, 'registro de km', 'registros de km'],
-  ] as const
-  const present = counts.filter(([n]) => n > 0)
-  const related = present.map(([n, one, many]) => plural(n, one, many))
-  // "se borra 1 registro" / "se borran 2 trabajos y 1 carga"
-  const verb = present.length === 1 && present[0][0] === 1 ? 'se borra' : 'se borran'
-  const list = related.length > 1 ? `${related.slice(0, -1).join(', ')} y ${related.at(-1)}` : related[0]
 
-  function handleDelete() {
+  async function handleDelete() {
+    const counts = [
+      [rules.length, 'mantenimiento', 'mantenimientos'],
+      [jobs.length, 'trabajo', 'trabajos'],
+      [fuel.length, 'carga', 'cargas'],
+      [readings.length, 'registro de km', 'registros de km'],
+    ] as const
+    const present = counts.filter(([n]) => n > 0)
+    const related = present.map(([n, one, many]) => plural(n, one, many))
+    // "se borra 1 registro" / "se borran 2 trabajos y 1 carga"
+    const verb = present.length === 1 && present[0][0] === 1 ? 'se borra' : 'se borran'
+    const list = related.length > 1 ? `${related.slice(0, -1).join(', ')} y ${related.at(-1)}` : related[0]
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: `¿Borrar ${name}?`,
+      description: `${related.length ? `También ${verb} ${list}` : 'También se borra todo su historial'}${car.photoUrl ? ' y la foto' : ''}. No se puede deshacer.`,
+      confirmLabel: 'Sí, borrar todo',
+    })
+    if (!confirmed) return
+
     // Primero salimos de la pantalla del auto para no mostrar "no encontrado" mientras se borra.
     router.replace('/')
     runInBackground(
@@ -240,37 +261,9 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     <div className="rounded-2xl border border-destructive/20 bg-destructive/[0.04] p-4">
       <p className="text-sm font-medium">Borrar auto</p>
       <p className="mt-1 text-xs text-muted-foreground">Se borra el auto con todo su historial. No se puede deshacer.</p>
-      <AlertDialog>
-        <AlertDialogTrigger
-          disabled={disabled}
-          render={<Button type="button" variant="destructive" size="sm" className="mt-3 gap-1.5" />}
-        >
-          <Trash2 /> Borrar {name}
-        </AlertDialogTrigger>
-        <AlertDialogContent>
-          <div className="flex items-start gap-4">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive">
-              <Trash2 className="size-5" />
-            </div>
-            <div className="space-y-1.5">
-              <AlertDialogTitle>¿Borrar {name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                {related.length ? `También ${verb} ${list}` : 'También se borra todo su historial'}
-                {car.photoUrl ? ' y la foto.' : '.'} No se puede deshacer.
-              </AlertDialogDescription>
-            </div>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" className="h-10" />}>Cancelar</AlertDialogClose>
-            <AlertDialogClose
-              onClick={handleDelete}
-              render={<Button className="h-10 gap-1.5 bg-red-600 text-white hover:bg-red-600/90 focus-visible:ring-red-500/40" />}
-            >
-              <Trash2 /> Borrar definitivamente
-            </AlertDialogClose>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <Button type="button" variant="destructive" size="sm" className="mt-3 gap-1.5" onClick={handleDelete} disabled={disabled}>
+        <Trash2 /> Borrar {name}
+      </Button>
     </div>
   )
 }

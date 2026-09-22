@@ -3,11 +3,11 @@
 import { Suspense, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronRight, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
+import { CalendarClock, ChevronRight, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ActivityList, mergeActivity } from '@/components/activity'
-import { KmChart } from '@/components/charts'
+import { ChartCard, KmChart } from '@/components/charts'
 import {
   CarAvatar,
   EmptyState,
@@ -21,14 +21,15 @@ import {
   carDetail,
   carName,
 } from '@/components/common'
+import { useConfirm } from '@/components/confirm-provider'
 import { KmDialog } from '@/components/km-form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { toISODate } from '@/lib/dates'
 import { deleteReading, restoreReading } from '@/lib/db'
-import { computeCostPerKm, computeFuelStats } from '@/lib/fuel'
+import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
-import { describeRemaining, type RuleWithState } from '@/lib/maintenance'
+import { describeRemaining, describeRuleInterval, type RuleWithState } from '@/lib/maintenance'
 import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type OdometerReading } from '@/lib/types'
 import { removeWithUndo } from '@/lib/use-saver'
 
@@ -72,10 +73,11 @@ function RulesTab({ car, rules }: { car: Car; rules: RuleWithState[] }) {
           >
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate font-medium">{rule.name}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Cada {[rule.intervalKm ? formatKm(rule.intervalKm) : null, rule.intervalMonths ? `${rule.intervalMonths} meses` : null].filter(Boolean).join(' o ')}
+                <p className="flex items-center gap-1.5 truncate font-medium">
+                  {!rule.repeat && <CalendarClock aria-hidden className="size-4 shrink-0 text-primary" />}
+                  {rule.name}
                 </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{describeRuleInterval(rule)}</p>
               </div>
               <StatusBadge status={state.status} />
             </div>
@@ -162,6 +164,9 @@ function FuelTab({ car, fuel, carById }: { car: Car; fuel: FuelLoad[]; carById: 
   const types = car.fuelTypes.filter(t => fuel.some(f => f.fuelType === t))
   return (
     <div className="space-y-6">
+      <section>
+        <h2 className="text-base font-semibold">Resumen de combustible</h2>
+        <p className="mb-3 mt-0.5 text-sm text-muted-foreground">Cuánto te cuesta andar y lo último que pagaste.</p>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Costo por km" value={costPerKm != null ? formatMoneyPrecise(costPerKm) : '—'} hint={costPerKm == null ? 'Necesita dos cargas con km' : 'Todos los combustibles'} />
         {types.map(t => {
@@ -178,19 +183,20 @@ function FuelTab({ car, fuel, carById }: { car: Car; fuel: FuelLoad[]; carById: 
             <Stat key={t} label={`Gastado en ${FUEL_LABELS[t]}`} value={formatMoney(s.totalSpent)} hint={`${formatNumber(s.totalQuantity)} ${unit} en ${s.loads} ${s.loads === 1 ? 'carga' : 'cargas'}`} />
           )
         })}
-        {types.map(t => {
-          const s = computeFuelStats(fuel, t, single)
-          return (
-            <Stat
-              key={`price-${t}`}
-              label={`Último precio ${FUEL_LABELS[t]}`}
-              value={s.lastUnitPrice != null ? formatMoneyPrecise(s.lastUnitPrice) : '—'}
-              hint={`por ${FUEL_UNITS[t]}`}
-            />
-          )
-        })}
+        {lastPrices(fuel).map(p => (
+          <Stat
+            key={`price-${p.fuelType}-${p.grade}`}
+            label={`Último precio ${fuelLabel(p)}`}
+            value={formatMoneyPrecise(p.unitPrice)}
+            hint={`por ${FUEL_UNITS[p.fuelType]} · ${formatDate(p.date)}`}
+          />
+        ))}
       </div>
-      <ActivityList items={mergeActivity([], fuel)} carById={carById} />
+      </section>
+      <section>
+        <h2 className="mb-3 text-base font-semibold">Cargas</h2>
+        <ActivityList items={mergeActivity([], fuel)} carById={carById} />
+      </section>
     </div>
   )
 }
@@ -204,9 +210,17 @@ const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
 
 function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
   const { uid, odometer } = useData()
+  const confirm = useConfirm()
 
-  // Para corregir un error de tipeo: se borra al toque y el toast permite deshacerlo.
-  function remove(r: OdometerReading) {
+  // Para corregir un error de tipeo. Igual queda "Deshacer" en el aviso.
+  async function remove(r: OdometerReading) {
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: `¿Borrar el registro de ${formatKm(r.km)}?`,
+      description: `Del ${formatDate(toISODate(r.date))}. Usalo sólo si lo cargaste mal: el km del auto se vuelve a calcular con los otros registros.`,
+      confirmLabel: 'Sí, borrar',
+    })
+    if (!confirmed) return
     removeWithUndo({
       message: `Registro de ${formatKm(r.km)} borrado`,
       remove: () => deleteReading(uid, car, odometer, r.id),
@@ -224,9 +238,11 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
           hint={car.avgKmPerDay != null ? `${formatNumber(car.avgKmPerDay)} km por día` : 'Se calcula con registros de varios días'}
         />
       </div>
-      <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+      <ChartCard title="Cómo fueron subiendo los km" description="Cada punto es un registro de kilometraje. Tocá la línea para ver la fecha y los km de cada uno.">
         <KmChart readings={readings} />
-      </div>
+      </ChartCard>
+      <section>
+        <h2 className="mb-3 text-base font-semibold">Registros de km</h2>
       <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
         {readings.map(r => (
           <div key={r.id} className="flex items-center gap-3 px-4 py-3">
@@ -244,6 +260,7 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
           </div>
         ))}
       </div>
+      </section>
     </div>
   )
 }

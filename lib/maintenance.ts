@@ -1,5 +1,6 @@
-import { addDays, addMonths, daysBetween } from './dates'
-import type { Car, ISODate, MaintenanceRule } from './types'
+import { addDays, addInterval, daysBetween, intervalDays } from './dates'
+import { formatInterval, formatKm } from './format'
+import type { Car, ISODate, MaintenanceRule, TimeInterval } from './types'
 
 export type RuleStatus = 'ok' | 'soon' | 'overdue' | 'unknown'
 
@@ -21,16 +22,16 @@ export interface RuleState {
 
 type RuleInput = Pick<
   MaintenanceRule,
-  'intervalKm' | 'intervalMonths' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
+  'intervalKm' | 'intervalTime' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
 >
 type CarInput = Pick<Car, 'currentKm' | 'avgKmPerDay'>
 
 export function getRuleState(rule: RuleInput, car: CarInput, today: ISODate): RuleState {
   const hasKm = rule.intervalKm != null && rule.intervalKm > 0 && rule.lastDoneKm != null
-  const hasDate = rule.intervalMonths != null && rule.intervalMonths > 0 && rule.lastDoneDate != null
+  const hasDate = rule.intervalTime != null && rule.intervalTime.amount > 0 && rule.lastDoneDate != null
 
   const nextKm = hasKm ? rule.lastDoneKm! + rule.intervalKm! : null
-  const nextDate = hasDate ? addMonths(rule.lastDoneDate!, rule.intervalMonths!) : null
+  const nextDate = hasDate ? addInterval(rule.lastDoneDate!, rule.intervalTime!) : null
   const remainingKm = nextKm != null ? nextKm - car.currentKm : null
   const remainingDays = nextDate != null ? daysBetween(today, nextDate) : null
 
@@ -116,4 +117,24 @@ export function summarizeRule(name: string, state: RuleState): string {
   const main = state.dueBy === 'date' ? (r.date ?? r.km) : (r.km ?? r.date)
   if (!main) return name
   return state.status === 'overdue' ? `${name}: vencido (${main})` : `${name}: ${main}`
+}
+
+/** "Cada 5.000 km o 1 año" / "Una sola vez, dentro de 3 semanas". */
+export function describeRuleInterval(rule: Pick<MaintenanceRule, 'intervalKm' | 'intervalTime' | 'repeat'>): string {
+  const parts = [rule.intervalKm ? formatKm(rule.intervalKm) : null, rule.intervalTime ? formatInterval(rule.intervalTime) : null]
+    .filter(Boolean)
+    .join(' o ')
+  if (!parts) return rule.repeat ? 'Sin intervalo' : 'Una sola vez'
+  return rule.repeat ? `Cada ${parts}` : `Una sola vez, dentro de ${parts}`
+}
+
+/**
+ * Márgenes de aviso por defecto, proporcionales al intervalo: un recordatorio de 3 semanas
+ * no puede avisar 30 días antes. Tope: 500 km y 30 días.
+ */
+export function defaultWarnings(intervalKm: number | null, intervalTime: TimeInterval | null) {
+  return {
+    warnKm: intervalKm ? Math.max(50, Math.min(500, Math.round(intervalKm / 5 / 50) * 50)) : 500,
+    warnDays: intervalTime ? Math.max(2, Math.min(30, Math.round(intervalDays(intervalTime) / 4))) : 30,
+  }
 }

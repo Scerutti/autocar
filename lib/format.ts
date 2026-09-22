@@ -1,5 +1,5 @@
 import { parseISODate } from './dates'
-import type { ISODate } from './types'
+import type { IntervalUnit, ISODate, TimeInterval } from './types'
 
 const numberFmt = new Intl.NumberFormat('es-AR')
 const moneyFmt = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 })
@@ -10,6 +10,22 @@ const longTodayFmt = new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'n
 
 export const MONTHS_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 export const WEEKDAYS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
+
+const UNIT_NAMES: Record<IntervalUnit, [string, string]> = {
+  day: ['día', 'días'],
+  week: ['semana', 'semanas'],
+  month: ['mes', 'meses'],
+  year: ['año', 'años'],
+}
+
+export function unitName(unit: IntervalUnit, amount: number) {
+  return UNIT_NAMES[unit][amount === 1 ? 0 : 1]
+}
+
+/** "1 mes", "3 semanas", "2 años". */
+export function formatInterval({ amount, unit }: TimeInterval) {
+  return `${numberFmt.format(amount)} ${unitName(unit, amount)}`
+}
 
 /** "los domingos", "los martes"… (sábado y domingo llevan s en plural). */
 export function everyWeekday(i: number) {

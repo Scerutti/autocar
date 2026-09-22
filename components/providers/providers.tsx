@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { ConfirmProvider } from '@/components/confirm-provider'
 import { Toaster } from '@/components/ui/toaster'
 import { registerServiceWorker } from '@/lib/push-client'
 import { toast } from '@/lib/toast'
@@ -33,7 +34,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, [])
   return (
     <AuthProvider>
-      {children}
+      <ConfirmProvider>{children}</ConfirmProvider>
       <Toaster />
     </AuthProvider>
   )

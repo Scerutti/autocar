@@ -1,4 +1,4 @@
-import type { FuelLoad, FuelType } from './types'
+import { FUEL_LABELS, NAFTA_GRADE_LABELS, type FuelLoad, type FuelType, type NaftaGrade } from './types'
 
 /**
  * El usuario carga la cantidad y el precio por unidad o el total pagado; calcula lo que falta.
@@ -88,4 +88,25 @@ export function computeCostPerKm(loads: FuelLoad[]): number | null {
   if (distance <= 0) return null
   const spent = withKm.slice(1).reduce((s, l) => s + l.total, 0)
   return round2(spent / distance)
+}
+
+/** "Nafta Súper", "Nafta Premium", "GNC" (o "Nafta" en cargas viejas sin el dato). */
+export function fuelLabel(load: Pick<FuelLoad, 'fuelType' | 'grade'>) {
+  return load.fuelType === 'nafta' && load.grade ? `${FUEL_LABELS.nafta} ${NAFTA_GRADE_LABELS[load.grade]}` : FUEL_LABELS[load.fuelType]
+}
+
+export type FuelVariant = { fuelType: FuelType; grade: NaftaGrade | null }
+
+/** Último precio pagado por cada variante usada (Súper, Premium, GNC), de la más reciente a la más vieja. */
+export function lastPrices(loads: FuelLoad[]): (FuelVariant & { unitPrice: number; date: string })[] {
+  const byDate = [...loads].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime())
+  const seen = new Set<string>()
+  const out: (FuelVariant & { unitPrice: number; date: string })[] = []
+  for (const l of byDate) {
+    const key = `${l.fuelType}:${l.grade ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ fuelType: l.fuelType, grade: l.grade, unitPrice: l.unitPrice, date: l.date })
+  }
+  return out
 }

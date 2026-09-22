@@ -4,9 +4,9 @@ import { Suspense, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Wallet } from 'lucide-react'
 import { CarFilter } from '@/components/car-filter'
-import { CategoryBars, Legend, MonthlyBars } from '@/components/charts'
+import { CategoryBars, ChartCard, Legend, MonthlyBars } from '@/components/charts'
 import { EmptyState, Loading, PageBody, PageHeader } from '@/components/common'
-import { Select } from '@/components/ui/form'
+import { Select } from '@/components/ui/select'
 import { useData } from '@/components/providers/data-provider'
 import { expenseYears, summarizeExpenses } from '@/lib/expenses'
 import { computeCostPerKm } from '@/lib/fuel'
@@ -42,13 +42,7 @@ function Expenses() {
         title="Gastos"
         subtitle="Trabajos y combustible."
         actions={
-          <Select value={year} onChange={e => setYear(Number(e.target.value))} className="h-9 w-24" aria-label="Año">
-            {years.map(y => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </Select>
+          <Select value={year} onChange={setYear} items={years.map(y => ({ value: y, label: String(y) }))} className="h-10 w-28" aria-label="Año" />
         }
       />
       <PageBody className="space-y-6">
@@ -69,28 +63,29 @@ function Expenses() {
               />
             </div>
 
-            <section className="rounded-2xl border border-white/8 bg-card/60 p-5">
-              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="font-semibold">Gasto por mes</h2>
+            <ChartCard
+              title={`¿Cuánto gastaste cada mes de ${year}?`}
+              description="Cada barra es un mes: en azul lo que gastaste en trabajos y en naranja en combustible. Tocá una barra para ver el detalle."
+              legend={
                 <Legend
                   items={[
                     { label: 'Trabajos', color: 'var(--series-1)' },
                     { label: 'Combustible', color: 'var(--series-2)' },
                   ]}
                 />
-              </div>
+              }
+            >
               <MonthlyBars key={`${carId}-${year}`} months={s.months} currentMonth={year === now.getFullYear() ? now.getMonth() : null} />
-            </section>
+            </ChartCard>
 
-            <section className="rounded-2xl border border-white/8 bg-card/60 p-5">
-              <h2 className="mb-5 font-semibold">Por categoría</h2>
+            <ChartCard title="¿En qué se fue la plata?" description={`Lo que gastaste en ${year} según el tipo de gasto, de mayor a menor.`}>
               <CategoryBars
                 rows={s.byCategory.map(c => ({
                   label: c.category === 'combustible' ? 'Combustible' : JOB_CATEGORY_LABELS[c.category],
                   value: c.total,
                 }))}
               />
-            </section>
+            </ChartCard>
           </>
         )}
       </PageBody>

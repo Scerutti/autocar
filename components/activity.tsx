@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CircleGauge,
   Disc3,
+  Ellipsis,
   FileText,
   Fuel,
   PaintBucket,
@@ -13,8 +14,9 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
+import { fuelLabel } from '@/lib/fuel'
 import { formatMoney, formatNumber, formatShortDate } from '@/lib/format'
-import { FUEL_LABELS, FUEL_UNITS, JOB_CATEGORY_LABELS, type Car, type FuelLoad, type Job, type JobCategory } from '@/lib/types'
+import { FUEL_UNITS, JOB_CATEGORY_LABELS, type Car, type FuelLoad, type Job, type JobCategory } from '@/lib/types'
 import { carName } from './common'
 
 export const CATEGORY_ICONS: Record<JobCategory, LucideIcon> = {
@@ -25,7 +27,7 @@ export const CATEGORY_ICONS: Record<JobCategory, LucideIcon> = {
   electricidad: BatteryCharging,
   carroceria: PaintBucket,
   documentacion: FileText,
-  otros: Wrench,
+  otros: Ellipsis,
 }
 
 export type Activity = { kind: 'job'; item: Job } | { kind: 'fuel'; item: FuelLoad }
@@ -42,7 +44,7 @@ export function ActivityRow({ activity, car, showCar }: { activity: Activity; ca
   const Icon = kind === 'job' ? CATEGORY_ICONS[item.category] : Fuel
   const href = kind === 'job' ? `/autos/${item.carId}/trabajos/${item.id}` : `/autos/${item.carId}/combustible/${item.id}`
   const title =
-    kind === 'job' ? item.title : `${FUEL_LABELS[item.fuelType]} · ${formatNumber(item.quantity)} ${FUEL_UNITS[item.fuelType]}`
+    kind === 'job' ? item.title : `${fuelLabel(item)} · ${formatNumber(item.quantity)} ${FUEL_UNITS[item.fuelType]}`
   const meta = [
     showCar && car ? carName(car) : null,
     kind === 'job' ? JOB_CATEGORY_LABELS[item.category] : 'Combustible',

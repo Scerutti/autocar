@@ -2,6 +2,7 @@ import { Timestamp, type DocumentData } from 'firebase-admin/firestore'
 import { adminDb } from '@/lib/firebase/admin'
 import { todayInTimeZone } from '@/lib/dates'
 import { planDailyNotifications } from '@/lib/notifications'
+import { fuelTypesFromDoc, intervalFromDoc } from '@/lib/parse'
 import { sendToUser } from '@/lib/push-server'
 import { DEFAULT_SETTINGS, type Car, type MaintenanceRule, type UserSettings } from '@/lib/types'
 
@@ -18,7 +19,7 @@ function carFrom(id: string, x: DocumentData): Car {
     version: x.version ?? null,
     year: num(x.year),
     plate: x.plate ?? null,
-    fuelTypes: x.fuelTypes ?? ['nafta'],
+    fuelTypes: fuelTypesFromDoc(x.fuelTypes),
     currentKm: num(x.currentKm) ?? 0,
     kmUpdatedAt: toDate(x.kmUpdatedAt),
     avgKmPerDay: num(x.avgKmPerDay),
@@ -34,7 +35,8 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
     carId: x.carId,
     name: x.name ?? '',
     intervalKm: num(x.intervalKm),
-    intervalMonths: num(x.intervalMonths),
+    intervalTime: intervalFromDoc(x),
+    repeat: x.repeat !== false,
     lastDoneKm: num(x.lastDoneKm),
     lastDoneDate: x.lastDoneDate ?? null,
     warnKm: num(x.warnKm) ?? 500,

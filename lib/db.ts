@@ -16,7 +16,9 @@ import {
   type WriteBatch,
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
+import { defaultWarnings } from './maintenance'
 import { computeAvgKmPerDay } from './odometer'
+import { fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import {
   DEFAULT_SETTINGS,
   type Car,
@@ -25,6 +27,7 @@ import {
   type MaintenanceRule,
   type OdometerReading,
   type OdometerSource,
+  type TimeInterval,
   type UserSettings,
 } from './types'
 
@@ -56,7 +59,7 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     version: str(x.version),
     year: num(x.year),
     plate: str(x.plate),
-    fuelTypes: Array.isArray(x.fuelTypes) && x.fuelTypes.length ? x.fuelTypes : ['nafta'],
+    fuelTypes: fuelTypesFromDoc(x.fuelTypes),
     currentKm: num(x.currentKm) ?? 0,
     kmUpdatedAt: toDate(x.kmUpdatedAt),
     avgKmPerDay: num(x.avgKmPerDay),
@@ -73,7 +76,8 @@ function ruleFrom(d: QueryDocumentSnapshot<DocumentData>): MaintenanceRule {
     carId: x.carId,
     name: x.name ?? '',
     intervalKm: num(x.intervalKm),
-    intervalMonths: num(x.intervalMonths),
+    intervalTime: intervalFromDoc(x),
+    repeat: x.repeat !== false,
     lastDoneKm: num(x.lastDoneKm),
     lastDoneDate: str(x.lastDoneDate),
     warnKm: num(x.warnKm) ?? 500,
@@ -107,7 +111,8 @@ function fuelFrom(d: QueryDocumentSnapshot<DocumentData>): FuelLoad {
     carId: x.carId,
     date: x.date,
     km: num(x.km),
-    fuelType: x.fuelType ?? 'nafta',
+    fuelType: x.fuelType === 'gnc' ? 'gnc' : 'nafta',
+    grade: x.fuelType === 'gnc' ? null : gradeFromDoc(x.grade),
     quantity: num(x.quantity) ?? 0,
     unitPrice: num(x.unitPrice) ?? 0,
     total: num(x.total) ?? 0,
@@ -303,7 +308,7 @@ export async function deleteCar(uid: string, carId: string, known: Partial<Recor
 
 export type RuleInput = Pick<
   MaintenanceRule,
-  'carId' | 'name' | 'intervalKm' | 'intervalMonths' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
+  'carId' | 'name' | 'intervalKm' | 'intervalTime' | 'repeat' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
 >
 
 export async function saveRule(uid: string, data: RuleInput, ruleId = newId(uid, 'rules')) {
@@ -331,15 +336,23 @@ export async function restoreRule(uid: string, rule: MaintenanceRule) {
 
 export type JobInput = Omit<Job, 'id' | 'createdAt'>
 
+/** "Volver al taller en…": recordatorio de una sola vez que se crea junto con un trabajo. */
+export interface FollowUp {
+  name: string
+  intervalTime: TimeInterval
+}
+
 /**
  * Guarda un trabajo. Los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
- * (sólo si es más reciente que la última vez registrada), y si el km es mayor al actual se registra.
+ * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una
+ * sola vez se borran. Si el km es mayor al actual se registra, y opcionalmente agenda la vuelta al taller.
  */
 export async function saveJob(
   uid: string,
   ctx: { car: Car; rules: MaintenanceRule[]; readings: OdometerReading[] },
   data: JobInput,
   jobId?: string,
+  followUp?: FollowUp | null,
 ) {
   const batch = writeBatch(firestore())
   const id = jobId ?? newId(uid, 'jobs')
@@ -350,9 +363,27 @@ export async function saveJob(
   for (const rule of ctx.rules.filter(r => data.ruleIds.includes(r.id))) {
     const isNewer = !rule.lastDoneDate || data.date >= rule.lastDoneDate
     if (!isNewer) continue
+    if (!rule.repeat) {
+      batch.delete(doc(col(uid, 'rules'), rule.id))
+      continue
+    }
     batch.update(doc(col(uid, 'rules'), rule.id), {
       lastDoneKm: rule.intervalKm != null ? doneKm : rule.lastDoneKm,
       lastDoneDate: data.date,
+      lastNotifiedAt: null,
+      lastNotifiedStatus: null,
+    })
+  }
+  if (followUp) {
+    batch.set(doc(col(uid, 'rules')), {
+      carId: ctx.car.id,
+      name: followUp.name,
+      intervalKm: null,
+      intervalTime: followUp.intervalTime,
+      repeat: false,
+      lastDoneKm: doneKm,
+      lastDoneDate: data.date,
+      ...defaultWarnings(null, followUp.intervalTime),
       lastNotifiedAt: null,
       lastNotifiedStatus: null,
     })

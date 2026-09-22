@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { addMonths } from './dates'
-import { compareRuleStates, describeRemaining, getRuleState, summarizeRule } from './maintenance'
+import { addInterval, addMonths } from './dates'
+import { compareRuleStates, defaultWarnings, describeRemaining, describeRuleInterval, getRuleState, summarizeRule } from './maintenance'
+import { intervalFromDoc } from './parse'
+import type { TimeInterval } from './types'
 
+const months = (amount: number): TimeInterval => ({ amount, unit: 'month' })
 const base = { warnKm: 500, warnDays: 30 }
-const service = { ...base, intervalKm: 5000, intervalMonths: 12, lastDoneKm: 10000, lastDoneDate: '2026-01-10' }
+const service = { ...base, intervalKm: 5000, intervalTime: months(12), lastDoneKm: 10000, lastDoneDate: '2026-01-10' }
 
 describe('getRuleState', () => {
   it('está al día lejos de ambos límites', () => {
@@ -41,7 +44,7 @@ describe('getRuleState', () => {
   })
 
   it('soporta reglas sólo por tiempo (VTV)', () => {
-    const vtv = { ...base, intervalKm: null, intervalMonths: 12, lastDoneKm: null, lastDoneDate: '2026-05-01' }
+    const vtv = { ...base, intervalKm: null, intervalTime: months(12), lastDoneKm: null, lastDoneDate: '2026-05-01' }
     const s = getRuleState(vtv, { currentKm: 50000, avgKmPerDay: 40 }, '2026-06-01')
     expect(s.status).toBe('ok')
     expect(s.remainingKm).toBeNull()
@@ -50,7 +53,7 @@ describe('getRuleState', () => {
   })
 
   it('soporta reglas sólo por km', () => {
-    const rot = { ...base, intervalKm: 10000, intervalMonths: null, lastDoneKm: 20000, lastDoneDate: null }
+    const rot = { ...base, intervalKm: 10000, intervalTime: null, lastDoneKm: 20000, lastDoneDate: null }
     const s = getRuleState(rot, { currentKm: 25000, avgKmPerDay: null }, '2026-06-01')
     expect(s.status).toBe('ok')
     expect(s.nextDate).toBeNull()
@@ -68,7 +71,7 @@ describe('getRuleState', () => {
 
   it('sin intervalos es "unknown"', () => {
     const s = getRuleState(
-      { ...base, intervalKm: null, intervalMonths: null, lastDoneKm: null, lastDoneDate: null },
+      { ...base, intervalKm: null, intervalTime: null, lastDoneKm: null, lastDoneDate: null },
       { currentKm: 1000, avgKmPerDay: null },
       '2026-01-01',
     )
@@ -114,5 +117,42 @@ describe('summarizeRule', () => {
     expect(summarizeRule('Service', getRuleState(service, { currentKm: 15200, avgKmPerDay: null }, '2026-03-01'))).toBe(
       'Service: vencido (pasado 200 km)',
     )
+  })
+})
+
+describe('intervalos en semanas, meses y años', () => {
+  it('suma el lapso a la fecha', () => {
+    expect(addInterval('2026-09-22', { amount: 3, unit: 'week' })).toBe('2026-10-13')
+    expect(addInterval('2026-09-22', { amount: 10, unit: 'day' })).toBe('2026-10-02')
+    expect(addInterval('2026-01-31', { amount: 1, unit: 'month' })).toBe('2026-02-28')
+    expect(addInterval('2024-02-29', { amount: 1, unit: 'year' })).toBe('2025-02-28')
+  })
+
+  it('un "volver en 3 semanas" pasa a próximo la última semana', () => {
+    const vuelta = { intervalKm: null, intervalTime: { amount: 3, unit: 'week' as const }, lastDoneKm: null, lastDoneDate: '2026-09-22', ...defaultWarnings(null, { amount: 3, unit: 'week' }) }
+    expect(vuelta.warnDays).toBe(5)
+    expect(getRuleState(vuelta, { currentKm: 0, avgKmPerDay: null }, '2026-10-01').status).toBe('ok')
+    expect(getRuleState(vuelta, { currentKm: 0, avgKmPerDay: null }, '2026-10-09').status).toBe('soon')
+    expect(getRuleState(vuelta, { currentKm: 0, avgKmPerDay: null }, '2026-10-14').status).toBe('overdue')
+  })
+
+  it('describe el intervalo', () => {
+    expect(describeRuleInterval({ intervalKm: 5000, intervalTime: { amount: 1, unit: 'year' }, repeat: true })).toBe('Cada 5.000 km o 1 año')
+    expect(describeRuleInterval({ intervalKm: null, intervalTime: { amount: 3, unit: 'week' }, repeat: false })).toBe(
+      'Una sola vez, dentro de 3 semanas',
+    )
+  })
+
+  it('los márgenes de aviso son proporcionales al intervalo', () => {
+    expect(defaultWarnings(5000, { amount: 1, unit: 'year' })).toEqual({ warnKm: 500, warnDays: 30 })
+    expect(defaultWarnings(1000, { amount: 1, unit: 'month' })).toEqual({ warnKm: 200, warnDays: 8 })
+    expect(defaultWarnings(null, { amount: 1, unit: 'week' })).toEqual({ warnKm: 500, warnDays: 2 })
+  })
+
+  it('lee el formato viejo en meses', () => {
+    expect(intervalFromDoc({ intervalMonths: 12 })).toEqual({ amount: 12, unit: 'month' })
+    expect(intervalFromDoc({ intervalTime: { amount: 3, unit: 'week' } })).toEqual({ amount: 3, unit: 'week' })
+    expect(intervalFromDoc({ intervalTime: { amount: 0, unit: 'week' } })).toBeNull()
+    expect(intervalFromDoc({})).toBeNull()
   })
 })
