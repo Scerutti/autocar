@@ -2,13 +2,17 @@
 // Instantes (cuándo se cargó algo) se manejan como Date y en Firestore como Timestamp.
 export type ISODate = string
 
-// Un auto anda a nafta, o a nafta + GNC (no hay autos sólo a GNC). La nafta puede ser súper o premium.
-export type FuelType = 'nafta' | 'gnc'
-export type NaftaGrade = 'super' | 'premium'
+// Un auto anda a nafta, a nafta + GNC o a gasoil (no hay autos sólo a GNC, y el equipo de GNC es para
+// motores nafteros). La nafta y el gasoil pueden ser súper o premium.
+export type FuelType = 'nafta' | 'gasoil' | 'gnc'
+export type FuelGrade = 'super' | 'premium'
 
-export const FUEL_LABELS: Record<FuelType, string> = { nafta: 'Nafta', gnc: 'GNC' }
-export const FUEL_UNITS: Record<FuelType, string> = { nafta: 'L', gnc: 'm³' }
-export const NAFTA_GRADE_LABELS: Record<NaftaGrade, string> = { super: 'Súper', premium: 'Premium' }
+export const FUEL_LABELS: Record<FuelType, string> = { nafta: 'Nafta', gasoil: 'Gasoil', gnc: 'GNC' }
+export const FUEL_UNITS: Record<FuelType, string> = { nafta: 'L', gasoil: 'L', gnc: 'm³' }
+export const FUEL_GRADE_LABELS: Record<FuelGrade, string> = { super: 'Súper', premium: 'Premium' }
+
+/** Nafta y gasoil: se cargan en litros, vienen en súper o premium y se puede llenar el tanque. */
+export const isLiquidFuel = (t: FuelType) => t !== 'gnc'
 
 export type IntervalUnit = 'day' | 'week' | 'month' | 'year'
 
@@ -95,8 +99,8 @@ export interface FuelLoad {
   date: ISODate
   km: number | null
   fuelType: FuelType
-  /** Sólo para nafta; null en GNC o en cargas viejas sin el dato. */
-  grade: NaftaGrade | null
+  /** Sólo para nafta y gasoil; null en GNC o en cargas viejas sin el dato. */
+  grade: FuelGrade | null
   quantity: number
   unitPrice: number
   total: number

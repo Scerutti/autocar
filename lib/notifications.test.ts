@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planDailyNotifications } from './notifications'
+import { isPushEndpoint, planDailyNotifications } from './notifications'
 import type { Car, MaintenanceRule, UserSettings } from './types'
 
 const car: Car = {
@@ -80,5 +80,23 @@ describe('planDailyNotifications', () => {
     const { messages, ruleUpdates } = planDailyNotifications({ settings, cars: [car], rules: [done], today: '2026-09-21', now })
     expect(messages).toHaveLength(0)
     expect(ruleUpdates).toEqual([{ ruleId: 'r1', lastNotifiedStatus: null, notified: false }])
+  })
+})
+
+describe('isPushEndpoint', () => {
+  it('acepta los servicios de push de los navegadores', () => {
+    expect(isPushEndpoint('https://fcm.googleapis.com/fcm/send/abc:123')).toBe(true)
+    expect(isPushEndpoint('https://updates.push.services.mozilla.com/wpush/v2/abc')).toBe(true)
+    expect(isPushEndpoint('https://wns2-par02p.notify.windows.com/w/?token=abc')).toBe(true)
+    expect(isPushEndpoint('https://web.push.apple.com/QGx')).toBe(true)
+  })
+  it('rechaza cualquier otra dirección', () => {
+    expect(isPushEndpoint('http://fcm.googleapis.com/fcm/send/abc')).toBe(false)
+    expect(isPushEndpoint('https://169.254.169.254/latest/meta-data')).toBe(false)
+    expect(isPushEndpoint('https://localhost:3000/api')).toBe(false)
+    expect(isPushEndpoint('https://googleapis.com.evil.com/x')).toBe(false)
+    expect(isPushEndpoint('https://evilgoogleapis.com/x')).toBe(false)
+    expect(isPushEndpoint('no es una url')).toBe(false)
+    expect(isPushEndpoint(undefined)).toBe(false)
   })
 })

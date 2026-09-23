@@ -17,6 +17,22 @@ export interface RuleNotificationUpdate {
 
 const RENOTIFY_DAYS = 7
 
+// Servicios de push de los navegadores: Chrome/Edge/Opera (FCM), Firefox, Edge en Windows (WNS) y Safari.
+const PUSH_HOSTS = ['.googleapis.com', '.mozilla.com', '.windows.com', '.apple.com']
+
+/**
+ * La URL de cada suscripción la guarda el navegador en Firestore: antes de que el servidor le haga un
+ * request, se comprueba que sea de un servicio de push y no cualquier dirección.
+ */
+export function isPushEndpoint(endpoint: unknown): endpoint is string {
+  try {
+    const url = new URL(String(endpoint))
+    return url.protocol === 'https:' && PUSH_HOSTS.some(h => url.hostname.endsWith(h))
+  } catch {
+    return false
+  }
+}
+
 const nameOf = (car: Pick<Car, 'brand' | 'model'>) => `${car.brand} ${car.model}`.trim()
 
 /**

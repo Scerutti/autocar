@@ -77,10 +77,11 @@ export async function GET(request: Request) {
         now,
       })
 
-      const { sent, devices } = await sendToUser(userDoc.id, messages)
+      const { sent } = await sendToUser(userDoc.id, messages)
 
-      // Si no tiene dispositivos no marcamos como avisado: que le llegue cuando active las notificaciones.
-      const updates = devices > 0 ? ruleUpdates : ruleUpdates.filter(u => !u.notified)
+      // Si no le llegó a ningún dispositivo (no tiene, o fallaron todos) no lo marcamos como avisado:
+      // se reintenta al día siguiente en vez de esperar 7 días.
+      const updates = sent > 0 ? ruleUpdates : ruleUpdates.filter(u => !u.notified)
       if (updates.length) {
         const batch = db.batch()
         for (const u of updates) {

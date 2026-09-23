@@ -1,9 +1,10 @@
-import { uidFromRequest } from '@/lib/firebase/admin'
+import { authorize } from '@/lib/firebase/admin'
 import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
 
 export async function POST(request: Request) {
-  const uid = await uidFromRequest(request)
-  if (!uid) return Response.json({ error: 'No autorizado' }, { status: 401 })
+  const auth = await authorize(request)
+  if (auth instanceof Response) return auth
+  const { uid } = auth
   const config = cloudinaryConfig()
   if (!config) return Response.json({ error: 'Cloudinary no está configurado' }, { status: 500 })
 

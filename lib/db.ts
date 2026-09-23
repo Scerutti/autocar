@@ -18,9 +18,10 @@ import {
 import { firestore } from './firebase/client'
 import { defaultWarnings } from './maintenance'
 import { computeAvgKmPerDay } from './odometer'
-import { fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
+import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import {
   DEFAULT_SETTINGS,
+  isLiquidFuel,
   type Car,
   type FuelLoad,
   type Job,
@@ -106,13 +107,14 @@ function jobFrom(d: QueryDocumentSnapshot<DocumentData>): Job {
 
 function fuelFrom(d: QueryDocumentSnapshot<DocumentData>): FuelLoad {
   const x = d.data()
+  const fuelType = fuelTypeFromDoc(x.fuelType)
   return {
     id: d.id,
     carId: x.carId,
     date: x.date,
     km: num(x.km),
-    fuelType: x.fuelType === 'gnc' ? 'gnc' : 'nafta',
-    grade: x.fuelType === 'gnc' ? null : gradeFromDoc(x.grade),
+    fuelType,
+    grade: isLiquidFuel(fuelType) ? gradeFromDoc(x.grade) : null,
     quantity: num(x.quantity) ?? 0,
     unitPrice: num(x.unitPrice) ?? 0,
     total: num(x.total) ?? 0,
@@ -153,7 +155,7 @@ export function subscribeUserData(
         const x = snap.data()
         if (!snap.exists() && !snap.metadata.fromCache) {
           // Primer ingreso: crea el documento con la configuración por defecto (lo necesita el cron).
-          void setDoc(userDoc(uid), { ...DEFAULT_SETTINGS, createdAt: Timestamp.now() }, { merge: true })
+          setDoc(userDoc(uid), { ...DEFAULT_SETTINGS, createdAt: Timestamp.now() }, { merge: true }).catch(onError)
         }
         onChange(
           {

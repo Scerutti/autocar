@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
-import { fuelTypesFromDoc } from './parse'
+import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
 import { computeAvgKmPerDay, validateKmReading } from './odometer'
 import { summarizeExpenses } from './expenses'
 import { everyWeekday, parseNumberInput } from './format'
@@ -141,11 +141,41 @@ describe('everyWeekday', () => {
   })
 })
 
-describe('nafta súper/premium y GNC', () => {
+describe('combustibles: nafta, gasoil y GNC', () => {
   it('arma la etiqueta', () => {
     expect(fuelLabel({ fuelType: 'nafta', grade: 'premium' })).toBe('Nafta Premium')
     expect(fuelLabel({ fuelType: 'nafta', grade: null })).toBe('Nafta')
+    expect(fuelLabel({ fuelType: 'gasoil', grade: 'super' })).toBe('Gasoil Súper')
+    expect(fuelLabel({ fuelType: 'gasoil', grade: 'premium' })).toBe('Gasoil Premium')
     expect(fuelLabel({ fuelType: 'gnc', grade: null })).toBe('GNC')
+  })
+  it('calcula el consumo de un auto gasolero', () => {
+    const loads = [
+      load({ fuelType: 'gasoil', km: 10000, quantity: 50 }),
+      load({ fuelType: 'gasoil', grade: 'premium', km: 10800, quantity: 50 }), // 800 km con 50 L = 16 km/L
+      load({ fuelType: 'nafta', km: 11000, quantity: 99 }), // de antes de cambiarle el combustible: no cuenta
+    ]
+    const s = computeFuelStats(loads, 'gasoil', true)
+    expect(s.consumption).toBe(16)
+    expect(s.loads).toBe(2)
+  })
+  it('separa el último precio del gasoil súper y premium', () => {
+    const loads = [
+      load({ date: '2026-09-01', fuelType: 'gasoil', grade: 'super', unitPrice: 1300 }),
+      load({ date: '2026-09-03', fuelType: 'gasoil', grade: 'premium', unitPrice: 1500 }),
+    ]
+    expect(lastPrices(loads).map(p => [p.fuelType, p.grade, p.unitPrice])).toEqual([
+      ['gasoil', 'premium', 1500],
+      ['gasoil', 'super', 1300],
+    ])
+  })
+  it('lee el combustible de cargas y autos guardados', () => {
+    expect(fuelTypeFromDoc('gasoil')).toBe('gasoil')
+    expect(fuelTypeFromDoc('gnc')).toBe('gnc')
+    expect(fuelTypeFromDoc(undefined)).toBe('nafta')
+    expect(fuelTypesFromDoc(['gasoil'])).toEqual(['gasoil'])
+    // No existe gasoil + GNC: queda gasoil.
+    expect(fuelTypesFromDoc(['gasoil', 'gnc'])).toEqual(['gasoil'])
   })
   it('último precio por variante', () => {
     const loads = [

@@ -41,7 +41,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
           key={o.value}
           value={o.value}
           aria-label={o.ariaLabel}
-          className="flex h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium text-muted-foreground outline-none transition data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-background data-checked:text-foreground data-checked:shadow-sm data-checked:ring-1 data-checked:ring-white/15 data-disabled:opacity-50 [&_svg]:size-4"
+          className="flex min-h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-center text-sm font-medium leading-tight text-muted-foreground outline-none transition data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-background data-checked:text-foreground data-checked:shadow-sm data-checked:ring-1 data-checked:ring-white/15 data-disabled:opacity-50 [&_svg]:size-4"
         >
           {o.icon && <o.icon aria-hidden />}
           {o.label}

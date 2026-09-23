@@ -189,10 +189,11 @@ export function EmptyState({
   )
 }
 
-export function Loading() {
+export function Loading({ label }: { label?: string }) {
   return (
-    <div className="flex min-h-[50vh] items-center justify-center">
-      <div className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-primary" />
+    <div role="status" className="flex min-h-[50vh] flex-col items-center justify-center gap-3">
+      <div aria-hidden className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-primary" />
+      {label ? <p className="text-sm text-muted-foreground">{label}</p> : <span className="sr-only">Cargando…</span>}
     </div>
   )
 }

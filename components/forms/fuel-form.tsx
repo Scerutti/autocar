@@ -12,10 +12,25 @@ import { toISODate } from '@/lib/dates'
 import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput } from '@/lib/format'
-import { FUEL_LABELS, FUEL_UNITS, NAFTA_GRADE_LABELS, type Car, type FuelLoad, type FuelType, type NaftaGrade } from '@/lib/types'
+import {
+  FUEL_GRADE_LABELS,
+  FUEL_LABELS,
+  FUEL_UNITS,
+  isLiquidFuel,
+  type Car,
+  type FuelGrade,
+  type FuelLoad,
+  type FuelType,
+} from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
 type PriceMode = 'unit' | 'total'
+
+// Para reconocer la premium en el surtidor.
+const PREMIUM_HINTS: Partial<Record<FuelType, string>> = {
+  nafta: 'Premium es la Infinia, V-Power o Quantium.',
+  gasoil: 'Premium es el Infinia Diesel, V-Power Diesel o Quantium Diesel.',
+}
 
 export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
@@ -24,15 +39,17 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const { fuel: carFuel } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
-  const hasGnc = car.fuelTypes.includes('gnc')
-  // La carga más reciente de ese combustible (y de esa nafta, si se indica): sugiere precio y estación.
-  const lastOf = (t: FuelType, g?: NaftaGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
-  const initialType: FuelType = load?.fuelType ?? (hasGnc ? (carFuel[0]?.fuelType ?? 'nafta') : 'nafta')
-  const initialGrade: NaftaGrade = load?.grade ?? lastOf('nafta')?.grade ?? 'super'
-  const initialLast = lastOf(initialType, initialType === 'nafta' ? initialGrade : null)
+  // Lo que se le carga a este auto. Al editar una carga vieja se respeta su combustible aunque el auto haya cambiado.
+  const types = load && !car.fuelTypes.includes(load.fuelType) ? [...car.fuelTypes, load.fuelType] : car.fuelTypes
+  const liquid = types.find(isLiquidFuel) ?? 'nafta'
+  // La carga más reciente de ese combustible (y de esa calidad, si se indica): sugiere precio y estación.
+  const lastOf = (t: FuelType, g?: FuelGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
+  const initialType: FuelType = load?.fuelType ?? carFuel.find(f => types.includes(f.fuelType))?.fuelType ?? types[0]
+  const initialGrade: FuelGrade = load?.grade ?? lastOf(isLiquidFuel(initialType) ? initialType : liquid)?.grade ?? 'super'
+  const initialLast = lastOf(initialType, isLiquidFuel(initialType) ? initialGrade : null)
 
   const [fuelType, setFuelType] = useState<FuelType>(initialType)
-  const [grade, setGrade] = useState<NaftaGrade>(initialGrade)
+  const [grade, setGrade] = useState<FuelGrade>(initialGrade)
   const [date, setDate] = useState(load?.date ?? toISODate(new Date()))
   const [km, setKm] = useState(load ? (load.km != null ? String(load.km) : '') : String(car.currentKm))
   const [quantity, setQuantity] = useState(load ? String(load.quantity) : '')
@@ -42,6 +59,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const [station, setStation] = useState(load?.station ?? initialLast?.station ?? '')
 
   const unit = FUEL_UNITS[fuelType]
+  const liquidSelected = isLiquidFuel(fuelType)
   const priceNum = parseNumberInput(price)
   const amounts = resolveFuelAmounts({
     quantity: parseNumberInput(quantity) ?? 0,
@@ -49,8 +67,8 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
     total: mode === 'total' ? priceNum : null,
   })
 
-  // Al cambiar de combustible o de nafta, sugerir el último precio que pagaste por esa.
-  function suggestFrom(t: FuelType, g: NaftaGrade | null) {
+  // Al cambiar de combustible o de calidad, sugerir el último precio que pagaste por esa.
+  function suggestFrom(t: FuelType, g: FuelGrade | null) {
     if (load) return
     const last = lastOf(t, g)
     if (mode === 'unit') setPrice(last?.unitPrice ? String(last.unitPrice) : '')
@@ -59,12 +77,12 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 
   function changeType(t: FuelType) {
     setFuelType(t)
-    suggestFrom(t, t === 'nafta' ? grade : null)
+    suggestFrom(t, isLiquidFuel(t) ? grade : null)
   }
 
-  function changeGrade(g: NaftaGrade) {
+  function changeGrade(g: FuelGrade) {
     setGrade(g)
-    suggestFrom('nafta', g)
+    suggestFrom(fuelType, g)
   }
 
   function changeMode(m: PriceMode) {
@@ -85,9 +103,9 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
       date,
       km: kmNum,
       fuelType,
-      grade: fuelType === 'nafta' ? grade : null,
+      grade: liquidSelected ? grade : null,
       ...amounts,
-      fullTank: fuelType === 'gnc' ? true : fullTank,
+      fullTank: liquidSelected ? fullTank : true,
       station: station.trim() || null,
     }
     const confirmed = await confirm({
@@ -100,7 +118,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
         { label: 'Total', value: formatMoney(amounts.total) },
         { label: 'Fecha', value: formatDate(date) },
         ...(kmNum != null ? [{ label: 'Km', value: formatKm(kmNum) }] : []),
-        ...(fuelType === 'nafta' ? [{ label: 'Tanque lleno', value: fullTank ? 'Sí' : 'No' }] : []),
+        ...(liquidSelected ? [{ label: 'Tanque lleno', value: fullTank ? 'Sí' : 'No' }] : []),
         ...(data.station ? [{ label: 'Estación', value: data.station }] : []),
       ],
       confirmLabel: 'Sí, guardar',
@@ -140,22 +158,18 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 
   return (
     <form onSubmit={submit} className="mx-auto max-w-xl space-y-6" noValidate>
-      {hasGnc && (
+      {types.length > 1 && (
         <FieldGroup label="¿Qué cargaste?">
-          <Segmented
-            value={fuelType}
-            onChange={changeType}
-            options={(['nafta', 'gnc'] as const).map(t => ({ value: t, label: FUEL_LABELS[t] }))}
-          />
+          <Segmented value={fuelType} onChange={changeType} options={types.map(t => ({ value: t, label: FUEL_LABELS[t] }))} />
         </FieldGroup>
       )}
 
-      {fuelType === 'nafta' && (
-        <FieldGroup label="¿Qué nafta?">
+      {liquidSelected && (
+        <FieldGroup label={`¿Qué ${FUEL_LABELS[fuelType].toLowerCase()}?`} hint={PREMIUM_HINTS[fuelType]}>
           <Segmented
             value={grade}
             onChange={changeGrade}
-            options={(['super', 'premium'] as const).map(g => ({ value: g, label: NAFTA_GRADE_LABELS[g] }))}
+            options={(['super', 'premium'] as const).map(g => ({ value: g, label: FUEL_GRADE_LABELS[g] }))}
           />
         </FieldGroup>
       )}
@@ -212,7 +226,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
         )}
       </FieldGroup>
 
-      {fuelType === 'nafta' && (
+      {liquidSelected && (
         <Checkbox
           checked={fullTank}
           onChange={e => setFullTank(e.target.checked)}

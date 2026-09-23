@@ -1,4 +1,4 @@
-import type { FuelType, IntervalUnit, NaftaGrade, TimeInterval } from './types'
+import type { FuelGrade, FuelType, IntervalUnit, TimeInterval } from './types'
 
 // Lectura tolerante de documentos de Firestore, compartida por el cliente y el cron.
 
@@ -14,11 +14,18 @@ export function intervalFromDoc(x: Record<string, unknown>): TimeInterval | null
   return null
 }
 
-/** Combustibles de un auto: nafta, o nafta + GNC. Un "sólo GNC" viejo pasa a nafta + GNC. */
+/** Combustibles de un auto: nafta, nafta + GNC o gasoil. Un "sólo GNC" viejo pasa a nafta + GNC. */
 export function fuelTypesFromDoc(v: unknown): FuelType[] {
-  return Array.isArray(v) && v.includes('gnc') ? ['nafta', 'gnc'] : ['nafta']
+  if (!Array.isArray(v)) return ['nafta']
+  if (v.includes('gasoil')) return ['gasoil']
+  return v.includes('gnc') ? ['nafta', 'gnc'] : ['nafta']
 }
 
-export function gradeFromDoc(v: unknown): NaftaGrade | null {
+/** Combustible de una carga (las viejas sin el dato son de nafta). */
+export function fuelTypeFromDoc(v: unknown): FuelType {
+  return v === 'gnc' || v === 'gasoil' ? v : 'nafta'
+}
+
+export function gradeFromDoc(v: unknown): FuelGrade | null {
   return v === 'super' || v === 'premium' ? v : null
 }

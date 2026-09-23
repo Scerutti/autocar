@@ -10,19 +10,25 @@ import { Field, FormError, Input } from '@/components/ui/form'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
-import { deleteImage, uploadImage } from '@/lib/cloudinary-client'
+import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
+import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
 import { createCar, deleteCar, newId, updateCar, type CarInput } from '@/lib/db'
 import { formatKm, parseNumberInput } from '@/lib/format'
 import type { Car, FuelType } from '@/lib/types'
 import { toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
-// Un auto anda a nafta o a nafta + GNC (no existen los que andan sólo a GNC).
-type FuelChoice = 'nafta' | 'dual'
+// Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC).
+type FuelChoice = 'nafta' | 'dual' | 'gasoil'
 
-const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gnc') ? 'dual' : 'nafta')
-const fromChoice = (c: FuelChoice): FuelType[] => (c === 'dual' ? ['nafta', 'gnc'] : ['nafta'])
-const FUEL_CHOICE_LABELS: Record<FuelChoice, string> = { nafta: 'Sólo nafta', dual: 'Nafta + GNC' }
+const FUEL_CHOICES: Record<FuelChoice, { label: string; fuelTypes: FuelType[] }> = {
+  nafta: { label: 'Sólo nafta', fuelTypes: ['nafta'] },
+  dual: { label: 'Nafta + GNC', fuelTypes: ['nafta', 'gnc'] },
+  gasoil: { label: 'Gasoil', fuelTypes: ['gasoil'] },
+}
+const FUEL_OPTIONS = (Object.keys(FUEL_CHOICES) as FuelChoice[]).map(c => ({ value: c, label: FUEL_CHOICES[c].label }))
+
+const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gasoil') ? 'gasoil' : f.includes('gnc') ? 'dual' : 'nafta')
 
 export function CarForm({ car }: { car?: Car }) {
   const router = useRouter()
@@ -39,8 +45,11 @@ export function CarForm({ car }: { car?: Car }) {
   const [plate, setPlate] = useState(car?.plate ?? '')
   const [fuel, setFuel] = useState<FuelChoice>(car ? toChoice(car.fuelTypes) : 'nafta')
   const [km, setKm] = useState('')
-  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  // La foto se revisa y achica apenas se elige: si no sirve, el aviso aparece ahí mismo.
+  const [photo, setPhoto] = useState<Blob | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [photoError, setPhotoError] = useState<string | null>(null)
+  const [preparing, setPreparing] = useState(false)
   const [removePhoto, setRemovePhoto] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
@@ -50,19 +59,28 @@ export function CarForm({ car }: { car?: Car }) {
 
   const currentPhoto = photoPreview ?? (!removePhoto && car?.photoUrl ? cloudinaryUrl(car.photoUrl, 'c_fill,g_auto,w_900,h_506') : null)
 
-  function pickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+  async function pickPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) return setError('El archivo tiene que ser una imagen.')
-    setPhotoFile(file)
-    setPhotoPreview(URL.createObjectURL(file))
-    setRemovePhoto(false)
     e.target.value = ''
+    if (!file) return
+    setPhotoError(null)
+    setPreparing(true)
+    try {
+      const prepared = await preparePhoto(file)
+      setPhoto(prepared)
+      setPhotoPreview(URL.createObjectURL(prepared))
+      setRemovePhoto(false)
+    } catch (err) {
+      setPhotoError(err instanceof PhotoError ? err.message : 'No pudimos abrir esta foto. Probá con otra.')
+    } finally {
+      setPreparing(false)
+    }
   }
 
   function clearPhoto() {
-    setPhotoFile(null)
+    setPhoto(null)
     setPhotoPreview(null)
+    setPhotoError(null)
     setRemovePhoto(true)
   }
 
@@ -82,9 +100,10 @@ export function CarForm({ car }: { car?: Car }) {
       version: version.trim() || null,
       year: yearNum,
       plate: plate.trim().toUpperCase() || null,
-      fuelTypes: fromChoice(fuel),
+      fuelTypes: FUEL_CHOICES[fuel].fuelTypes,
     }
-    const photoLabel = photoFile ? (car?.photoUrl ? 'Se cambia' : 'Sí') : removePhoto ? 'Se quita' : currentPhoto ? 'Sí' : 'Sin foto'
+    const photoLabel = photo ? (car?.photoUrl ? 'Se cambia' : 'Sí') : removePhoto ? 'Se quita' : currentPhoto ? 'Sí' : 'Sin foto'
+    const previousFuel = car ? toChoice(car.fuelTypes) : fuel
     const confirmed = await confirm({
       title: car ? '¿Guardar los cambios?' : '¿Agregar este auto?',
       description: 'Revisá que los datos estén bien.',
@@ -92,10 +111,14 @@ export function CarForm({ car }: { car?: Car }) {
         { label: 'Auto', value: [data.brand, data.model, data.version].filter(Boolean).join(' ') },
         ...(data.year ? [{ label: 'Año', value: String(data.year) }] : []),
         ...(data.plate ? [{ label: 'Patente', value: data.plate }] : []),
-        { label: 'Combustible', value: FUEL_CHOICE_LABELS[fuel] },
+        { label: 'Combustible', value: FUEL_CHOICES[fuel].label },
         ...(!car ? [{ label: 'Km actuales', value: formatKm(kmNum!) }] : []),
         { label: 'Foto', value: photoLabel },
       ],
+      warning:
+        previousFuel !== fuel
+          ? `Cambiás el combustible de ${FUEL_CHOICES[previousFuel].label} a ${FUEL_CHOICES[fuel].label}. Las cargas que ya tenés quedan en el historial.`
+          : undefined,
       confirmLabel: car ? 'Sí, guardar' : 'Sí, agregar',
       icon: CarFront,
     })
@@ -103,10 +126,10 @@ export function CarForm({ car }: { car?: Car }) {
 
     const ok = await run(async () => {
       const oldPublicId = car?.photoPublicId ?? null
-      if (photoFile) {
+      if (photo) {
         setStatus('Subiendo foto…')
         const token = await getToken()
-        const up = await uploadImage(photoFile, token)
+        const up = await uploadImage(photo, token)
         data.photoUrl = up.url
         data.photoPublicId = up.publicId
       } else if (removePhoto) {
@@ -118,7 +141,7 @@ export function CarForm({ car }: { car?: Car }) {
       const saved: SaveStatus = car
         ? await settle(updateCar(uid, car.id, data))
         : await settle(createCar(uid, data, kmNum!, carId))
-      if (oldPublicId && (photoFile || removePhoto)) void deleteImage(oldPublicId, await getToken())
+      if (oldPublicId && (photo || removePhoto)) void deleteImage(oldPublicId, await getToken())
       if (car) toastSaved('Cambios guardados', saved)
       else toastSaved('Auto agregado', saved, 'Ahora sumale los mantenimientos: service, VTV, seguro…')
       router.replace(`/autos/${carId}`)
@@ -135,10 +158,25 @@ export function CarForm({ car }: { car?: Car }) {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={currentPhoto} alt="Foto del auto" className="aspect-video w-full object-cover" />
             <div className="absolute bottom-3 right-3 flex gap-2">
-              <Button type="button" size="sm" variant="secondary" className="gap-1.5 bg-black/60 backdrop-blur" onClick={() => fileRef.current?.click()}>
-                <Camera /> Cambiar
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="gap-1.5 bg-black/60 backdrop-blur"
+                onClick={() => fileRef.current?.click()}
+                disabled={preparing}
+              >
+                <Camera /> {preparing ? 'Preparando…' : 'Cambiar'}
               </Button>
-              <Button type="button" size="icon-sm" variant="secondary" className="bg-black/60 backdrop-blur" aria-label="Quitar foto" onClick={clearPhoto}>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="secondary"
+                className="bg-black/60 backdrop-blur"
+                aria-label="Quitar foto"
+                onClick={clearPhoto}
+                disabled={preparing}
+              >
                 <X />
               </Button>
             </div>
@@ -147,16 +185,19 @@ export function CarForm({ car }: { car?: Car }) {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+            disabled={preparing}
+            className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:pointer-events-none"
           >
             <div className="flex size-12 items-center justify-center rounded-2xl bg-white/[0.06]">
               <CarFront className="size-6" />
             </div>
             <span className="flex items-center gap-2 text-sm font-medium">
-              <Camera className="size-4" /> Agregar foto del auto
+              <Camera className="size-4" /> {preparing ? 'Preparando la foto…' : 'Agregar foto del auto'}
             </span>
+            <span className="text-xs">Hasta {PHOTO_MAX_INPUT_MB} MB</span>
           </button>
         )}
+        <FormError className="mt-3">{photoError}</FormError>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -182,15 +223,8 @@ export function CarForm({ car }: { car?: Car }) {
         )}
       </div>
 
-      <FieldGroup label="Combustible" hint="Si el auto tiene equipo de GNC, elegí Nafta + GNC.">
-        <Segmented
-          value={fuel}
-          onChange={setFuel}
-          options={[
-            { value: 'nafta', label: FUEL_CHOICE_LABELS.nafta },
-            { value: 'dual', label: FUEL_CHOICE_LABELS.dual },
-          ]}
-        />
+      <FieldGroup label="Combustible" hint="Si tiene equipo de GNC, elegí Nafta + GNC. Si es diésel, elegí Gasoil.">
+        <Segmented value={fuel} onChange={setFuel} options={FUEL_OPTIONS} />
       </FieldGroup>
 
       <FormError>{error}</FormError>
@@ -199,7 +233,7 @@ export function CarForm({ car }: { car?: Car }) {
         <Button type="button" variant="outline" className="h-11 flex-1" onClick={() => router.back()}>
           Cancelar
         </Button>
-        <Button type="submit" disabled={saving} className="h-11 flex-1">
+        <Button type="submit" disabled={saving || preparing} className="h-11 flex-1">
           {saving ? (status ?? 'Guardando…') : car ? 'Guardar cambios' : 'Agregar auto'}
         </Button>
       </div>

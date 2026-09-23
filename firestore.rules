@@ -2,10 +2,18 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Sólo entran las cuentas registradas: un documento allowlist/{mail en minúsculas}.
+    // El registro lo hace el servidor la primera vez que alguien entra (app/api/access); desde la app
+    // no se puede leer ni modificar. Las API routes revisan lo mismo (lib/firebase/admin.ts).
+    function isAllowed() {
+      return request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/allowlist/$(request.auth.token.email.lower()));
+    }
+
     // Cada usuario sólo puede leer y escribir lo suyo.
     // El cron usa el Admin SDK, que no pasa por estas reglas.
     match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read, write: if request.auth != null && request.auth.uid == uid && isAllowed();
     }
   }
 }

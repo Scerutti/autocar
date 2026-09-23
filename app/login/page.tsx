@@ -10,6 +10,7 @@ import { Loading } from '@/components/common'
 import { NotConfigured } from '@/components/not-configured'
 import { useAuth } from '@/components/providers/auth-provider'
 import { isFirebaseConfigured } from '@/lib/firebase/client'
+import { safeNextPath } from '@/lib/utils'
 
 function GoogleIcon() {
   return (
@@ -30,8 +31,7 @@ function LoginInner() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    // Sólo rutas internas, para no redirigir a otro sitio.
-    if (user) router.replace(next?.startsWith('/') && !next.startsWith('//') ? next : '/')
+    if (user) router.replace(safeNextPath(next, window.location.origin))
   }, [user, next, router])
 
   if (loading || user) return <Loading />

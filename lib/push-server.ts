@@ -1,7 +1,7 @@
 import 'server-only'
 import webpush from 'web-push'
 import { adminDb } from './firebase/admin'
-import type { PushPayload } from './notifications'
+import { isPushEndpoint, type PushPayload } from './notifications'
 
 let configured = false
 
@@ -14,6 +14,9 @@ function configure() {
   configured = true
 }
 
+/** Que un servicio de push colgado no frene el cron para todos. */
+const SEND_TIMEOUT_MS = 10_000
+
 /** Envía los mensajes a todos los dispositivos del usuario y borra las suscripciones vencidas. */
 export async function sendToUser(uid: string, messages: PushPayload[]) {
   if (!messages.length) return { sent: 0, devices: 0 }
@@ -23,10 +26,14 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
   let sent = 0
   await Promise.all(
     subs.docs.map(async d => {
-      const { endpoint, keys } = d.data() as { endpoint: string; keys: { p256dh: string; auth: string } }
+      const { endpoint, keys } = d.data() as { endpoint: unknown; keys: { p256dh: string; auth: string } }
+      if (!isPushEndpoint(endpoint)) {
+        console.warn('Suscripción push ignorada: no es de un servicio de push conocido', d.id)
+        return
+      }
       for (const msg of messages) {
         try {
-          await webpush.sendNotification({ endpoint, keys }, JSON.stringify(msg), { TTL: 60 * 60 * 24 })
+          await webpush.sendNotification({ endpoint, keys }, JSON.stringify(msg), { TTL: 60 * 60 * 24, timeout: SEND_TIMEOUT_MS })
           sent++
         } catch (e) {
           const status = (e as { statusCode?: number }).statusCode
