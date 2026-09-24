@@ -43,5 +43,10 @@
     "typescript": "5.7.3",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
+  },
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "^5.10.0"
+    }
   }
 }
