@@ -66,6 +66,15 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<dominio>/api/cron/daily
 - `app/favicon.ico` es el favicon provisto por diseño.
 - Colores: azul del logo `#1A9CFB` como acento (`primary`); verde/amarillo/rojo quedan reservados para los estados (`success`, `warning`, `destructive`). Todo está en tokens en `app/globals.css`.
 
+## Historial en PDF
+
+En la pestaña **Trabajos** de cada auto, **Exportar PDF** arma un informe para mostrar (por ejemplo, al vender el auto): los trabajos con fecha, km, taller y observaciones, y el estado de los mantenimientos periódicos (última vez, próximo, al día/vencido). Se elige el período y si se muestran los costos (por defecto no).
+
+- Se genera en el navegador con `@react-pdf/renderer` (`components/report/`), que se descarga recién al exportar. Los datos salen de `lib/report.ts` (con tests).
+- Usa Helvetica, que alcanza para el castellano; `pdfText()` saca lo que no puede dibujar (emojis). El logo va en PNG (`public/brand/*.png`, lo genera `npm run brand`).
+- En el celular, **Compartir** abre el menú del sistema (WhatsApp, mail…); si el navegador no puede, queda **Descargar**.
+- react-pdf: no poner `lineHeight` en la página ni en textos sueltos (el pie con `fixed` deja de dibujarse o aparecen huecos).
+
 ## Seguridad
 
 - **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.

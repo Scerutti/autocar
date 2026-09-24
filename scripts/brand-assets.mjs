@@ -2,6 +2,7 @@
 // Uso: npm run brand
 //
 // - public/brand/{logo,mark,wordmark}.webp: logo con fondo transparente para usar dentro de la app.
+// - public/brand/{mark,wordmark}.png: lo mismo en PNG para el PDF del historial.
 // - public/icon-*.png y app/apple-icon.png: íconos de la PWA / pantalla de inicio.
 // El favicon (app/favicon.ico) es el provisto por diseño y no se genera acá.
 
@@ -70,6 +71,10 @@ async function main() {
   await full.clone().resize({ width: 520 }).webp({ quality: 90, alphaQuality: 90, effort: 6 }).toFile('public/brand/logo.webp')
   await wordmark.clone().resize({ height: 72 }).webp({ quality: 90, alphaQuality: 90, effort: 6 }).toFile('public/brand/wordmark.webp')
   await (await tile(mark, 160, { fill: 0.96, background: false })).webp({ quality: 90, alphaQuality: 90, effort: 6 }).toFile('public/brand/mark.webp')
+
+  // Para el PDF del historial (react-pdf acepta PNG/JPG, no WebP); más grandes para que se vean nítidos al imprimir
+  await (await tile(mark, 256, { fill: 0.96, background: false })).png().toFile('public/brand/mark.png')
+  await wordmark.clone().resize({ height: 120 }).png().toFile('public/brand/wordmark.png')
 
   // Íconos de la PWA: esquinas redondeadas y transparentes ("any")
   for (const size of [192, 512]) {

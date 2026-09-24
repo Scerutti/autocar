@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { CalendarClock, ChevronRight, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
+import { CalendarClock, ChevronRight, FileText, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ActivityList, mergeActivity } from '@/components/activity'
@@ -23,6 +23,7 @@ import {
 } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { KmDialog } from '@/components/km-form'
+import { ExportReportDialog } from '@/components/report/export-dialog'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { toISODate } from '@/lib/dates'
@@ -108,6 +109,7 @@ function RulesTab({ car, rules }: { car: Car; rules: RuleWithState[] }) {
 }
 
 function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<string, Car> }) {
+  const [exporting, setExporting] = useState(false)
   if (!jobs.length) {
     return (
       <EmptyState
@@ -125,9 +127,15 @@ function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<s
   const years = [...new Set(jobs.map(j => j.date.slice(0, 4)))]
   return (
     <div className="space-y-6">
-      <p className="text-sm text-muted-foreground">
-        Total histórico: <span className="font-medium text-foreground">{formatMoney(jobs.reduce((s, j) => s + j.cost, 0))}</span>
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          Total histórico: <span className="font-medium text-foreground">{formatMoney(jobs.reduce((s, j) => s + j.cost, 0))}</span>
+        </p>
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setExporting(true)}>
+          <FileText /> Exportar PDF
+        </Button>
+      </div>
+      <ExportReportDialog car={car} open={exporting} onClose={() => setExporting(false)} />
       {years.map(y => {
         const ofYear = jobs.filter(j => j.date.startsWith(y))
         return (
