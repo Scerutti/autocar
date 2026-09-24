@@ -87,8 +87,9 @@ function Notifications() {
     setBusy(true)
     try {
       const res = await fetch('/api/push/test', { method: 'POST', headers: { Authorization: `Bearer ${await getToken()}` } })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'No se pudo enviar')
+      // Si el servidor falla puede no responder JSON (p. ej. una página de error de Vercel).
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error ?? `El servidor tuvo un problema (error ${res.status}). Probá de nuevo en un rato.`)
       if (json.sent) {
         toast.success('Notificación de prueba enviada', {
           description: `Llegó a ${json.sent} dispositivo${json.sent === 1 ? '' : 's'}.`,
