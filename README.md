@@ -15,6 +15,8 @@ npm run build
 
 Las variables van en `.env.local` (ver `.env.local.example`).
 
+`npm run build` usa **webpack** a propósito (`next build --webpack`); `npm run dev` sigue con Turbopack. El build de producción con Turbopack carga `firebase-admin` con un alias con hash (`firebase-admin-<hash>`) que es un symlink absoluto a la máquina del build: en Vercel no existe y **todas las API routes (y el cron) responden 500 vacío**. Para comprobarlo localmente: build con `output: 'standalone'` y correr `.next/standalone/server.js` sin el `node_modules` del proyecto.
+
 ## Puesta en marcha
 
 ### 1. Firebase
