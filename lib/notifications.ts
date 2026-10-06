@@ -35,6 +35,18 @@ export function isPushEndpoint(endpoint: unknown): endpoint is string {
 
 const nameOf = (car: Pick<Car, 'brand' | 'model'>) => `${car.brand} ${car.model}`.trim()
 
+/** Tag del aviso de un mantenimiento: identifica el mensaje para saber si llegó. */
+export const ruleTag = (ruleId: string) => `rule-${ruleId}`
+
+/**
+ * Qué actualizaciones guardar después de enviar. Si el aviso de un mantenimiento no le llegó a ningún
+ * dispositivo (no tiene, o fallaron todos) no se marca como avisado: se reintenta al día siguiente
+ * en vez de esperar 7 días. Las que sólo limpian el estado se guardan siempre.
+ */
+export function updatesToPersist(ruleUpdates: RuleNotificationUpdate[], delivered: ReadonlySet<string>) {
+  return ruleUpdates.filter(u => !u.notified || delivered.has(ruleTag(u.ruleId)))
+}
+
 /**
  * Decide qué avisos mandar hoy a un usuario. Es pura para poder testearla;
  * el cron se encarga de leer Firestore, enviar y persistir las actualizaciones.
@@ -83,7 +95,7 @@ export function planDailyNotifications(input: {
       title: `${state.status === 'overdue' ? 'Vencido' : 'Se acerca'}: ${rule.name}`,
       body: `${nameOf(car)} — ${detail}`,
       url: `/autos/${car.id}/mantenimientos/${rule.id}`,
-      tag: `rule-${rule.id}`,
+      tag: ruleTag(rule.id),
     })
     ruleUpdates.push({ ruleId: rule.id, lastNotifiedStatus: state.status, notified: true })
   }

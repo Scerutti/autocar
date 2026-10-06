@@ -1,7 +1,7 @@
 import { Timestamp, type DocumentData } from 'firebase-admin/firestore'
 import { adminDb } from '@/lib/firebase/admin'
 import { todayInTimeZone } from '@/lib/dates'
-import { planDailyNotifications } from '@/lib/notifications'
+import { planDailyNotifications, updatesToPersist } from '@/lib/notifications'
 import { fuelTypesFromDoc, intervalFromDoc } from '@/lib/parse'
 import { sendToUser } from '@/lib/push-server'
 import { DEFAULT_SETTINGS, type Car, type MaintenanceRule, type UserSettings } from '@/lib/types'
@@ -77,11 +77,8 @@ export async function GET(request: Request) {
         now,
       })
 
-      const { sent } = await sendToUser(userDoc.id, messages)
-
-      // Si no le llegó a ningún dispositivo (no tiene, o fallaron todos) no lo marcamos como avisado:
-      // se reintenta al día siguiente en vez de esperar 7 días.
-      const updates = sent > 0 ? ruleUpdates : ruleUpdates.filter(u => !u.notified)
+      const { sent, delivered } = await sendToUser(userDoc.id, messages)
+      const updates = updatesToPersist(ruleUpdates, delivered)
       if (updates.length) {
         const batch = db.batch()
         for (const u of updates) {
