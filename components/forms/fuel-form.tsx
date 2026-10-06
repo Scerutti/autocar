@@ -11,7 +11,8 @@ import { useCar, useData } from '@/components/providers/data-provider'
 import { toISODate } from '@/lib/dates'
 import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
-import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput } from '@/lib/format'
+import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
+import { entryKmWarning } from '@/lib/odometer'
 import {
   FUEL_GRADE_LABELS,
   FUEL_LABELS,
@@ -52,9 +53,9 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const [grade, setGrade] = useState<FuelGrade>(initialGrade)
   const [date, setDate] = useState(load?.date ?? toISODate(new Date()))
   const [km, setKm] = useState(load ? (load.km != null ? String(load.km) : '') : String(car.currentKm))
-  const [quantity, setQuantity] = useState(load ? String(load.quantity) : '')
+  const [quantity, setQuantity] = useState(load ? toNumberInput(load.quantity) : '')
   const [mode, setMode] = useState<PriceMode>(load ? 'total' : 'unit')
-  const [price, setPrice] = useState(load ? String(load.total) : initialLast?.unitPrice ? String(initialLast.unitPrice) : '')
+  const [price, setPrice] = useState(load ? toNumberInput(load.total) : initialLast?.unitPrice ? toNumberInput(initialLast.unitPrice) : '')
   const [fullTank, setFullTank] = useState(load?.fullTank ?? true)
   const [station, setStation] = useState(load?.station ?? initialLast?.station ?? '')
 
@@ -71,7 +72,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   function suggestFrom(t: FuelType, g: FuelGrade | null) {
     if (load) return
     const last = lastOf(t, g)
-    if (mode === 'unit') setPrice(last?.unitPrice ? String(last.unitPrice) : '')
+    if (mode === 'unit') setPrice(last?.unitPrice ? toNumberInput(last.unitPrice) : '')
     if (last?.station) setStation(last.station)
   }
 
@@ -87,7 +88,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 
   function changeMode(m: PriceMode) {
     // Al cambiar de modo, convertir el valor ya cargado.
-    if (amounts) setPrice(String(m === 'unit' ? amounts.unitPrice : amounts.total))
+    if (amounts) setPrice(toNumberInput(m === 'unit' ? amounts.unitPrice : amounts.total))
     setMode(m)
   }
 
@@ -121,6 +122,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
         ...(liquidSelected ? [{ label: 'Tanque lleno', value: fullTank ? 'Sí' : 'No' }] : []),
         ...(data.station ? [{ label: 'Estación', value: data.station }] : []),
       ],
+      warning: entryKmWarning({ date, km: kmNum, isNew: !load }, car),
       confirmLabel: 'Sí, guardar',
       icon: Fuel,
     })

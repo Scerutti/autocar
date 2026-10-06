@@ -12,7 +12,8 @@ import { Checkbox, Field, FormError, Input, Textarea } from '@/components/ui/for
 import { useCar, useData } from '@/components/providers/data-provider'
 import { addInterval, toISODate } from '@/lib/dates'
 import { deleteJob, restoreJob, saveJob, type FollowUp } from '@/lib/db'
-import { formatDate, formatInterval, formatKm, formatMoney, parseNumberInput } from '@/lib/format'
+import { formatDate, formatInterval, formatKm, formatMoney, parseNumberInput, toNumberInput } from '@/lib/format'
+import { entryKmWarning } from '@/lib/odometer'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { StatusBadge } from '../common'
@@ -45,7 +46,7 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
   const [category, setCategory] = useState<JobCategory>(
     job?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
   )
-  const [cost, setCost] = useState(job ? String(job.cost) : '')
+  const [cost, setCost] = useState(job ? toNumberInput(job.cost) : '')
   const [workshop, setWorkshop] = useState(job?.workshop ?? '')
   const [notes, setNotes] = useState(job?.notes ?? '')
   const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
@@ -94,6 +95,7 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
           ? [{ label: 'Volver al taller', value: `El ${formatDate(addInterval(date, followUp.intervalTime))} (en ${formatInterval(followUp.intervalTime)})` }]
           : []),
       ],
+      warning: entryKmWarning({ date, km: kmNum, isNew: !job }, car),
       confirmLabel: 'Sí, guardar',
       icon: Wrench,
     })

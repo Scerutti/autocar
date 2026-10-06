@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
 import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
-import { computeAvgKmPerDay, validateKmReading } from './odometer'
+import { computeAvgKmPerDay, entryKmWarning, validateKmReading } from './odometer'
 import { summarizeExpenses } from './expenses'
-import { everyWeekday, parseNumberInput } from './format'
+import { everyWeekday, parseNumberInput, toNumberInput } from './format'
 import { niceMax } from './scale'
 import type { FuelLoad, Job } from './types'
 
@@ -53,6 +53,39 @@ describe('computeFuelStats', () => {
     const loads = [load({ km: 1000 }), load({ km: 1500 })]
     expect(computeFuelStats(loads, 'nafta', false).consumption).toBeNull()
   })
+  it('suma al tramo las cargas sin km que caen entre los dos tanques llenos', () => {
+    const loads = [
+      load({ date: '2026-03-01', km: 1000, quantity: 45 }),
+      load({ date: '2026-03-10', km: null, quantity: 40, fullTank: false }),
+      load({ date: '2026-03-20', km: 2000, quantity: 40 }), // 1000 km con 80 L = 12,5 km/L (antes daba 25)
+    ]
+    expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(12.5)
+  })
+  it('un tanque lleno sin km no corta el tramo: sus litros cuentan para el siguiente', () => {
+    const loads = [
+      load({ date: '2026-03-01', km: 1000, quantity: 45 }),
+      load({ date: '2026-03-10', km: null, quantity: 30 }),
+      load({ date: '2026-03-20', km: 1900, quantity: 30 }), // 900 km con 60 L = 15 km/L
+    ]
+    expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(15)
+  })
+  it('el mismo día ubica la carga sin km por el orden en que se registró', () => {
+    const loads = [
+      load({ date: '2026-03-01', km: 1000, quantity: 45, createdAt: new Date(1) }),
+      load({ date: '2026-03-20', km: null, quantity: 10, fullTank: false, createdAt: new Date(2) }),
+      load({ date: '2026-03-20', km: 1500, quantity: 40, createdAt: new Date(3) }), // 500 km con 50 L
+      load({ date: '2026-03-20', km: null, quantity: 99, fullTank: false, createdAt: new Date(4) }), // después: no cuenta
+    ]
+    expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(10)
+  })
+  it('las cargas sin km de antes del primer tanque lleno no cuentan', () => {
+    const loads = [
+      load({ date: '2026-02-01', km: null, quantity: 99 }),
+      load({ date: '2026-03-01', km: 1000, quantity: 45 }),
+      load({ date: '2026-03-20', km: 1600, quantity: 50 }), // 600 km con 50 L = 12 km/L
+    ]
+    expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(12)
+  })
   it('separa por tipo de combustible', () => {
     const loads = [load({ total: 100 }), load({ fuelType: 'gnc', total: 50, quantity: 10 })]
     expect(computeFuelStats(loads, 'gnc', false).totalSpent).toBe(50)
@@ -63,6 +96,15 @@ describe('computeCostPerKm', () => {
   it('ignora la primera carga', () => {
     const loads = [load({ km: 1000, total: 99999 }), load({ km: 1500, total: 30000 }), load({ km: 2000, fuelType: 'gnc', total: 10000 })]
     expect(computeCostPerKm(loads)).toBe(40)
+  })
+  it('suma lo pagado en cargas sin km que caen entre la primera y la última', () => {
+    const loads = [
+      load({ date: '2026-03-01', km: 1000, total: 99999 }),
+      load({ date: '2026-03-10', km: null, total: 20000 }),
+      load({ date: '2026-03-20', km: 2000, total: 30000 }),
+      load({ date: '2026-03-25', km: null, total: 77777 }), // después de la última con km: no cuenta
+    ]
+    expect(computeCostPerKm(loads)).toBe(50)
   })
 })
 
@@ -122,6 +164,13 @@ describe('parseNumberInput', () => {
     expect(parseNumberInput('$ 148500')).toBe(148500)
     expect(parseNumberInput('1250.75')).toBe(1250.75)
     expect(parseNumberInput('')).toBeNull()
+  })
+  it('lee igual lo que se rellena al editar (toNumberInput)', () => {
+    // Con String(35.123) = "35.123" se leía como 35123.
+    for (const n of [35.123, 12.5, 1250.75, 40, 86420, 0.5, 1.234]) {
+      expect(parseNumberInput(toNumberInput(n))).toBe(n)
+    }
+    expect(toNumberInput(35.123)).toBe('35,123')
   })
 })
 
@@ -194,5 +243,21 @@ describe('combustibles: nafta, gasoil y GNC', () => {
     expect(fuelTypesFromDoc(['gnc'])).toEqual(['nafta', 'gnc'])
     expect(fuelTypesFromDoc(['nafta'])).toEqual(['nafta'])
     expect(fuelTypesFromDoc(undefined)).toEqual(['nafta'])
+  })
+})
+
+describe('entryKmWarning', () => {
+  const car = { currentKm: 51000, kmUpdatedAt: new Date('2026-09-10T15:00:00Z') }
+  it('avisa si los km de una carga o un trabajo parecen tener un cero de más', () => {
+    expect(entryKmWarning({ date: '2026-09-20', km: 510000, isNew: true }, car)).toMatch(/459\.000 km más.*cero/)
+    expect(entryKmWarning({ date: '2026-09-20', km: 52000, isNew: true }, car)).toBeNull()
+    expect(entryKmWarning({ date: '2026-09-20', km: null, isNew: true }, car)).toBeNull()
+  })
+  it('avisa si uno nuevo con fecha anterior al último registro lleva justo esos km', () => {
+    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: true }, car)).toMatch(/último registro.*anterior/)
+    // Con otros km, el mismo día del registro o al editar uno viejo, no.
+    expect(entryKmWarning({ date: '2026-06-01', km: 40000, isNew: true }, car)).toBeNull()
+    expect(entryKmWarning({ date: '2026-09-10', km: 51000, isNew: true }, car)).toBeNull()
+    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: false }, car)).toBeNull()
   })
 })
