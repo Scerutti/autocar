@@ -15,6 +15,8 @@ npm run build
 
 Las variables van en `.env.local` (ver `.env.local.example`).
 
+GitHub Actions (`.github/workflows/ci.yml`) corre `typecheck` y `npm test` en cada PR y en cada push a `main`. Vercel publica igual aunque fallen: el aviso está en el PR o en el commit.
+
 `npm run build` usa **webpack** a propósito (`next build --webpack`); `npm run dev` sigue con Turbopack. El build de producción con Turbopack carga `firebase-admin` con un alias con hash (`firebase-admin-<hash>`) que es un symlink absoluto a la máquina del build: en Vercel no existe y **todas las API routes (y el cron) responden 500 vacío**. Para comprobarlo localmente: build con `output: 'standalone'` y correr `.next/standalone/server.js` sin el `node_modules` del proyecto.
 
 `package.json` fuerza `jose` 5 para `jwks-rsa` (`overrides`). `firebase-admin` usa `jwks-rsa`, y `jwks-rsa` hace `require('jose')`. `jose` 6 es sólo ESM, y el runtime de funciones de Vercel no acepta `require()` de ESM, aunque use Node 24. Sin el override, todas las API routes fallan con `ERR_REQUIRE_ESM` y responden 500 vacío. `jwks-rsa` sólo usa `importJWK` y `exportSPKI`, que funcionan igual en `jose` 5, y `jose` 5 todavía trae una versión CommonJS.
