@@ -1,5 +1,14 @@
+import { readFileSync } from 'node:fs'
+
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Versión y commit del deploy, para el pie de Ajustes. VERCEL_GIT_COMMIT_SHA sólo existe en los builds de Vercel.
+  env: {
+    APP_VERSION: version,
+    APP_COMMIT: (process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 7),
+  },
   // Hay un pnpm-lock.yaml suelto en la carpeta del usuario; fijamos la raíz al proyecto.
   turbopack: { root: import.meta.dirname },
   images: {

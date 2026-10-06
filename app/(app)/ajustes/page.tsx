@@ -234,6 +234,10 @@ export default function SettingsPage() {
           </div>
         </Section>
         <Notifications />
+        <footer className="pt-2 text-center text-xs text-muted-foreground">
+          AutoCar v{process.env.APP_VERSION}
+          {process.env.APP_COMMIT && <span className="font-mono"> · {process.env.APP_COMMIT}</span>}
+        </footer>
       </PageBody>
     </>
   )
