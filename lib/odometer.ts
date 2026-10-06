@@ -1,4 +1,6 @@
-import { daysBetweenInstants } from './dates'
+import { daysBetweenInstants, toISODate } from './dates'
+import { formatDate } from './format'
+import type { ISODate } from './types'
 
 const WINDOW_DAYS = 120
 const MIN_SPAN_DAYS = 3
@@ -32,11 +34,35 @@ export function validateKmReading(newKm: number, currentKm: number): KmValidatio
   if (newKm < currentKm) {
     return { ok: false, error: `No puede ser menor al último registro (${currentKm.toLocaleString('es-AR')} km).` }
   }
-  if (newKm - currentKm > SUSPICIOUS_JUMP_KM) {
-    return {
-      ok: true,
-      warning: `Son ${(newKm - currentKm).toLocaleString('es-AR')} km más que el último registro. ¿Seguro?`,
+  const warning = jumpWarning(newKm, currentKm)
+  return warning ? { ok: true, warning } : { ok: true }
+}
+
+function jumpWarning(newKm: number, currentKm: number) {
+  if (newKm - currentKm <= SUSPICIOUS_JUMP_KM) return null
+  return `Son ${(newKm - currentKm).toLocaleString('es-AR')} km más que el último registro. ¿Seguro?`
+}
+
+/**
+ * Avisos (no bloquean) para los km de una carga o un trabajo, que suben el km del auto sin pasar
+ * por la validación del registro de km:
+ * - muchos km más que el último registro: suele ser un cero de más;
+ * - en uno nuevo con fecha anterior al último registro, justo los km de ese registro (los que el
+ *   formulario completa solo): ese día seguramente tenía menos, y con esos km se calcula cuándo toca
+ *   el próximo mantenimiento.
+ */
+export function entryKmWarning(
+  entry: { date: ISODate; km: number | null; isNew: boolean },
+  car: { currentKm: number; kmUpdatedAt: Date | null },
+): string | null {
+  if (entry.km == null) return null
+  const jump = jumpWarning(entry.km, car.currentKm)
+  if (jump) return `${jump} Fijate que no te sobre un cero.`
+  if (entry.isNew && car.kmUpdatedAt && entry.km === car.currentKm) {
+    const lastDate = toISODate(car.kmUpdatedAt)
+    if (entry.date < lastDate) {
+      return `Son los km del último registro (${formatDate(lastDate)}) y la fecha es anterior. Si ese día el auto tenía menos km, corregilos.`
     }
   }
-  return { ok: true }
+  return null
 }

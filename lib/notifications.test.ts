@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isPushEndpoint, planDailyNotifications } from './notifications'
+import { isPushEndpoint, planDailyNotifications, ruleTag, updatesToPersist } from './notifications'
 import type { Car, MaintenanceRule, UserSettings } from './types'
 
 const car: Car = {
@@ -98,5 +98,31 @@ describe('isPushEndpoint', () => {
     expect(isPushEndpoint('https://evilgoogleapis.com/x')).toBe(false)
     expect(isPushEndpoint('no es una url')).toBe(false)
     expect(isPushEndpoint(undefined)).toBe(false)
+  })
+})
+
+describe('updatesToPersist', () => {
+  const updates = [
+    { ruleId: 'a', lastNotifiedStatus: 'overdue' as const, notified: true },
+    { ruleId: 'b', lastNotifiedStatus: 'soon' as const, notified: true },
+    { ruleId: 'c', lastNotifiedStatus: null, notified: false },
+  ]
+  it('sólo marca como avisados los mantenimientos cuyo aviso llegó', () => {
+    // Llegó el recordatorio de km y el aviso de "a", pero el de "b" falló: "b" se reintenta mañana.
+    const delivered = new Set(['km-c1', ruleTag('a')])
+    expect(updatesToPersist(updates, delivered).map(u => u.ruleId)).toEqual(['a', 'c'])
+  })
+  it('si no llegó nada, sólo guarda las que limpian el estado', () => {
+    expect(updatesToPersist(updates, new Set()).map(u => u.ruleId)).toEqual(['c'])
+  })
+  it('el tag del aviso es el que usa planDailyNotifications', () => {
+    const { messages } = planDailyNotifications({
+      settings: { reminder: { enabled: false, weekday: 0 }, timezone: 'America/Argentina/Buenos_Aires' },
+      cars: [car],
+      rules: [{ ...rule, lastDoneKm: 0 }],
+      today: '2026-09-10',
+      now: new Date('2026-09-10T12:00:00Z'),
+    })
+    expect(messages.map(m => m.tag)).toEqual([ruleTag('r1')])
   })
 })

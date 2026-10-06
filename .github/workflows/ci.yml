@@ -1,0 +1,23 @@
+# Revisa tipos y tests antes de que Vercel publique main (Vercel no corre los tests).
+# El build lo sigue haciendo Vercel: necesita las variables de entorno.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # next-env.d.ts no está en git: typegen lo genera junto con los tipos de las rutas, sin hacer el build.
+      - run: npx next typegen
+      - run: npm run typecheck
+      - run: npm test

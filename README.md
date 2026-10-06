@@ -2,6 +2,12 @@
 
 App personal para llevar el mantenimiento de tus autos: vencimientos por km o por fecha (lo que ocurra primero), recordatorios de una sola vez ("volver al taller en 3 semanas"), recordatorio semanal para cargar los km, trabajos con su costo, cargas de combustible (nafta, nafta + GNC o gasoil; súper o premium) y resumen de gastos.
 
+<p>
+  <img src="docs/screenshots/inicio.jpg" alt="Inicio: km actual del auto, próximo mantenimiento y actividad reciente" width="240">
+  <img src="docs/screenshots/auto.jpg" alt="Pantalla del auto: estado de los mantenimientos" width="240">
+  <img src="docs/screenshots/gastos.jpg" alt="Gastos: totales del año y gasto por mes" width="240">
+</p>
+
 **Stack:** Next.js 16 (App Router) · Tailwind 4 · Firebase Auth (Google) + Firestore · Cloudinary (fotos) · Web Push (VAPID) · Vercel Cron.
 
 ## Desarrollo
@@ -14,6 +20,8 @@ npm run build
 ```
 
 Las variables van en `.env.local` (ver `.env.local.example`).
+
+GitHub Actions (`.github/workflows/ci.yml`) corre `typecheck` y `npm test` en cada PR y en cada push a `main`. Vercel publica igual aunque fallen: el aviso está en el PR o en el commit.
 
 `npm run build` usa **webpack** a propósito (`next build --webpack`); `npm run dev` sigue con Turbopack. El build de producción con Turbopack carga `firebase-admin` con un alias con hash (`firebase-admin-<hash>`) que es un symlink absoluto a la máquina del build: en Vercel no existe y **todas las API routes (y el cron) responden 500 vacío**. Para comprobarlo localmente: build con `output: 'standalone'` y correr `.next/standalone/server.js` sin el `node_modules` del proyecto.
 

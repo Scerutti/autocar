@@ -48,20 +48,23 @@ export function computeFuelStats(loads: FuelLoad[], fuelType: FuelType, singleFu
   let consumption: number | null = null
   if (singleFuel) {
     const withKm = [...ofType].filter(l => l.km != null).sort((a, b) => a.km! - b.km!)
+    const withoutKm = ofType.filter(l => l.km == null)
     let distance = 0
     let quantity = 0
-    let prevFullKm: number | null = null
+    let prevFull: FuelLoad | null = null
     let pending = 0
     for (const l of withKm) {
-      if (prevFullKm == null) {
-        if (l.fullTank) prevFullKm = l.km!
+      if (prevFull == null) {
+        if (l.fullTank) prevFull = l
         continue
       }
       pending += l.quantity
       if (l.fullTank) {
-        distance += l.km! - prevFullKm
+        // Las cargas sin km también se gastaron en este tramo: se ubican por fecha entre los dos tanques llenos.
+        pending += sumBetween(withoutKm, prevFull, l, x => x.quantity)
+        distance += l.km! - prevFull.km!
         quantity += pending
-        prevFullKm = l.km!
+        prevFull = l
         pending = 0
       }
     }
@@ -77,16 +80,30 @@ export function computeFuelStats(loads: FuelLoad[], fuelType: FuelType, singleFu
   }
 }
 
+/** Orden de carga: por fecha y, el mismo día, por cuándo se registró. */
+function loadOrder(a: FuelLoad, b: FuelLoad) {
+  return a.date.localeCompare(b.date) || a.createdAt.getTime() - b.createdAt.getTime()
+}
+
+/** Suma de las cargas que quedan estrictamente después de `from` y antes de `to`. */
+function sumBetween(loads: FuelLoad[], from: FuelLoad, to: FuelLoad, value: (l: FuelLoad) => number) {
+  return loads.filter(l => loadOrder(from, l) < 0 && loadOrder(l, to) < 0).reduce((s, l) => s + value(l), 0)
+}
+
 /**
  * Costo de combustible por km, sumando todos los combustibles.
- * Toma las cargas con km; la primera no cuenta (ese combustible se gasta después).
+ * Toma las cargas con km; la primera no cuenta (ese combustible se gasta después). Las cargas sin km
+ * que caen por fecha entre la primera y la última también se pagaron en ese recorrido.
  */
 export function computeCostPerKm(loads: FuelLoad[]): number | null {
   const withKm = loads.filter(l => l.km != null).sort((a, b) => a.km! - b.km!)
   if (withKm.length < 2) return null
-  const distance = withKm[withKm.length - 1].km! - withKm[0].km!
+  const first = withKm[0]
+  const last = withKm[withKm.length - 1]
+  const distance = last.km! - first.km!
   if (distance <= 0) return null
-  const spent = withKm.slice(1).reduce((s, l) => s + l.total, 0)
+  const withoutKm = loads.filter(l => l.km == null)
+  const spent = withKm.slice(1).reduce((s, l) => s + l.total, 0) + sumBetween(withoutKm, first, last, l => l.total)
   return round2(spent / distance)
 }
 

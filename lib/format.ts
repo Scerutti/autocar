@@ -75,6 +75,14 @@ export function timeAgo(d: Date, now = new Date()) {
   return months === 1 ? 'hace 1 mes' : `hace ${months} meses`
 }
 
+/**
+ * Un número guardado como texto para rellenar un campo, con coma decimal: 35.123 -> "35,123".
+ * Con String() quedaría "35.123", que parseNumberInput lee como 35123 (punto de miles).
+ */
+export function toNumberInput(n: number): string {
+  return String(n).replace('.', ',')
+}
+
 /** Parsea números escritos a la argentina: "1.234,56" o "1234.56". */
 export function parseNumberInput(value: string): number | null {
   const v = value.trim().replace(/\s|\$/g, '')
