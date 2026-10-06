@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { CalendarClock, ChevronRight, FileText, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -275,7 +275,6 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
 
 function CarDetail() {
   const { carId } = useParams<{ carId: string }>()
-  const router = useRouter()
   const params = useSearchParams()
   const { carById } = useData()
   const { car, rules, jobs, fuel, readings } = useCar(carId)
@@ -335,7 +334,8 @@ function CarDetail() {
           </div>
         </div>
 
-        <Tabs value={tab} onValueChange={v => router.replace(`/autos/${car.id}?tab=${v}`, { scroll: false })}>
+        {/* replaceState en vez de router.replace: cambia la pestaña al instante, sin pedirle la página al servidor. */}
+        <Tabs value={tab} onValueChange={v => window.history.replaceState(null, '', `?tab=${v}`)}>
           <TabsList className="h-10! w-full">
             <TabsTrigger value="estado">Estado</TabsTrigger>
             <TabsTrigger value="trabajos">Trabajos</TabsTrigger>
