@@ -71,6 +71,8 @@ AutoCar es una app web para el celular (se instala como app) que te avisa cuánd
 
 Next.js · Tailwind CSS · Firebase (login con Google y base de datos) · Cloudinary (fotos) · Web Push · Vercel.
 
+El [manual de usuario](docs/manual-de-usuario.pdf) explica paso a paso cómo usar la app, listo para imprimir.
+
 Para correrlo, configurarlo o publicarlo, mirá [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
 ## Licencia
