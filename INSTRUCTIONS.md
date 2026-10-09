@@ -12,6 +12,7 @@ npm run dev        # http://localhost:3000
 npm test           # tests de la lógica (vencimientos, combustible, gastos, avisos, logros)
 npm run typecheck
 npm run build
+npm run manual     # regenera el manual de usuario en PDF (docs/manual-de-usuario.pdf)
 ```
 
 Las variables van en `.env.local` (ver `.env.local.example`).
@@ -83,6 +84,15 @@ Después de publicar, `curl -X POST https://<dominio>/api/access` tiene que resp
 - `app/favicon.ico` es el favicon provisto por diseño.
 - Colores: azul del logo `#1A9CFB` como acento (`primary`); verde/amarillo/rojo quedan reservados para los estados (`success`, `warning`, `destructive`). Todo está en tokens en `app/globals.css`.
 - Las capturas del README están en `docs/screenshots/` (375 × 812, con la patente pixelada).
+
+## Manual de usuario
+
+`npm run manual` genera [`docs/manual-de-usuario.pdf`](docs/manual-de-usuario.pdf) (A4, para imprimir) con `@react-pdf/renderer`, la misma librería del historial en PDF.
+
+- El texto está en `scripts/manual/content.mjs`: capítulos con bloques (párrafos, pasos, tablas, notas, figuras). Los nombres de botones van entre `**`.
+- Las capturas están en `scripts/manual/img/`: 375 px de ancho, sacadas del celular o del navegador en modo celular, con la patente pixelada (el repo es público).
+- El índice se arma en varias pasadas: cada título anota en qué página cayó y se vuelve a generar hasta que los números no cambian.
+- Cuando cambia la app: actualizar el texto y las capturas, subir `manualVersion`, poner en `appVersion` la versión que describe el manual y sumar una fila a `history`.
 
 ## Historial en PDF
 
