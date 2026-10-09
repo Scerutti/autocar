@@ -1,11 +1,11 @@
-# Actualizaciones semanales de dependencias. Los PR van a develop (el flujo es feature → develop → main).
+# Actualizaciones mensuales de dependencias. Los PR van a develop (el flujo es feature → develop → main).
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     # Minor y patch juntos en un solo PR; los major llegan de a uno.
     groups:
@@ -25,7 +25,7 @@ updates:
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 3
     groups:
       actions-minor-patch:
