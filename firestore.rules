@@ -12,8 +12,165 @@ service cloud.firestore {
 
     // Cada usuario sólo puede leer y escribir lo suyo.
     // El cron usa el Admin SDK, que no pasa por estas reglas.
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid && isAllowed();
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid && isAllowed();
+    }
+
+    // ---- Validación de lo que se guarda
+    // La app está abierta a cualquier cuenta de Google: sólo se aceptan los campos que la app escribe
+    // (más los viejos que todavía se leen) y los textos tienen tope, así nadie usa su espacio como disco.
+    // Se valida el documento completo después de escribir: un update parcial también tiene que dejarlo
+    // bien, incluidos los campos que agrega el cron (lastNotifiedAt/lastNotifiedStatus).
+    // Todos los campos pueden faltar o ser null (documentos viejos); si están, tienen que ser del tipo.
+
+    function optText(d, f, max) {
+      return d.get(f, null) == null || (d[f] is string && d[f].size() <= max);
+    }
+
+    function optNum(d, f) {
+      return d.get(f, null) == null || d[f] is number;
+    }
+
+    function optBool(d, f) {
+      return d.get(f, null) == null || d[f] is bool;
+    }
+
+    function optTime(d, f) {
+      return d.get(f, null) == null || d[f] is timestamp;
+    }
+
+    // Lista de ids (strings) con tope de cantidad y de largo total.
+    function optIds(d, f, maxItems) {
+      return d.get(f, null) == null
+        || (d[f] is list && d[f].size() <= maxItems && d[f].join(',').size() <= maxItems * 100);
+    }
+
+    // { amount, unit }: "6 meses", "1 año".
+    function optInterval(d, f) {
+      return d.get(f, null) == null
+        || (d[f] is map && d[f].keys().hasOnly(['amount', 'unit']) && optNum(d[f], 'amount') && optText(d[f], 'unit', 20));
+    }
+
+    // Ajustes (users/{uid}): lo crea la app la primera vez con DEFAULT_SETTINGS.
+    function validSettings(d) {
+      return d.keys().hasOnly(['reminder', 'timezone', 'createdAt'])
+        && (d.get('reminder', null) == null
+          || (d.reminder is map && d.reminder.keys().hasOnly(['enabled', 'weekday'])
+            && optBool(d.reminder, 'enabled') && optNum(d.reminder, 'weekday')))
+        && optText(d, 'timezone', 100)
+        && optTime(d, 'createdAt');
+    }
+
+    function validCar(d) {
+      return d.keys().hasOnly([
+          'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
+          'avgKmPerDay', 'photoUrl', 'photoPublicId', 'createdAt'])
+        && optText(d, 'brand', 200) && optText(d, 'model', 200) && optText(d, 'version', 200)
+        && optNum(d, 'year') && optText(d, 'plate', 50)
+        && (d.get('fuelTypes', null) == null || (d.fuelTypes is list && d.fuelTypes.hasOnly(['nafta', 'gnc', 'gasoil'])))
+        && optNum(d, 'currentKm') && optTime(d, 'kmUpdatedAt') && optNum(d, 'avgKmPerDay')
+        && optText(d, 'photoUrl', 2000) && optText(d, 'photoPublicId', 500)
+        && optTime(d, 'createdAt');
+    }
+
+    // intervalMonths es el formato viejo del intervalo (lib/parse.ts lo sigue leyendo).
+    // El nombre y el título de un trabajo van y vienen (job-form precarga el título con el nombre, y
+    // "Volver al taller: <título>" arma un nombre), así que tienen el mismo tope, holgado.
+    function validRule(d) {
+      return d.keys().hasOnly([
+          'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'lastDoneKm',
+          'lastDoneDate', 'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
+        && optText(d, 'carId', 100) && optText(d, 'name', 500)
+        && optNum(d, 'intervalKm') && optInterval(d, 'intervalTime') && optNum(d, 'intervalMonths')
+        && optBool(d, 'repeat') && optNum(d, 'lastDoneKm') && optText(d, 'lastDoneDate', 30)
+        && optNum(d, 'warnKm') && optNum(d, 'warnDays')
+        && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
+    }
+
+    function validJob(d) {
+      return d.keys().hasOnly([
+          'carId', 'date', 'km', 'title', 'category', 'cost', 'workshop', 'notes', 'ruleIds', 'createdAt'])
+        && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
+        && optText(d, 'title', 500) && optText(d, 'category', 50) && optNum(d, 'cost')
+        && optText(d, 'workshop', 200) && optText(d, 'notes', 5000)
+        && optIds(d, 'ruleIds', 200) && optTime(d, 'createdAt');
+    }
+
+    function validFuel(d) {
+      return d.keys().hasOnly([
+          'carId', 'date', 'km', 'fuelType', 'grade', 'quantity', 'unitPrice', 'total', 'fullTank',
+          'station', 'createdAt'])
+        && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
+        && optText(d, 'fuelType', 20) && optText(d, 'grade', 20)
+        && optNum(d, 'quantity') && optNum(d, 'unitPrice') && optNum(d, 'total')
+        && optBool(d, 'fullTank') && optText(d, 'station', 200) && optTime(d, 'createdAt');
+    }
+
+    function validReading(d) {
+      return d.keys().hasOnly(['carId', 'km', 'date', 'source'])
+        && optText(d, 'carId', 100) && optNum(d, 'km') && optTime(d, 'date') && optText(d, 'source', 20);
+    }
+
+    // Lo que devuelve PushSubscription.toJSON(): sin endpoint https y claves, el cron no puede enviar.
+    // El campo "keys" va entre corchetes para no confundirlo con el método keys().
+    function validPushSubscription(d) {
+      return d.keys().hasOnly(['endpoint', 'keys', 'userAgent', 'createdAt'])
+        && d.endpoint is string && d.endpoint.size() <= 2000 && d.endpoint.matches('https://.+')
+        && d['keys'] is map && d['keys'].keys().hasOnly(['p256dh', 'auth']) && d['keys'].keys().hasAll(['p256dh', 'auth'])
+        && d['keys'].p256dh is string && d['keys'].p256dh.size() <= 200
+        && d['keys'].auth is string && d['keys'].auth.size() <= 200
+        && optText(d, 'userAgent', 1000) && optTime(d, 'createdAt');
+    }
+
+    function validAchievement(d) {
+      return d.keys().hasOnly(['carId', 'unlockedAt', 'celebratedAt'])
+        && optText(d, 'carId', 100) && optTime(d, 'unlockedAt') && optTime(d, 'celebratedAt');
+    }
+
+    // ---- Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
+
+    match /users/{uid} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validSettings(request.resource.data);
+
+      match /cars/{carId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validCar(request.resource.data);
+      }
+
+      match /rules/{ruleId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validRule(request.resource.data);
+      }
+
+      match /jobs/{jobId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validJob(request.resource.data);
+      }
+
+      match /fuel/{fuelId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validFuel(request.resource.data);
+      }
+
+      match /odometer/{readingId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validReading(request.resource.data);
+      }
+
+      // El id es el SHA-256 (hex) del endpoint.
+      match /pushSubscriptions/{subId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && subId.matches('[0-9a-f]{64}')
+          && validPushSubscription(request.resource.data);
+      }
+
+      // El id es el del logro (lib/achievements.ts).
+      match /achievements/{achievementId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && achievementId.size() <= 100
+          && validAchievement(request.resource.data);
+      }
     }
   }
 }
