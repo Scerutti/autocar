@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
+import { AchievementsProvider } from '@/components/achievements/achievements-provider'
 import { AppShell } from '@/components/app-shell'
 import { BrandLogo } from '@/components/brand'
 import { Loading } from '@/components/common'
@@ -74,7 +75,7 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
       ) : loading ? (
         <Loading />
       ) : (
-        children
+        <AchievementsProvider>{children}</AchievementsProvider>
       )}
     </AppShell>
   )

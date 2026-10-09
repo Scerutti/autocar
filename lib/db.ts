@@ -6,6 +6,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   setDoc,
   Timestamp,
   where,
@@ -22,6 +23,7 @@ import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
+  type AchievementRecord,
   type Car,
   type FuelLoad,
   type Job,
@@ -36,7 +38,7 @@ import {
 const userDoc = (uid: string) => doc(firestore(), 'users', uid)
 const col = (uid: string, name: CollectionName) => collection(firestore(), 'users', uid, name)
 
-type CollectionName = 'cars' | 'rules' | 'jobs' | 'fuel' | 'odometer' | 'pushSubscriptions'
+type CollectionName = 'cars' | 'rules' | 'jobs' | 'fuel' | 'odometer' | 'pushSubscriptions' | 'achievements'
 
 export const newId = (uid: string, name: CollectionName) => doc(col(uid, name)).id
 
@@ -129,6 +131,16 @@ function readingFrom(d: QueryDocumentSnapshot<DocumentData>): OdometerReading {
   return { id: d.id, carId: x.carId, km: num(x.km) ?? 0, date: toDate(x.date) ?? new Date(0), source: x.source ?? 'manual' }
 }
 
+function achievementFrom(d: QueryDocumentSnapshot<DocumentData>): AchievementRecord {
+  const x = d.data()
+  return {
+    id: d.id,
+    carId: str(x.carId),
+    unlockedAt: toDate(x.unlockedAt) ?? new Date(0),
+    celebratedAt: toDate(x.celebratedAt),
+  }
+}
+
 // ---- Suscripciones en tiempo real
 
 export interface UserData {
@@ -138,6 +150,7 @@ export interface UserData {
   jobs: Job[]
   fuel: FuelLoad[]
   odometer: OdometerReading[]
+  achievements: AchievementRecord[]
 }
 
 type Part = keyof UserData
@@ -178,6 +191,7 @@ export function subscribeUserData(
   listen('jobs', 'jobs', jobFrom)
   listen('fuel', 'fuel', fuelFrom)
   listen('odometer', 'odometer', readingFrom)
+  listen('achievements', 'achievements', achievementFrom)
   return () => subs.forEach(u => u())
 }
 
@@ -466,5 +480,38 @@ export async function savePushSubscription(uid: string, sub: PushSubscriptionJSO
 export async function deletePushSubscription(uid: string, endpoint: string) {
   const batch = writeBatch(firestore())
   batch.delete(doc(col(uid, 'pushSubscriptions'), await sha256(endpoint)))
+  await batch.commit()
+}
+
+// ---- Logros
+
+/**
+ * Guarda los logros conseguidos. Es idempotente: el id del documento es el del logro y la transacción
+ * sólo crea los que no existen, así un reintento, un doble evento u otro dispositivo al mismo tiempo
+ * no lo duplican ni pisan la fecha original. Necesita conexión (si falla, se reintenta más tarde).
+ * Devuelve cuántos creó.
+ */
+export async function unlockAchievements(uid: string, unlocks: { id: string; carId: string | null }[]) {
+  if (!unlocks.length) return 0
+  return runTransaction(firestore(), async tx => {
+    const refs = unlocks.map(u => doc(col(uid, 'achievements'), u.id))
+    const snaps = await Promise.all(refs.map(r => tx.get(r)))
+    const now = Timestamp.now()
+    let created = 0
+    snaps.forEach((snap, i) => {
+      if (snap.exists()) return
+      tx.set(refs[i], { carId: unlocks[i].carId, unlockedAt: now, celebratedAt: null })
+      created++
+    })
+    return created
+  })
+}
+
+/** La celebración ya se mostró (o el usuario la cerró): no vuelve a aparecer en ningún dispositivo. */
+export async function markAchievementsCelebrated(uid: string, ids: string[]) {
+  if (!ids.length) return
+  const batch = writeBatch(firestore())
+  const now = Timestamp.now()
+  ids.forEach(id => batch.update(doc(col(uid, 'achievements'), id), { celebratedAt: now }))
   await batch.commit()
 }
