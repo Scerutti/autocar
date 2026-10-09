@@ -106,6 +106,16 @@ En la pestaña **Trabajos** de cada auto, **Exportar PDF** arma un informe para 
 - **Diálogos** (`components/ui/dialog.tsx`, `alert-dialog.tsx`) y menús (`dropdown-menu.tsx`) usan Base UI: foco atrapado y devuelto, Escape, bloqueo de scroll y ARIA.
 - Sin conexión, los guardados muestran "se sincroniza cuando vuelva la señal" y un aviso global indica cuando se corta o vuelve la red.
 
+## Logros
+
+- **Catálogo y reglas** en `lib/achievements.ts` (con tests): cada logro tiene un id estable, su condición y cómo medir el progreso. Para sumar uno, agregarlo ahí y darle ícono en `components/achievements/medal.tsx`.
+- **Alcance**: los logros son de la cuenta, pero cada condición se mide auto por auto (no se suman trabajos de autos distintos). Se guarda con qué auto se consiguió. Sólo cuentan registros válidos: con fecha no futura, trabajos con título, cargas con cantidad.
+- **Semanas**: van de lunes a domingo; una semana cuenta si tiene al menos un registro de km. Una semana sin registro corta la racha (lo ya conseguido queda).
+- **Desbloqueo**: `AchievementsProvider` evalúa con los datos que ya están en Firestore cada vez que cambian y crea los que faltan con una transacción idempotente (`unlockAchievements`): un reintento, un doble evento u otro dispositivo no lo duplican. Necesita conexión; si falla, reintenta más tarde. Son permanentes: editar o borrar registros no los quita ni los repite.
+- **Celebraciones**: `celebratedAt` en null = pendiente (se ve en cualquier dispositivo hasta que se muestre). 1 logro: solo; de 2 a 4: de a uno ("1 de 3"); 5 o más: primero un resumen. Lo que se desbloquea con la ventana abierta queda para la tanda siguiente. Respeta "reducir movimiento".
+- **Usuarios existentes**: no hace falta migración. La primera vez que entran se desbloquea todo lo que ya cumplían (con fecha de hoy) y ven el resumen.
+- Las reglas de Firestore no cambian: `achievements` cuelga de `users/{uid}` como el resto.
+
 ## Modelo de datos (Firestore)
 
 Todo cuelga de `users/{uid}`; las colecciones hijas tienen `carId` para consultar entre autos.
@@ -119,5 +129,6 @@ Todo cuelga de `users/{uid}`; las colecciones hijas tienen `carId` para consulta
 | `fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
 | `odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |
 | `pushSubscriptions` | dispositivos suscriptos a notificaciones |
+| `achievements` | logros conseguidos: el id del documento es el del logro; `carId`, `unlockedAt`, `celebratedAt` (null = celebración pendiente) |
 
 Fuera de `users`, y sólo accesibles desde el servidor: `allowlist/{mail}` (cuentas registradas, se completa sola) y `usage/{uid}` (fotos subidas en el día).

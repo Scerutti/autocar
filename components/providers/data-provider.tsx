@@ -19,9 +19,9 @@ interface DataState extends UserData {
 
 const DataContext = createContext<DataState | null>(null)
 
-const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer']
+const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer', 'achievements']
 
-const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs: [], fuel: [], odometer: [] }
+const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [] }
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
