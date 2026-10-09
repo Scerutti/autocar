@@ -1,5 +1,6 @@
 import { authorize } from '@/lib/firebase/admin'
 import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
+import { isOwnPublicId } from '@/lib/photo-limits'
 
 export async function POST(request: Request) {
   const auth = await authorize(request)
@@ -8,8 +9,9 @@ export async function POST(request: Request) {
   const config = cloudinaryConfig()
   if (!config) return Response.json({ error: 'Cloudinary no está configurado' }, { status: 500 })
 
-  const { publicId } = (await request.json().catch(() => ({}))) as { publicId?: string }
-  if (typeof publicId !== 'string' || !publicId.startsWith(`${userFolder(uid)}/`)) {
+  const { publicId } = (await request.json().catch(() => ({}))) as { publicId?: unknown }
+  // Sólo imágenes de su carpeta, y sin caracteres que puedan escaparse de ella.
+  if (!isOwnPublicId(publicId, userFolder(uid))) {
     return Response.json({ error: 'Imagen inválida' }, { status: 400 })
   }
 

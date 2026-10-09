@@ -7,6 +7,10 @@ on:
     branches: [main]
   pull_request:
 
+# Sólo lee el código: el GITHUB_TOKEN no necesita más.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
