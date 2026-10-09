@@ -2,6 +2,20 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.0.2
+
+Actualización de dependencias. Para el usuario la app funciona igual.
+
+### Seguridad
+
+- **Dependencias de Firebase**: `@grpc/grpc-js` 1.14 y `uuid` 11 (con `overrides`, hasta que Firebase las actualice). Cierran tres alertas de Dependabot.
+
+### Mantenimiento
+
+- Dependencias al día: `@vercel/analytics` 2, `firebase-admin` 14.5, `lucide-react`, `vite` y `vitest`.
+- El CI usa `actions/checkout` v7 y `actions/setup-node` v6.
+- Dependabot propone actualizaciones una vez por mes, en lugar de cada semana.
+
 ## 1.0.1
 
 Arreglos de seguridad. Para el usuario la app funciona igual.
