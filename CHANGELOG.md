@@ -2,7 +2,20 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Sin publicar
+## 1.0.1
+
+Arreglos de seguridad. Para el usuario la app funciona igual.
+
+### Seguridad
+
+- **Next.js 16.3.8**: corrige vulnerabilidades conocidas de 16.3.3, entre ellas una crítica.
+- **Fotos**: cada firma de subida sirve para una sola foto, así el límite de 10 por día no se puede saltear. El borrado valida mejor de qué foto se trata.
+- **Avisos diarios**: hasta 6 avisos por cuenta y por día (si hay más, llega un resumen) y hasta 5 dispositivos por cuenta. Así nadie puede trabar los avisos de los demás. El pedido de km llega siempre.
+- **Reglas de Firestore**: sólo aceptan los datos que guarda la app, con un largo máximo para los textos.
+- **Headers**: Content-Security-Policy, HSTS y Permissions-Policy.
+- **Mantenimiento**: el CI corre con permisos de sólo lectura y Dependabot propone las actualizaciones a `develop`.
+
+### Documentación
 
 - Manual de usuario en PDF ([docs/manual-de-usuario.pdf](docs/manual-de-usuario.pdf)), para AutoCar 1.0.0. Se regenera con `npm run manual`.
 
