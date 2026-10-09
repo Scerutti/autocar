@@ -25,3 +25,16 @@ export function nextPhotoUsage(prev: Partial<PhotoUsage> | undefined, today: str
   const used = prev?.day === today && typeof prev.photos === 'number' ? prev.photos : 0
   return used >= limit ? null : { day: today, photos: used + 1 }
 }
+
+/** Largo máximo de un public_id de Cloudinary. */
+const PUBLIC_ID_MAX_LENGTH = 255
+
+/**
+ * true si `publicId` es una imagen dentro de `folder` y no trae nada raro: sólo letras, números, `/`, `_`
+ * y `-` (nada de `..`, `//` ni barras invertidas). Sirve para los ids nuevos (uuid) y los viejos (al azar).
+ */
+export function isOwnPublicId(publicId: unknown, folder: string): publicId is string {
+  if (typeof publicId !== 'string' || publicId.length > PUBLIC_ID_MAX_LENGTH) return false
+  if (!/^[A-Za-z0-9/_-]+$/.test(publicId) || publicId.includes('//') || publicId.endsWith('/')) return false
+  return publicId.startsWith(`${folder}/`)
+}

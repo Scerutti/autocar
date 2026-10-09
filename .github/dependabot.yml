@@ -1,0 +1,32 @@
+# Actualizaciones semanales de dependencias. Los PR van a develop (el flujo es feature → develop → main).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Minor y patch juntos en un solo PR; los major llegan de a uno.
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Los major de Next traen cambios que rompen: se migran a mano.
+      - dependency-name: next
+        update-types: [version-update:semver-major]
+      # Los tipos siguen la versión de Node del proyecto (engines), no la última.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+      # Fijado en 5 a propósito por el override de jwks-rsa en package.json.
+      - dependency-name: jose
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]

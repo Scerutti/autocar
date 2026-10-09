@@ -12,6 +12,7 @@ npm run dev        # http://localhost:3000
 npm test           # tests de la lógica (vencimientos, combustible, gastos, avisos, logros)
 npm run typecheck
 npm run build
+npm run manual     # regenera el manual de usuario en PDF (docs/manual-de-usuario.pdf)
 ```
 
 Las variables van en `.env.local` (ver `.env.local.example`).
@@ -84,6 +85,15 @@ Después de publicar, `curl -X POST https://<dominio>/api/access` tiene que resp
 - Colores: azul del logo `#1A9CFB` como acento (`primary`); verde/amarillo/rojo quedan reservados para los estados (`success`, `warning`, `destructive`). Todo está en tokens en `app/globals.css`.
 - Las capturas del README están en `docs/screenshots/` (375 × 812, con la patente pixelada).
 
+## Manual de usuario
+
+`npm run manual` genera [`docs/manual-de-usuario.pdf`](docs/manual-de-usuario.pdf) (A4, para imprimir) con `@react-pdf/renderer`, la misma librería del historial en PDF.
+
+- El texto está en `scripts/manual/content.mjs`: capítulos con bloques (párrafos, pasos, tablas, notas, figuras). Los nombres de botones van entre `**`.
+- Las capturas están en `scripts/manual/img/`: 375 px de ancho, sacadas del celular o del navegador en modo celular, con la patente pixelada (el repo es público).
+- El índice se arma en varias pasadas: cada título anota en qué página cayó y se vuelve a generar hasta que los números no cambian.
+- Cuando cambia la app: actualizar el texto y las capturas, subir `manualVersion`, poner en `appVersion` la versión que describe el manual y sumar una fila a `history`.
+
 ## Historial en PDF
 
 - Se genera en el navegador con `@react-pdf/renderer` (`components/report/`), que se descarga recién al exportar. Los datos salen de `lib/report.ts` (con tests).
@@ -96,8 +106,12 @@ Después de publicar, `curl -X POST https://<dominio>/api/access` tiene que resp
 - **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.
 - **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Si pasa, las salidas son App Check (reCAPTCHA) o cerrar el acceso.
 - **Datos**: cada cuenta sólo lee y escribe `users/{su uid}`. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
-- **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.
-- **Push**: el servidor sólo manda a servicios de push conocidos (FCM, Mozilla, Windows, Apple), con timeout para que un servicio colgado no frene el cron.
+- **Reglas de Firestore**: sólo aceptan las colecciones y los campos que guarda la app, con largo máximo en los textos (funciones `valid*` en [`firestore.rules`](firestore.rules)). **Si agregás un campo o una colección, sumalo ahí y volvé a publicar las reglas**: si no, esa escritura falla con `permission-denied` en producción.
+- **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` (comparado en tiempo constante) y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.
+- **Fotos**: la firma de subida incluye un `public_id` único y `overwrite=false`, así cada firma sirve para una sola foto y el límite diario no se saltea.
+- **Push**: el servidor sólo manda a servicios de push conocidos (FCM, Mozilla, Windows, Apple), con timeout para que un servicio colgado no frene el cron. Por cuenta: hasta 6 avisos por corrida y 5 dispositivos; el cron procesa de a 5 cuentas con un tope de 40 s.
+- **Headers** (`next.config.mjs`): Content-Security-Policy, HSTS y Permissions-Policy. Si la app empieza a usar un servicio externo nuevo, hay que sumar su dominio a la CSP: si no, el navegador lo bloquea (en la consola aparece "Refused to …").
+- **Cloudinary**: con *Strict transformations* activado (Settings → Security), sólo se pueden pedir los tamaños que usa la app. Si cambiás un tamaño en el código, permitilo también ahí.
 - **Secretos**: `.env.local` y el JSON de la service account no se suben (`.gitignore`). El repo es público: nunca pegues claves en el código ni en la documentación.
 - Recomendado, desde las consolas: restringir la API key de Firebase a tus dominios (Google Cloud → Credenciales → la "Browser key" → Restricciones de aplicaciones → Sitios web): el de Vercel, `localhost:3000` y `<proyecto>.firebaseapp.com` (lo usa el login con Google).
 
