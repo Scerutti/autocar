@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle, CarFront, ChevronRight, Plus } from 'lucide-react'
+import { AchievementsCard } from '@/components/achievements/achievements-card'
 import { ActivityList, mergeActivity } from '@/components/activity'
 import { CarCard } from '@/components/car-card'
 import { BrandMark } from '@/components/brand'
@@ -98,6 +99,10 @@ export default function HomePage() {
                 </div>
               </section>
             )}
+
+            <section aria-label="Logros" className="mt-10">
+              <AchievementsCard />
+            </section>
 
             <section className="mt-10">
               <SectionTitle

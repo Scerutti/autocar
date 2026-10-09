@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Settings, Wallet, Wrench } from 'lucide-react'
+import { LayoutDashboard, Settings, Trophy, Wallet, Wrench } from 'lucide-react'
 import { BrandMark, BrandWordmark } from '@/components/brand'
 import { useAuth } from '@/components/providers/auth-provider'
 import { cn } from '@/lib/utils'
@@ -11,6 +11,7 @@ const NAV = [
   { href: '/', label: 'Inicio', icon: LayoutDashboard },
   { href: '/trabajos', label: 'Trabajos', icon: Wrench },
   { href: '/gastos', label: 'Gastos', icon: Wallet },
+  { href: '/logros', label: 'Logros', icon: Trophy },
   { href: '/ajustes', label: 'Ajustes', icon: Settings },
 ]
 
@@ -80,15 +81,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <main className="w-full min-w-0 pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10">{children}</main>
       </div>
 
-      <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-white/8 bg-background/95 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
-        <div className="mx-auto flex max-w-md items-center justify-around">
+      <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-white/8 bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
+        <div className="mx-auto flex max-w-md items-center">
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               aria-current={isActive(pathname, href) ? 'page' : undefined}
               className={cn(
-                'flex min-w-16 flex-col items-center gap-1 rounded-xl px-3 py-2 text-[10px]',
+                'flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px]',
                 isActive(pathname, href) ? 'text-primary' : 'text-muted-foreground',
               )}
             >

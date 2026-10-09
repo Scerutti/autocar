@@ -119,6 +119,19 @@ export interface OdometerReading {
   source: OdometerSource
 }
 
+/**
+ * Un logro conseguido (users/{uid}/achievements/{id del logro}). Es permanente: no se borra aunque
+ * después se editen o borren los registros que lo dieron.
+ */
+export interface AchievementRecord {
+  id: string
+  /** Auto con el que se consiguió (null si ya no se sabe). */
+  carId: string | null
+  unlockedAt: Date
+  /** Cuándo el usuario vio o descartó la celebración; null = celebración pendiente. */
+  celebratedAt: Date | null
+}
+
 export interface UserSettings {
   reminder: { enabled: boolean; weekday: number }
   timezone: string

@@ -1,123 +1,78 @@
-# AutoCar
-
-App personal para llevar el mantenimiento de tus autos: vencimientos por km o por fecha (lo que ocurra primero), recordatorios de una sola vez ("volver al taller en 3 semanas"), recordatorio semanal para cargar los km, trabajos con su costo, cargas de combustible (nafta, nafta + GNC o gasoil; súper o premium) y resumen de gastos.
-
-<p>
-  <img src="docs/screenshots/inicio.jpg" alt="Inicio: km actual del auto, próximo mantenimiento y actividad reciente" width="240">
-  <img src="docs/screenshots/auto.jpg" alt="Pantalla del auto: estado de los mantenimientos" width="240">
-  <img src="docs/screenshots/gastos.jpg" alt="Gastos: totales del año y gasto por mes" width="240">
+<p align="center">
+  <img src="public/brand/logo.webp" alt="AutoCar" width="200">
 </p>
 
-**Stack:** Next.js 16 (App Router) · Tailwind 4 · Firebase Auth (Google) + Firestore · Cloudinary (fotos) · Web Push (VAPID) · Vercel Cron.
+# AutoCar
 
-## Desarrollo
+Llevá el mantenimiento de tus autos al día, sin sorpresas.
 
-```bash
-npm install
-npm run dev        # http://localhost:3000
-npm test           # tests de la lógica (vencimientos, combustible, gastos, avisos)
-npm run build
-```
+AutoCar es una app web para el celular (se instala como app) que te avisa cuándo le toca algo al auto, guarda todo lo que le hacés y te muestra cuánto gastás. Pensada para usarla sin vueltas: entrás con tu cuenta de Google, cargás el auto y listo.
 
-Las variables van en `.env.local` (ver `.env.local.example`).
+<p>
+  <img src="docs/screenshots/inicio.jpg" alt="Inicio: km actual del auto, próximo mantenimiento y tarjeta de logros" width="200">
+  <img src="docs/screenshots/auto.jpg" alt="Pantalla del auto: kilometraje y estado de los mantenimientos" width="200">
+  <img src="docs/screenshots/gastos.jpg" alt="Gastos: totales del año y gasto por mes" width="200">
+  <img src="docs/screenshots/logros.jpg" alt="Logros: progreso general y medallas conseguidas" width="200">
+</p>
 
-GitHub Actions (`.github/workflows/ci.yml`) corre `typecheck` y `npm test` en cada PR y en cada push a `main`. Vercel publica igual aunque fallen: el aviso está en el PR o en el commit.
+## Qué podés hacer
 
-`npm run build` usa **webpack** a propósito (`next build --webpack`); `npm run dev` sigue con Turbopack. El build de producción con Turbopack carga `firebase-admin` con un alias con hash (`firebase-admin-<hash>`) que es un symlink absoluto a la máquina del build: en Vercel no existe y **todas las API routes (y el cron) responden 500 vacío**. Para comprobarlo localmente: build con `output: 'standalone'` y correr `.next/standalone/server.js` sin el `node_modules` del proyecto.
+### Mantenimientos con aviso
 
-`package.json` fuerza `jose` 5 para `jwks-rsa` (`overrides`). `firebase-admin` usa `jwks-rsa`, y `jwks-rsa` hace `require('jose')`. `jose` 6 es sólo ESM, y el runtime de funciones de Vercel no acepta `require()` de ESM, aunque use Node 24. Sin el override, todas las API routes fallan con `ERR_REQUIRE_ESM` y responden 500 vacío. `jwks-rsa` sólo usa `importJWK` y `exportSPKI`, que funcionan igual en `jose` 5, y `jose` 5 todavía trae una versión CommonJS.
+- Cargá cada mantenimiento por km, por tiempo o por los dos: vence **lo que ocurra primero** (service cada 5.000 km o una vez por año, VTV, seguro, correa de distribución…).
+- Recordatorios de una sola vez, como "volver al taller en 3 semanas".
+- Cada mantenimiento muestra si está **al día, próximo o vencido**, cuánto falta y, según cuánto usás el auto, más o menos qué día vas a llegar a los km.
 
-## Puesta en marcha
+### Kilometraje
 
-### 1. Firebase
+- Cargá los km que marca el tablero. La app calcula cuántos km hacés por semana y con eso estima los vencimientos.
+- Un recordatorio semanal (el día que elijas) te pide los km.
+- Gráfico de cómo fueron subiendo los km.
 
-1. Crear un proyecto en <https://console.firebase.google.com> (Analytics no hace falta).
-2. **Authentication → Comenzar → Google** → habilitar.
-3. **Firestore Database → Crear base de datos** → ubicación `southamerica-east1` → modo producción.
-4. **Cuentas**: no hay que crear nada. La app está abierta a cualquier cuenta de Google con mail verificado: la primera vez que alguien entra, el servidor lo registra en la colección `allowlist` (`allowlist/{mail}`), que es lo que piden las reglas.
-5. **Firestore → Reglas**: pegar el contenido de [`firestore.rules`](firestore.rules) y publicar.
-6. **Configuración del proyecto → General → Tus apps → Web (`</>`)**: registrar la app y copiar los valores de `firebaseConfig` a las variables `NEXT_PUBLIC_FIREBASE_*`.
-7. **Configuración del proyecto → Cuentas de servicio → Generar nueva clave privada**: del JSON, copiar `project_id`, `client_email` y `private_key` a `FIREBASE_ADMIN_*` (la clave entre comillas dobles, con los `\n`). Después borrá el JSON: con las variables alcanza.
+### Trabajos e historial
 
-### 2. Cloudinary
+- Registrá lo que le hacés al auto: fecha, km, categoría, costo, taller y notas.
+- Marcá qué mantenimientos cumple un trabajo y se reinician solos.
+- **Exportá el historial en PDF** para mostrarlo, por ejemplo, al vender el auto. Podés elegir el período y si se ven los costos.
 
-Completar `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` y `CLOUDINARY_API_SECRET` (Dashboard de Cloudinary). El secret sólo lo usa el servidor para firmar las subidas; las fotos quedan en la carpeta `autocar/<uid>`.
+### Combustible
 
-Fotos (`lib/photo-limits.ts`): se aceptan archivos de hasta 25 MB y el navegador los achica a JPG de 1600 px (quedan en unos cientos de KB) antes de subirlos. La firma del servidor además limita los formatos (JPG/PNG/WebP) y achica al guardar, por si alguien saltea el navegador. Cada cuenta puede subir hasta 10 fotos por día (contador en `usage/{uid}`, que sólo toca el servidor). El plan gratis de Cloudinary no acepta imágenes de más de 10 MB.
+- Autos a nafta, nafta + GNC o gasoil; súper o premium.
+- Cargá el precio por litro (o m³) o el total pagado: el resto lo calcula la app.
+- Consumo (km por litro, de tanque lleno a tanque lleno), costo por km y el último precio que pagaste de cada combustible.
 
-### 3. Web Push
+### Gastos
 
-Las claves VAPID se generan con:
+- Total del año, promedio mensual y gasto de cada mes, separado en trabajos y combustible.
+- Gasto por categoría y por auto.
 
-```bash
-npx web-push generate-vapid-keys
-```
+### Logros
 
-`NEXT_PUBLIC_VAPID_PUBLIC_KEY` = pública, `VAPID_PRIVATE_KEY` = privada. En iPhone las notificaciones funcionan sólo con la app agregada a la pantalla de inicio (iOS 16.4+).
+<p>
+  <img src="docs/screenshots/logros-progreso.jpg" alt="Logros de mantenimiento: algunos conseguidos y otros con su barra de progreso" width="200" align="right">
+</p>
 
-### 4. Deploy en Vercel
+- 23 medallas que premian la constancia: cargar los km todas las semanas, registrar los trabajos y las cargas, tener los avisos al día.
+- Cada logro muestra cuánto falta ("7 de 10 trabajos") y la fecha en que lo conseguiste.
+- Una celebración cuando desbloqueás uno (o un resumen si son muchos).
+- Premian **anotar**, no gastar más ni usar más el auto. Una vez conseguidos, no se pierden.
 
-1. Subir el repo a GitHub e importarlo en Vercel.
-2. Cargar todas las variables de `.env.local` en *Settings → Environment Variables* (incluido `CRON_SECRET`).
-3. En Firebase **Authentication → Configuración → Dominios autorizados**, agregar el dominio de Vercel.
-4. Opcional (recomendado para iPhone): poner `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` = dominio de Vercel y agregar `https://<dominio>/__/auth/handler` como URI de redirección autorizada del cliente OAuth en Google Cloud Console. La app ya redirige `/__/auth/*` a Firebase.
-5. El cron (`vercel.json`) corre todos los días a las 12:00 UTC (9:00 en Argentina) y:
-   - el día elegido en Ajustes, pide los km de cada auto;
-   - avisa de los mantenimientos que entran en "Próximo" o "Vencido" (y repite cada 7 días si siguen así).
+<br clear="right">
 
-Para probarlo a mano:
+### Y además
 
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" https://<dominio>/api/cron/daily
-```
+- **Varios autos** por cuenta, cada uno con su foto.
+- **Notificaciones** en el celular cuando un mantenimiento está por vencer o se venció (en iPhone, con la app agregada a la pantalla de inicio).
+- **Funciona sin señal**: lo que cargás en la estación de servicio se guarda y se sincroniza cuando vuelve la conexión.
+- **Antes de guardar o borrar, la app te pide que confirmes**, y casi todo lo que borrás se puede deshacer.
+- Tus datos son tuyos: cada cuenta sólo puede ver y cambiar lo suyo.
 
-## Marca
+## Hecho con
 
-- `assets/brand/autocar-logo.png` es el logo original (fuente, no se sirve).
-- `npm run brand` regenera desde ese archivo el logo con fondo transparente (`public/brand/*.webp`), los íconos de la PWA (`public/icon-*.png`) y `app/apple-icon.png`.
-- `app/favicon.ico` es el favicon provisto por diseño.
-- Colores: azul del logo `#1A9CFB` como acento (`primary`); verde/amarillo/rojo quedan reservados para los estados (`success`, `warning`, `destructive`). Todo está en tokens en `app/globals.css`.
+Next.js · Tailwind CSS · Firebase (login con Google y base de datos) · Cloudinary (fotos) · Web Push · Vercel.
 
-## Historial en PDF
+Para correrlo, configurarlo o publicarlo, mirá [INSTRUCTIONS.md](INSTRUCTIONS.md).
 
-En la pestaña **Trabajos** de cada auto, **Exportar PDF** arma un informe para mostrar (por ejemplo, al vender el auto): los trabajos con fecha, km, taller y observaciones, y el estado de los mantenimientos periódicos (última vez, próximo, al día/vencido). Se elige el período y si se muestran los costos (por defecto no).
+## Licencia
 
-- Se genera en el navegador con `@react-pdf/renderer` (`components/report/`), que se descarga recién al exportar. Los datos salen de `lib/report.ts` (con tests).
-- Usa Helvetica, que alcanza para el castellano; `pdfText()` saca lo que no puede dibujar (emojis). El logo va en PNG (`public/brand/*.png`, lo genera `npm run brand`).
-- En el celular, **Compartir** abre el menú del sistema (WhatsApp, mail…); si el navegador no puede, queda **Descargar**.
-- react-pdf: no poner `lineHeight` en la página ni en textos sueltos (el pie con `fixed` deja de dibujarse o aparecen huecos).
-
-## Seguridad
-
-- **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.
-- **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Si pasa, las salidas son App Check (reCAPTCHA) o cerrar el acceso.
-- **Datos**: cada cuenta sólo lee y escribe `users/{su uid}`. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
-- **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.
-- **Push**: el servidor sólo manda a servicios de push conocidos (FCM, Mozilla, Windows, Apple), con timeout para que un servicio colgado no frene el cron.
-- **Secretos**: `.env.local` y el JSON de la service account no se suben (`.gitignore`). El repo es público: nunca pegues claves en el código ni en el README.
-- Recomendado, desde las consolas: restringir la API key de Firebase a tus dominios (Google Cloud → Credenciales → la "Browser key" → Restricciones de aplicaciones → Sitios web): el de Vercel, `localhost:3000` y `<proyecto>.firebaseapp.com` (lo usa el login con Google).
-
-## UI: avisos y diálogos
-
-- **Toasts** (`lib/toast.ts`): `toast.success|error|warning|info(title, { description, action, id })`. Se pueden usar desde cualquier lado; los dibuja `<Toaster />` (Base UI). Los errores se anuncian con prioridad a lectores de pantalla.
-- **Confirmaciones** (`useConfirm()` en `components/confirm-provider.tsx`): toda acción importante (guardar un auto, un mantenimiento, un trabajo, una carga o los km; activar notificaciones; cambiar el día del recordatorio; salir) muestra un resumen y pide "Sí, …" antes de hacerla. Los borrados usan el tono de peligro, con el foco en "Cancelar".
-- **Borrar**: además de confirmar, lo que se puede recuperar (trabajos, cargas, mantenimientos, registros de km) ofrece **Deshacer** en el toast (`removeWithUndo`). Borrar un auto no se puede deshacer.
-- **Errores de formularios**: junto al botón, con `<FormError>` (`role="alert"`); los de la foto, debajo de la foto.
-- **Diálogos** (`components/ui/dialog.tsx`, `alert-dialog.tsx`) y menús (`dropdown-menu.tsx`) usan Base UI: foco atrapado y devuelto, Escape, bloqueo de scroll y ARIA.
-- Sin conexión, los guardados muestran "se sincroniza cuando vuelva la señal" y un aviso global indica cuando se corta o vuelve la red.
-
-## Modelo de datos (Firestore)
-
-Todo cuelga de `users/{uid}`; las colecciones hijas tienen `carId` para consultar entre autos.
-
-| Colección | Qué guarda |
-|---|---|
-| `users/{uid}` | ajustes: `reminder { enabled, weekday }`, `timezone` |
-| `cars` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto |
-| `rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, última vez (km/fecha), márgenes de aviso |
-| `jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple |
-| `fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
-| `odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |
-| `pushSubscriptions` | dispositivos suscriptos a notificaciones |
-
-Fuera de `users`, y sólo accesibles desde el servidor: `allowlist/{mail}` (cuentas registradas, se completa sola) y `usage/{uid}` (fotos subidas en el día).
+[MIT](LICENSE). Si querés participar, leé el [código de conducta](CODE_OF_CONDUCT.md).
