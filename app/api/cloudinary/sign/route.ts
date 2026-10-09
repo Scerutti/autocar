@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { adminDb, authorize } from '@/lib/firebase/admin'
 import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
 import { todayInTimeZone } from '@/lib/dates'
@@ -21,6 +22,8 @@ async function takePhotoQuota(uid: string) {
  * Devuelve una firma para que el navegador suba la foto directo a Cloudinary sin exponer el secret.
  * Lo firmado no se puede cambiar desde el navegador: la carpeta del usuario, los formatos permitidos y
  * un achique al guardar (por si alguien saltea el que hace el navegador). La firma vence a la hora.
+ * También va firmado un public_id único y overwrite=false: cada firma sirve para una sola foto (si se
+ * reusa, Cloudinary devuelve la misma imagen en vez de crear otra), así el límite diario no se saltea.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
@@ -38,8 +41,11 @@ export async function POST(request: Request) {
     return Response.json({ error: 'No se pudo preparar la subida de la foto' }, { status: 500 })
   }
 
+  // El public_id final queda folder/public_id, o sea autocar/{uid}/{uuid}: el borrado depende de ese prefijo.
   const params = {
     folder: userFolder(uid),
+    public_id: randomUUID(),
+    overwrite: 'false',
     allowed_formats: PHOTO_UPLOAD_FORMATS,
     transformation: `c_limit,w_${PHOTO_MAX_SIDE},h_${PHOTO_MAX_SIDE}`,
     timestamp: Math.floor(Date.now() / 1000),

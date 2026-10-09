@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isPushEndpoint, planDailyNotifications, ruleTag, updatesToPersist } from './notifications'
+import {
+  isPushEndpoint,
+  KM_TAG,
+  MAX_MESSAGES_PER_RUN,
+  MORE_TAG,
+  planDailyNotifications,
+  ruleTag,
+  updatesToPersist,
+} from './notifications'
 import type { Car, MaintenanceRule, UserSettings } from './types'
 
 const car: Car = {
@@ -80,6 +88,86 @@ describe('planDailyNotifications', () => {
     const { messages, ruleUpdates } = planDailyNotifications({ settings, cars: [car], rules: [done], today: '2026-09-21', now })
     expect(messages).toHaveLength(0)
     expect(ruleUpdates).toEqual([{ ruleId: 'r1', lastNotifiedStatus: null, notified: false }])
+  })
+})
+
+describe('planDailyNotifications con muchos avisos', () => {
+  // Con el auto en 14600 km: "soon" faltan 400 km, "overdue" se pasó por 400 km.
+  const soon = (id: string) => ({ ...rule, id })
+  const overdue = (id: string) => ({ ...rule, id, lastDoneKm: 9000 })
+  const many = (n: number, make: (id: string) => MaintenanceRule, prefix: string) =>
+    Array.from({ length: n }, (_, i) => make(`${prefix}${i}`))
+
+  it('no pasa del tope y resume el resto en un aviso que abre el inicio', () => {
+    const rules = many(10, soon, 's')
+    const { messages, ruleUpdates } = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-21', now })
+    expect(messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+    const more = messages[messages.length - 1]
+    expect(more).toMatchObject({ url: '/', tag: MORE_TAG })
+    expect(more.body).toContain(`Y ${10 - (MAX_MESSAGES_PER_RUN - 1)} avisos más`)
+    // Sólo se marcan como avisados los que se mandaron.
+    expect(ruleUpdates.map(u => ruleTag(u.ruleId))).toEqual(messages.slice(0, -1).map(m => m.tag))
+  })
+
+  it('si entran justo, no agrega el resumen', () => {
+    const rules = many(MAX_MESSAGES_PER_RUN, soon, 's')
+    const { messages, ruleUpdates } = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-21', now })
+    expect(messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+    expect(messages.map(m => m.tag)).not.toContain(MORE_TAG)
+    expect(ruleUpdates).toHaveLength(MAX_MESSAGES_PER_RUN)
+  })
+
+  it('manda primero los vencidos, después los por vencer, y el pedido de km no se recorta', () => {
+    // 2026-09-20 es el día del recordatorio de km.
+    const rules = [...many(MAX_MESSAGES_PER_RUN, soon, 's'), ...many(2, overdue, 'o')]
+    const { messages } = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-20', now })
+    expect(messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+    expect(messages.slice(0, 2).every(m => m.title.startsWith('Vencido'))).toBe(true)
+    expect(messages.slice(2, -2).every(m => m.title.startsWith('Se acerca'))).toBe(true)
+    expect(messages.map(m => m.tag).slice(-2)).toEqual(['km-c1', MORE_TAG])
+  })
+
+  describe('con varios autos el día del recordatorio', () => {
+    const cars = Array.from({ length: 7 }, (_, i) => ({ ...car, id: `c${i + 1}` }))
+
+    it('si entran, pide los km de cada auto por separado', () => {
+      const { messages } = planDailyNotifications({ settings, cars: cars.slice(0, 2), rules: many(2, soon, 's'), today: '2026-09-20', now })
+      expect(messages.map(m => m.tag)).toEqual([ruleTag('s0'), ruleTag('s1'), 'km-c1', 'km-c2'])
+    })
+
+    it('si no entran, los pide todos juntos en un solo aviso', () => {
+      const { messages } = planDailyNotifications({ settings, cars, rules: [], today: '2026-09-20', now })
+      expect(messages).toEqual([expect.objectContaining({ url: '/', tag: KM_TAG })])
+      expect(messages[0].body).toContain('7 autos')
+    })
+
+    it('el pedido de km tiene lugar aunque haya muchos avisos', () => {
+      // 3 autos y 5 avisos: no entran los 8, pero los 5 avisos sí con el pedido de km juntado.
+      const few = planDailyNotifications({ settings, cars: cars.slice(0, 3), rules: many(5, soon, 's'), today: '2026-09-20', now })
+      expect(few.messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+      expect(few.messages.map(m => m.tag)).toContain(KM_TAG)
+      expect(few.messages.map(m => m.tag)).not.toContain(MORE_TAG)
+      expect(few.ruleUpdates).toHaveLength(5)
+
+      const lots = planDailyNotifications({ settings, cars, rules: many(10, soon, 's'), today: '2026-09-20', now })
+      expect(lots.messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+      expect(lots.messages.map(m => m.tag).slice(-2)).toEqual([KM_TAG, MORE_TAG])
+      expect(lots.messages[lots.messages.length - 1].body).toContain(`Y ${10 - (MAX_MESSAGES_PER_RUN - 2)} avisos más`)
+      expect(lots.ruleUpdates).toHaveLength(MAX_MESSAGES_PER_RUN - 2)
+    })
+  })
+
+  it('los que no salieron hoy salen en la próxima corrida', () => {
+    const rules = many(10, soon, 's')
+    const first = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-21', now })
+    // Llegó todo lo que se mandó: se guarda como avisado.
+    const saved = new Map(updatesToPersist(first.ruleUpdates, new Set(first.messages.map(m => m.tag))).map(u => [u.ruleId, u]))
+    const after = rules.map(r => (saved.has(r.id) ? { ...r, lastNotifiedAt: now, lastNotifiedStatus: 'soon' as const } : r))
+    const next = planDailyNotifications({ settings, cars: [car], rules: after, today: '2026-09-22', now: new Date('2026-09-21T12:00:00Z') })
+    const firstTags = first.messages.map(m => m.tag).filter(t => t !== MORE_TAG)
+    const nextTags = next.messages.map(m => m.tag).filter(t => t !== MORE_TAG)
+    expect(nextTags.length).toBeGreaterThan(0)
+    expect(nextTags.some(t => firstTags.includes(t))).toBe(false)
   })
 })
 

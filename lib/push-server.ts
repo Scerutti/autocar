@@ -18,7 +18,13 @@ function configure() {
 const SEND_TIMEOUT_MS = 10_000
 
 /**
- * Envía los mensajes a todos los dispositivos del usuario y borra las suscripciones vencidas.
+ * Tope de dispositivos por usuario: se usan las suscripciones más recientes y el resto se ignora, así
+ * alguien con cientos de suscripciones no alarga el cron de todos. Alcanza para celular, compu y alguno más.
+ */
+const MAX_DEVICES_PER_USER = 5
+
+/**
+ * Envía los mensajes a los dispositivos del usuario y borra las suscripciones vencidas.
  * `delivered` tiene los tags de los mensajes que llegaron al menos a un dispositivo.
  */
 export async function sendToUser(uid: string, messages: PushPayload[]) {
@@ -26,7 +32,7 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
   if (!messages.length) return { sent: 0, devices: 0, delivered }
   configure()
   const subsRef = adminDb().collection('users').doc(uid).collection('pushSubscriptions')
-  const subs = await subsRef.get()
+  const subs = await subsRef.orderBy('createdAt', 'desc').limit(MAX_DEVICES_PER_USER).get()
   let sent = 0
   await Promise.all(
     subs.docs.map(async d => {
@@ -35,21 +41,28 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
         console.warn('Suscripción push ignorada: no es de un servicio de push conocido', d.id)
         return
       }
-      for (const msg of messages) {
-        try {
-          await webpush.sendNotification({ endpoint, keys }, JSON.stringify(msg), { TTL: 60 * 60 * 24, timeout: SEND_TIMEOUT_MS })
-          sent++
-          delivered.add(msg.tag)
-        } catch (e) {
-          const status = (e as { statusCode?: number }).statusCode
-          // 404/410: el navegador dio de baja la suscripción.
-          if (status === 404 || status === 410) {
-            await d.ref.delete()
-            return
+      // En paralelo: con los mensajes topeados, un dispositivo tarda a lo sumo un timeout y no uno por mensaje.
+      let gone = false
+      await Promise.all(
+        messages.map(async msg => {
+          try {
+            await webpush.sendNotification({ endpoint, keys }, JSON.stringify(msg), { TTL: 60 * 60 * 24, timeout: SEND_TIMEOUT_MS })
+            sent++
+            delivered.add(msg.tag)
+          } catch (e) {
+            const status = (e as { statusCode?: number }).statusCode
+            // 404/410: el navegador dio de baja la suscripción.
+            if (status === 404 || status === 410) {
+              if (!gone) {
+                gone = true
+                await d.ref.delete()
+              }
+              return
+            }
+            console.error('Error enviando push', status, (e as Error).message)
           }
-          console.error('Error enviando push', status, (e as Error).message)
-        }
-      }
+        }),
+      )
     }),
   )
   return { sent, devices: subs.size, delivered }
