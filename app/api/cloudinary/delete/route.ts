@@ -21,8 +21,22 @@ export async function POST(request: Request) {
     api_key: config.apiKey,
     signature: signParams(params, config.apiSecret),
   })
-  const res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/image/destroy`, { method: 'POST', body })
+  let res: Response
+  try {
+    res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/image/destroy`, {
+      method: 'POST',
+      body,
+      signal: AbortSignal.timeout(10_000),
+    })
+  } catch (e) {
+    // Sin señal, DNS caído o más de 10 s sin respuesta.
+    console.error('Borrado en Cloudinary', publicId, e)
+    return Response.json({ error: 'No se pudo contactar a Cloudinary' }, { status: 502 })
+  }
   const json = (await res.json().catch(() => ({}))) as { result?: string }
-  if (!res.ok) return Response.json({ error: 'Cloudinary rechazó el borrado' }, { status: 502 })
+  if (!res.ok) {
+    console.error('Cloudinary rechazó el borrado', publicId, res.status, json)
+    return Response.json({ error: 'Cloudinary rechazó el borrado' }, { status: 502 })
+  }
   return Response.json({ result: json.result })
 }
