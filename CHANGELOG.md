@@ -2,6 +2,27 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.0.3
+
+Arreglos de la auditoría de código: datos que se podían perder o quedar mal, y una app más robusta ante errores. Para el usuario la app funciona igual, salvo el botón "Reintentar".
+
+### Arreglos
+
+- **Km del auto**: el km sale de la lectura más alta. Una carga sin señal o dos dispositivos a la vez ya no lo dejan más bajo de lo real. No se puede borrar el único registro de km de un auto.
+- **Trabajos**: si un mantenimiento marcado se borró en otro dispositivo, el trabajo se guarda igual. Antes se perdía entero.
+- **Foto del auto**: la foto anterior se borra recién cuando se confirma el cambio. Si el cambio no se guarda, se borra la foto nueva y no queda una foto rota.
+- **Avisos diarios**: si se borra un mantenimiento mientras salen los avisos, los demás se registran igual y no se repiten al día siguiente.
+- **Error al cargar los datos**: la pantalla de error tiene un botón "Reintentar" y un mensaje claro, en lugar del error técnico.
+- **Fotos**: un error de red al borrar una foto queda registrado. Una subida que falla por la señal se puede reintentar sin gastar el cupo de 10 fotos por día.
+
+### Seguridad
+
+- **App Check** (reCAPTCHA Enterprise): el código queda listo para que Firestore solo acepte pedidos que vienen de la app. Se activa con `NEXT_PUBLIC_RECAPTCHA_SITE_KEY`; sin esa variable no cambia nada. Los pasos para activarlo están en [INSTRUCTIONS.md](INSTRUCTIONS.md#5-app-check).
+
+### Mantenimiento
+
+- Se eliminaron los comentarios inline que no son documentación. Lo que explicaban pasó a la documentación de cada función.
+
 ## 1.0.2
 
 Actualización de dependencias. Para el usuario la app funciona igual.
