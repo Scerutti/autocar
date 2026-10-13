@@ -55,7 +55,8 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
             if (status === 404 || status === 410) {
               if (!gone) {
                 gone = true
-                await d.ref.delete()
+                // Si falla el borrado se sigue: perder `delivered` haría repetir los avisos mañana.
+                await d.ref.delete().catch(e => console.warn('No se pudo borrar la suscripción vencida', d.id, e))
               }
               return
             }

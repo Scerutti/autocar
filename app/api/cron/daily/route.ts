@@ -102,14 +102,21 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
   const { sent, delivered } = await sendToUser(userDoc.id, messages)
   const updates = updatesToPersist(ruleUpdates, delivered)
   if (updates.length) {
-    const batch = db.batch()
+    // Escrituras independientes (no un batch): si se borró un mantenimiento, los demás se guardan igual.
+    const writer = db.bulkWriter()
+    // 5 = NOT_FOUND: el mantenimiento se borró mientras corría el cron; no hay nada que guardar.
+    writer.onWriteError(err => err.code !== 5 && err.failedAttempts < 3)
     for (const u of updates) {
-      batch.update(userDoc.ref.collection('rules').doc(u.ruleId), {
-        lastNotifiedStatus: u.lastNotifiedStatus,
-        lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
-      })
+      writer
+        .update(userDoc.ref.collection('rules').doc(u.ruleId), {
+          lastNotifiedStatus: u.lastNotifiedStatus,
+          lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
+        })
+        .catch(e => {
+          if (e.code !== 5) console.error('Cron: no se guardó el aviso', userDoc.id, u.ruleId, e)
+        })
     }
-    await batch.commit()
+    await writer.close()
   }
   return { uid: userDoc.id, messages: messages.length, sent }
 }
