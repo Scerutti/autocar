@@ -41,7 +41,7 @@ const rule: MaintenanceRule = {
   lastNotifiedStatus: null,
 }
 
-// 2026-09-20 es domingo
+/** 2026-09-20 es domingo. */
 const settings: UserSettings = { reminder: { enabled: true, weekday: 0 }, timezone: 'America/Argentina/Buenos_Aires' }
 const now = new Date('2026-09-20T12:00:00Z')
 
@@ -92,7 +92,6 @@ describe('planDailyNotifications', () => {
 })
 
 describe('planDailyNotifications con muchos avisos', () => {
-  // Con el auto en 14600 km: "soon" faltan 400 km, "overdue" se pasó por 400 km.
   const soon = (id: string) => ({ ...rule, id })
   const overdue = (id: string) => ({ ...rule, id, lastDoneKm: 9000 })
   const many = (n: number, make: (id: string) => MaintenanceRule, prefix: string) =>
@@ -105,7 +104,6 @@ describe('planDailyNotifications con muchos avisos', () => {
     const more = messages[messages.length - 1]
     expect(more).toMatchObject({ url: '/', tag: MORE_TAG })
     expect(more.body).toContain(`Y ${10 - (MAX_MESSAGES_PER_RUN - 1)} avisos más`)
-    // Sólo se marcan como avisados los que se mandaron.
     expect(ruleUpdates.map(u => ruleTag(u.ruleId))).toEqual(messages.slice(0, -1).map(m => m.tag))
   })
 
@@ -118,7 +116,6 @@ describe('planDailyNotifications con muchos avisos', () => {
   })
 
   it('manda primero los vencidos, después los por vencer, y el pedido de km no se recorta', () => {
-    // 2026-09-20 es el día del recordatorio de km.
     const rules = [...many(MAX_MESSAGES_PER_RUN, soon, 's'), ...many(2, overdue, 'o')]
     const { messages } = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-20', now })
     expect(messages).toHaveLength(MAX_MESSAGES_PER_RUN)
@@ -142,7 +139,6 @@ describe('planDailyNotifications con muchos avisos', () => {
     })
 
     it('el pedido de km tiene lugar aunque haya muchos avisos', () => {
-      // 3 autos y 5 avisos: no entran los 8, pero los 5 avisos sí con el pedido de km juntado.
       const few = planDailyNotifications({ settings, cars: cars.slice(0, 3), rules: many(5, soon, 's'), today: '2026-09-20', now })
       expect(few.messages).toHaveLength(MAX_MESSAGES_PER_RUN)
       expect(few.messages.map(m => m.tag)).toContain(KM_TAG)
@@ -160,7 +156,6 @@ describe('planDailyNotifications con muchos avisos', () => {
   it('los que no salieron hoy salen en la próxima corrida', () => {
     const rules = many(10, soon, 's')
     const first = planDailyNotifications({ settings, cars: [car], rules, today: '2026-09-21', now })
-    // Llegó todo lo que se mandó: se guarda como avisado.
     const saved = new Map(updatesToPersist(first.ruleUpdates, new Set(first.messages.map(m => m.tag))).map(u => [u.ruleId, u]))
     const after = rules.map(r => (saved.has(r.id) ? { ...r, lastNotifiedAt: now, lastNotifiedStatus: 'soon' as const } : r))
     const next = planDailyNotifications({ settings, cars: [car], rules: after, today: '2026-09-22', now: new Date('2026-09-21T12:00:00Z') })
@@ -196,7 +191,6 @@ describe('updatesToPersist', () => {
     { ruleId: 'c', lastNotifiedStatus: null, notified: false },
   ]
   it('sólo marca como avisados los mantenimientos cuyo aviso llegó', () => {
-    // Llegó el recordatorio de km y el aviso de "a", pero el de "b" falló: "b" se reintenta mañana.
     const delivered = new Set(['km-c1', ruleTag('a')])
     expect(updatesToPersist(updates, delivered).map(u => u.ruleId)).toEqual(['a', 'c'])
   })

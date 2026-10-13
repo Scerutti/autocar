@@ -2,6 +2,10 @@ import { authorize } from '@/lib/firebase/admin'
 import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
 import { isOwnPublicId } from '@/lib/photo-limits'
 
+/**
+ * Borra una foto del usuario en Cloudinary. Sólo acepta imágenes de su carpeta, y sin caracteres que
+ * puedan escaparse de ella. Si no se puede contactar a Cloudinary (sin señal, DNS caído o más de 10 s) responde 502.
+ */
 export async function POST(request: Request) {
   const auth = await authorize(request)
   if (auth instanceof Response) return auth
@@ -10,7 +14,6 @@ export async function POST(request: Request) {
   if (!config) return Response.json({ error: 'Cloudinary no está configurado' }, { status: 500 })
 
   const { publicId } = (await request.json().catch(() => ({}))) as { publicId?: unknown }
-  // Sólo imágenes de su carpeta, y sin caracteres que puedan escaparse de ella.
   if (!isOwnPublicId(publicId, userFolder(uid))) {
     return Response.json({ error: 'Imagen inválida' }, { status: 400 })
   }
@@ -29,7 +32,6 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(10_000),
     })
   } catch (e) {
-    // Sin señal, DNS caído o más de 10 s sin respuesta.
     console.error('Borrado en Cloudinary', publicId, e)
     return Response.json({ error: 'No se pudo contactar a Cloudinary' }, { status: 502 })
   }

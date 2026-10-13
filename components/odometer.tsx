@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react'
 import { cn } from '@/lib/utils'
 
-// Dos vueltas de dígitos: cada tambor gira una vuelta completa antes de frenar en su número.
+/** Dos vueltas de dígitos: cada tambor gira una vuelta completa antes de frenar en su número. */
 const STRIP = Array.from({ length: 20 }, (_, i) => i % 10)
 
 /**
@@ -55,7 +55,6 @@ export function Odometer({
                   </span>
                 ))}
               </span>
-              {/* Curvatura del tambor */}
               <span aria-hidden className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60" />
               <span aria-hidden className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-black/40" />
             </span>

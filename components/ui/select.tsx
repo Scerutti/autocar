@@ -4,9 +4,10 @@ import { Select as SelectPrimitive } from '@base-ui/react/select'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// Desplegable propio (Base UI) en vez del <select> nativo: en Windows el nativo abre una lista
-// blanca con texto gris claro, ilegible con el tema oscuro.
-
+/**
+ * Desplegable propio (Base UI) en vez del <select> nativo: en Windows el nativo abre una lista
+ * blanca con texto gris claro, ilegible con el tema oscuro.
+ */
 export function Select<T extends string | number>({
   value,
   onChange,

@@ -1,4 +1,4 @@
-// Service worker de AutoCar: recibe los push y abre la app en la pantalla correspondiente.
+/** Service worker de AutoCar: recibe los push y abre la app en la pantalla correspondiente. */
 
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()))

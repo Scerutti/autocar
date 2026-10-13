@@ -2,12 +2,6 @@ import { addDays, addMonths, daysBetween, toISODate, weekdayOf } from './dates'
 import { computeCostPerKm, computeFuelStats } from './fuel'
 import type { AchievementRecord, Car, FuelLoad, ISODate, Job, MaintenanceRule, OdometerReading } from './types'
 
-// Logros: catálogo central y reglas para saber si se cumplen. No depende de React ni de Firestore.
-//
-// Alcance: los logros son de la cuenta, pero cada condición se evalúa auto por auto, sin mezclar
-// datos de autos distintos (3 trabajos en un auto + 2 en otro no son "5 trabajos"). Se guarda con
-// qué auto se consiguió cada uno.
-
 export type AchievementCategory = 'inicio' | 'constancia' | 'mantenimiento' | 'combustible' | 'gastos' | 'historial'
 
 export const ACHIEVEMENT_CATEGORIES: { id: AchievementCategory; label: string; description: string }[] = [
@@ -49,8 +43,6 @@ export interface AchievementDef {
   progress: (r: CarRecords, today: ISODate) => Progress
 }
 
-// ---- Validación: sólo cuentan registros completos y con fecha real (no futura).
-
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const validDate = (date: unknown, today: ISODate): date is ISODate =>
   typeof date === 'string' && ISO_DATE.test(date) && date <= today
@@ -60,7 +52,10 @@ const isValidFuel = (f: FuelLoad, today: ISODate) => validDate(f.date, today) &&
 const isValidReading = (r: OdometerReading, today: ISODate) =>
   Number.isFinite(r.km) && r.km >= 0 && r.date.getTime() > 0 && toISODate(r.date) <= today
 
-/** Separa los datos de cada auto, descartando los registros que no cuentan para los logros. */
+/**
+ * Separa los datos de cada auto, descartando los registros que no cuentan para los logros: sólo cuentan
+ * los completos y con fecha real (no futura).
+ */
 export function carRecords(
   data: { cars: Car[]; rules: MaintenanceRule[]; jobs: Job[]; fuel: FuelLoad[]; odometer: OdometerReading[] },
   today: ISODate,
@@ -73,14 +68,6 @@ export function carRecords(
     readings: data.odometer.filter(r => r.carId === car.id && isValidReading(r, today)),
   }))
 }
-
-// ---- Semanas y rachas
-//
-// Una semana va de lunes a domingo (fecha local). Cuenta si tiene al menos un registro de km (a mano,
-// desde una carga o un trabajo, o el del alta del auto); varios registros en la misma semana cuentan
-// una sola vez. Una racha son semanas seguidas con registro: si una semana queda sin registro, la racha
-// vuelve a empezar (los logros ya conseguidos no se pierden). La semana en curso no corta la racha
-// mientras no termine.
 
 /** Lunes de la semana de una fecha. */
 export function weekStart(date: ISODate): ISODate {
@@ -95,6 +82,13 @@ export interface WeekStats {
   current: number
 }
 
+/**
+ * Semanas con registro y rachas. Una semana va de lunes a domingo (fecha local). Cuenta si tiene al menos
+ * un registro de km (a mano, desde una carga o un trabajo, o el del alta del auto); varios registros en la
+ * misma semana cuentan una sola vez. Una racha son semanas seguidas con registro: si una semana queda sin
+ * registro, la racha vuelve a empezar (los logros ya conseguidos no se pierden). La semana en curso no
+ * corta la racha mientras no termine.
+ */
 export function weeklyStats(dates: ISODate[], today: ISODate): WeekStats {
   const weeks = [...new Set(dates.map(weekStart))].sort()
   let best = 0
@@ -109,8 +103,6 @@ export function weeklyStats(dates: ISODate[], today: ISODate): WeekStats {
 }
 
 const readingWeeks = (r: CarRecords, today: ISODate) => weeklyStats(r.readings.map(x => toISODate(x.date)), today)
-
-// ---- Reglas reutilizables
 
 const count = (n: number, target: number): Progress => ({ current: Math.min(n, target), target })
 
@@ -165,17 +157,15 @@ function hasConsumption(r: CarRecords) {
   return computeCostPerKm(r.fuel) != null
 }
 
-// ---- Catálogo
-//
-// Para agregar un logro: sumarlo acá (id estable: es el id del documento en Firestore) y darle un
-// ícono en components/achievements/medal.tsx. No cambiar el id de uno existente.
-
 const JOBS: [string, string] = ['trabajo', 'trabajos']
 const LOADS: [string, string] = ['carga', 'cargas']
 const WEEKS: [string, string] = ['semana', 'semanas']
 
+/**
+ * Catálogo de logros. Para agregar uno: sumarlo acá (id estable: es el id del documento en Firestore) y
+ * darle un ícono en components/achievements/medal.tsx. No cambiar el id de uno existente.
+ */
 export const ACHIEVEMENTS: AchievementDef[] = [
-  // Primeros pasos
   {
     id: 'arrancamos',
     name: 'Arrancamos',
@@ -210,7 +200,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     },
   },
 
-  // Constancia
   {
     id: 'un-mes-sobre-ruedas',
     name: 'Un mes sobre ruedas',
@@ -246,7 +235,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     progress: (r, today) => count(readingWeeks(r, today).weeks, 52),
   },
 
-  // Mantenimiento
   {
     id: 'corazon-sano',
     name: 'Corazón sano',
@@ -295,7 +283,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     progress: r => count(r.rules.length, 3),
   },
 
-  // Combustible
   {
     id: 'tanque-bajo-control',
     name: 'Tanque bajo control',
@@ -328,7 +315,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     }),
   },
 
-  // Gastos
   {
     id: 'ni-un-peso-perdido',
     name: 'Ni un peso perdido',
@@ -346,7 +332,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
     progress: r => count(new Set(expenses(r).map(d => d.slice(0, 7))).size, 3),
   },
 
-  // Historial
   {
     id: 'memoria-de-elefante',
     name: 'Memoria de elefante',
@@ -410,8 +395,6 @@ export const ACHIEVEMENTS: AchievementDef[] = [
 
 export const ACHIEVEMENT_BY_ID = new Map(ACHIEVEMENTS.map(a => [a.id, a]))
 
-// ---- Estado de cada logro
-
 export type AchievementState = 'unlocked' | 'in-progress' | 'locked'
 
 export interface AchievementStatus {
@@ -429,6 +412,11 @@ export interface AchievementStatus {
 
 const ratio = (p: Progress) => (p.target > 0 ? p.current / p.target : 0)
 
+/**
+ * Estado de cada logro. Los logros son de la cuenta, pero cada condición se evalúa auto por auto, sin
+ * mezclar datos de autos distintos (3 trabajos en un auto + 2 en otro no son "5 trabajos"); se guarda con
+ * qué auto se consiguió cada uno.
+ */
 export function evaluateAchievements(cars: CarRecords[], records: AchievementRecord[], today: ISODate): AchievementStatus[] {
   const recordById = new Map(records.map(r => [r.id, r]))
   return ACHIEVEMENTS.map(def => {
@@ -478,8 +466,6 @@ export function describeProgress(def: AchievementDef, p: Progress): string {
   if (def.unit && p.target > 1) return `${p.current} de ${p.target} ${def.unit[1]}`
   return p.hint ?? 'Pendiente'
 }
-
-// ---- Celebraciones
 
 /**
  * Celebraciones pendientes, en el orden en que se desbloquearon (y, si fueron juntos, en el orden

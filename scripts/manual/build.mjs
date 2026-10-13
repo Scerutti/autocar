@@ -1,6 +1,9 @@
-// Genera el PDF del manual de usuario con @react-pdf/renderer (la misma librería del informe de la app).
-// Uso: npm run manual → docs/manual-de-usuario.pdf. El texto está en content.mjs y las capturas en img/.
-// Dos pasadas: la primera anota en qué página cae cada título; la segunda arma el índice y el encabezado.
+/**
+ * Genera el PDF del manual de usuario con @react-pdf/renderer (la misma librería del informe de la app).
+ * Uso: npm run manual → docs/manual-de-usuario.pdf. El texto está en content.mjs y las capturas en img/.
+ * Dos pasadas: la primera anota en qué página cae cada título; la segunda arma el índice y el encabezado.
+ * Sin cortes de palabra (registerHyphenationCallback): las reglas de guionado por defecto son del inglés.
+ */
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -12,13 +15,12 @@ import { CHAPTERS, META } from './content.mjs'
 const h = React.createElement
 const DIR = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(DIR, '..', '..')
-// Las capturas están en img/; el logo sale de public/brand (lo genera npm run brand).
+/** Las capturas están en img/; el logo sale de public/brand (lo genera npm run brand). */
 const IMG_PATH = f => (f.endsWith('.png') ? path.join(ROOT, 'public', 'brand', f) : path.join(DIR, 'img', f))
-// Con rutas de Windows ("C:\…") react-pdf intenta un fetch: se le pasa el contenido.
+/** Con rutas de Windows ("C:\…") react-pdf intenta un fetch: se le pasa el contenido. */
 const IMG = f => ({ data: fs.readFileSync(IMG_PATH(f)), format: f.endsWith('.png') ? 'png' : 'jpg' })
 const OUT = path.join(ROOT, 'docs', 'manual-de-usuario.pdf')
 
-// Sin cortes de palabra: las reglas de guionado por defecto son del inglés.
 Font.registerHyphenationCallback(word => [word])
 
 const C = {
@@ -36,7 +38,6 @@ const M = { top: 70, bottom: 66, side: 58 }
 
 const s = StyleSheet.create({
   page: { paddingTop: M.top, paddingBottom: M.bottom, paddingHorizontal: M.side, fontFamily: 'Helvetica', fontSize: 10.5, color: C.body },
-  // Tapa
   cover: { fontFamily: 'Helvetica', color: C.ink },
   coverBand: { backgroundColor: C.navy, height: 330, alignItems: 'center', justifyContent: 'center' },
   coverMark: { width: 120, height: 120 },
@@ -50,13 +51,11 @@ const s = StyleSheet.create({
   coverLabel: { width: 170, fontSize: 10, color: C.muted },
   coverValue: { fontSize: 10, fontFamily: 'Helvetica-Bold', color: C.ink },
   coverFoot: { position: 'absolute', left: 64, right: 64, bottom: 44, fontSize: 8.5, color: C.muted },
-  // Encabezado y pie
   header: { position: 'absolute', top: 30, left: M.side, right: M.side, flexDirection: 'row', justifyContent: 'space-between', paddingBottom: 7, borderBottomWidth: 0.75, borderBottomColor: C.line },
   headerText: { fontSize: 8.5, color: C.muted },
   headerBrand: { fontSize: 8.5, color: C.ink, fontFamily: 'Helvetica-Bold' },
   footer: { position: 'absolute', bottom: 28, left: M.side, right: M.side, flexDirection: 'row', justifyContent: 'space-between', paddingTop: 7, borderTopWidth: 0.75, borderTopColor: C.line },
   footerText: { fontSize: 8.5, color: C.muted },
-  // Índice
   tocTitle: { fontSize: 24, fontFamily: 'Helvetica-Bold', color: C.ink, marginBottom: 18 },
   tocRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 9 },
   tocSubRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 4, paddingLeft: 22 },
@@ -67,7 +66,6 @@ const s = StyleSheet.create({
   tocLeader: { flexGrow: 1, marginHorizontal: 6, marginBottom: 3, borderBottomWidth: 1, borderBottomColor: C.line, borderBottomStyle: 'dotted' },
   tocPage: { fontSize: 10, color: C.ink, width: 18, textAlign: 'right' },
   historyTitle: { fontSize: 9, fontFamily: 'Helvetica-Bold', color: C.muted, letterSpacing: 1.2, textTransform: 'uppercase', marginTop: 34, marginBottom: 6 },
-  // Capítulos
   chapterKicker: { fontSize: 9.5, fontFamily: 'Helvetica-Bold', color: C.blueDark, letterSpacing: 2, textTransform: 'uppercase' },
   chapterTitle: { fontSize: 24, fontFamily: 'Helvetica-Bold', color: C.ink, marginTop: 6 },
   chapterRule: { height: 2, backgroundColor: C.blue, width: 48, marginTop: 12, marginBottom: 18 },
@@ -97,20 +95,21 @@ const s = StyleSheet.create({
   qa: { marginBottom: 12 },
 })
 
-// "Tocar **Agregar**" → texto con negritas.
+/** "Tocar **Agregar**" → texto con negritas. */
 function rich(text) {
   return text.split(/(\*\*[^*]+\*\*)/).filter(Boolean).map((part, i) =>
     part.startsWith('**') ? h(Text, { key: i, style: s.bold }, part.slice(2, -2)) : part,
   )
 }
 
-const IMAGE_SIZES = {} // ancho/alto en px de cada captura (se leen del JPG)
+/** Ancho/alto en px de cada captura (se leen del JPG). */
+const IMAGE_SIZES = {}
+/** Llena IMAGE_SIZES; en los JPG busca el marcador SOF0/SOF2. */
 async function readSizes() {
   for (const f of [...fs.readdirSync(path.join(DIR, 'img')), 'mark.png', 'wordmark.png']) {
     const b = fs.readFileSync(IMG_PATH(f))
     if (f.endsWith('.png')) IMAGE_SIZES[f] = [b.readUInt32BE(16), b.readUInt32BE(20)]
     else {
-      // Busca el marcador SOF0/SOF2 del JPG.
       let i = 2
       while (i < b.length) {
         const marker = b[i + 1]
@@ -130,6 +129,7 @@ function img(file, width) {
   return h(Image, { src: IMG(file), style: [s.img, { width, height: (width * hgt) / w }] })
 }
 
+/** El subtítulo nunca queda solo al pie de una página: va junto con el bloque que le sigue. */
 function renderBlocks(chapter, ctx) {
   let sub = 0
   const out = []
@@ -141,7 +141,6 @@ function renderBlocks(chapter, ctx) {
       const id = `${chapter.id}.${sub}`
       const label = `${chapter.n}.${sub}  ${b.h}`
       const title = h(Text, { style: s.h2, render: ({ pageNumber }) => (ctx.record(id, pageNumber), label) })
-      // El subtítulo nunca queda solo al pie de una página: va junto con el bloque que le sigue.
       const next = blocks[i + 1] && !blocks[i + 1].h ? renderBlock(blocks[++i], i, ctx) : null
       out.push(h(View, { key: i, wrap: false }, title, next))
       continue
@@ -151,12 +150,12 @@ function renderBlocks(chapter, ctx) {
   return out
 }
 
+/** Los pasos van juntos en la misma página; las viñetas pueden cortarse. */
 function renderBlock(b, i, ctx) {
   {
     if (b.p) return h(Text, { key: i, style: s.p }, rich(b.p))
     if (b.steps || b.bullets) {
       const items = b.steps ?? b.bullets
-      // Los pasos van juntos en la misma página; las viñetas pueden cortarse.
       return h(View, { key: i, style: s.list, wrap: !b.steps }, items.map((t, j) =>
         h(View, { key: j, style: s.item, wrap: false },
           b.steps ? h(Text, { style: s.stepNum }, `${j + 1}.`) : h(Text, { style: s.bullet }, '•'),
@@ -283,8 +282,10 @@ function ManualDoc({ pages, record }) {
 CHAPTERS.forEach((ch, i) => (ch.n = i + 1))
 await readSizes()
 
-// render se llama varias veces mientras se arma el layout: vale la última llamada. Se repite hasta que
-// el índice no cambie (agregar números de página al índice podría mover algún título).
+/**
+ * render se llama varias veces mientras se arma el layout: vale la última llamada. Se repite hasta que
+ * el índice no cambie (agregar números de página al índice podría mover algún título).
+ */
 let pages = {}
 for (let pass = 1; ; pass++) {
   const found = {}

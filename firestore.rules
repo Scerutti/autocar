@@ -16,13 +16,11 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid && isAllowed();
     }
 
-    // ---- Validación de lo que se guarda
-    // La app está abierta a cualquier cuenta de Google: sólo se aceptan los campos que la app escribe
-    // (más los viejos que todavía se leen) y los textos tienen tope, así nadie usa su espacio como disco.
-    // Se valida el documento completo después de escribir: un update parcial también tiene que dejarlo
-    // bien, incluidos los campos que agrega el cron (lastNotifiedAt/lastNotifiedStatus).
+    // Validación de lo que se guarda. La app está abierta a cualquier cuenta de Google: sólo se aceptan los
+    // campos que la app escribe (más los viejos que todavía se leen) y los textos tienen tope, así nadie usa su
+    // espacio como disco. Se valida el documento completo después de escribir: un update parcial también tiene
+    // que dejarlo bien, incluidos los campos que agrega el cron (lastNotifiedAt/lastNotifiedStatus).
     // Todos los campos pueden faltar o ser null (documentos viejos); si están, tienen que ser del tipo.
-
     function optText(d, f, max) {
       return d.get(f, null) == null || (d[f] is string && d[f].size() <= max);
     }
@@ -127,8 +125,7 @@ service cloud.firestore {
         && optText(d, 'carId', 100) && optTime(d, 'unlockedAt') && optTime(d, 'celebratedAt');
     }
 
-    // ---- Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
-
+    // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
     match /users/{uid} {
       allow read, delete: if isOwner(uid);
       allow create, update: if isOwner(uid) && validSettings(request.resource.data);

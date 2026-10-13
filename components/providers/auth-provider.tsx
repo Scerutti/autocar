@@ -14,6 +14,7 @@ import { firebaseAuth, isFirebaseConfigured } from '@/lib/firebase/client'
 interface AuthState {
   user: User | null
   loading: boolean
+  /** Google con popup; donde no hay popups (algunas PWA instaladas en iOS) pasa a redirect. */
   signIn: () => Promise<void>
   signOut: () => Promise<void>
   /** ID token para llamar a las API routes. */
@@ -41,7 +42,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await signInWithPopup(firebaseAuth(), provider)
     } catch (e) {
       const code = (e as { code?: string }).code
-      // En algunas PWA instaladas (iOS) los popups no están permitidos.
       if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
         await signInWithRedirect(firebaseAuth(), provider)
         return

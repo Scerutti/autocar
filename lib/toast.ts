@@ -27,15 +27,17 @@ const DEFAULT_TIMEOUT: Record<ToastType, number> = {
   loading: 0,
 }
 
+/**
+ * Muestra un toast. Los errores se anuncian de inmediato a los lectores de pantalla; el resto, sin
+ * interrumpir. Con acción dura más, para alcanzar a tocarla.
+ */
 function show(type: ToastType, title: ReactNode, { action, description, timeout, id }: ToastOptions = {}) {
   const toastId: string = toastManager.add({
     id,
     type,
     title,
     description,
-    // Los errores se anuncian de inmediato a los lectores de pantalla; el resto, sin interrumpir.
     priority: type === 'error' ? 'high' : 'low',
-    // Con acción damos más tiempo para alcanzar a tocarla.
     timeout: timeout ?? (action ? Math.max(8000, DEFAULT_TIMEOUT[type]) : DEFAULT_TIMEOUT[type]),
     actionProps: action
       ? {

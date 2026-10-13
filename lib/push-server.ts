@@ -25,7 +25,10 @@ const MAX_DEVICES_PER_USER = 5
 
 /**
  * Envía los mensajes a los dispositivos del usuario y borra las suscripciones vencidas.
- * `delivered` tiene los tags de los mensajes que llegaron al menos a un dispositivo.
+ * `delivered` tiene los tags de los mensajes que llegaron al menos a un dispositivo. Los mensajes a cada
+ * dispositivo van en paralelo: con los mensajes topeados, un dispositivo tarda a lo sumo un timeout y no
+ * uno por mensaje. Un 404/410 indica que el navegador dio de baja la suscripción y se borra; si falla el
+ * borrado se sigue, porque perder `delivered` haría repetir los avisos mañana.
  */
 export async function sendToUser(uid: string, messages: PushPayload[]) {
   const delivered = new Set<string>()
@@ -41,7 +44,6 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
         console.warn('Suscripción push ignorada: no es de un servicio de push conocido', d.id)
         return
       }
-      // En paralelo: con los mensajes topeados, un dispositivo tarda a lo sumo un timeout y no uno por mensaje.
       let gone = false
       await Promise.all(
         messages.map(async msg => {
@@ -51,11 +53,9 @@ export async function sendToUser(uid: string, messages: PushPayload[]) {
             delivered.add(msg.tag)
           } catch (e) {
             const status = (e as { statusCode?: number }).statusCode
-            // 404/410: el navegador dio de baja la suscripción.
             if (status === 404 || status === 410) {
               if (!gone) {
                 gone = true
-                // Si falla el borrado se sigue: perder `delivered` haría repetir los avisos mañana.
                 await d.ref.delete().catch(e => console.warn('No se pudo borrar la suscripción vencida', d.id, e))
               }
               return

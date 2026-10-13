@@ -92,7 +92,6 @@ describe('buildServiceReport', () => {
     expect(r.rules).toHaveLength(1)
     expect(r.rules[0].next).toMatch(/^A los 200\.000 km o el /)
     expect(r.rules[0]).toMatchObject({ lastDate: '10 de ene de 2026', lastKm: '190.000 km' })
-    // Faltan 2.000 km y avisa a los 500: todavía está al día.
     expect(r.rules[0].statusLabel).toBe('Al día')
   })
 })

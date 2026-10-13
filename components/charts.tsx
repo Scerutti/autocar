@@ -55,7 +55,10 @@ export function Legend({ items }: { items: { label: string; color: string }[] })
   )
 }
 
-/** Barras apiladas por mes: trabajos (abajo) + combustible (arriba). */
+/**
+ * Barras apiladas por mes: trabajos (abajo) + combustible (arriba). El detalle del mes activo (hover / tap)
+ * va en texto, así no depende del color.
+ */
 export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; currentMonth: number | null }) {
   const [active, setActive] = useState<number | null>(null)
   const { top, step } = niceMax(Math.max(...months.map(m => m.total)))
@@ -65,7 +68,6 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
   return (
     <div>
       <div className="relative flex h-52 gap-2 pl-11">
-        {/* Grilla y eje Y */}
         <div className="pointer-events-none absolute inset-y-0 left-0 right-0">
           {ticks.map(t => (
             <div key={t} className="absolute left-0 right-0 flex items-center" style={{ bottom: `${(t / top) * 100}%` }}>
@@ -113,7 +115,6 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
           </span>
         ))}
       </div>
-      {/* Detalle del mes activo (hover / tap), en texto: no depende del color */}
       <div className="mt-4 flex min-h-12 flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-background/30 px-4 py-3 text-sm">
         {shown != null ? (
           <>
@@ -160,7 +161,10 @@ export function CategoryBars({ rows }: { rows: { label: string; value: number }[
   )
 }
 
-/** Línea del odómetro en el tiempo, con cruz y tooltip al pasar el dedo/mouse. */
+/**
+ * Línea del odómetro en el tiempo, con cruz y tooltip al pasar el dedo/mouse. Muestra el km más alto
+ * arriba y el más bajo abajo, para leer el gráfico sin adivinar la escala.
+ */
 export function KmChart({ readings }: { readings: { km: number; date: Date }[] }) {
   const points = useMemo(() => [...readings].sort((a, b) => a.date.getTime() - b.date.getTime()), [readings])
   const [hover, setHover] = useState<number | null>(null)
@@ -193,7 +197,6 @@ export function KmChart({ readings }: { readings: { km: number; date: Date }[] }
   const h = hover != null ? points[hover] : null
   return (
     <div>
-      {/* Escala: km más alto arriba y más bajo abajo, para leer el gráfico sin adivinar */}
       <div className="mb-1 text-[11px] tabular-nums text-muted-foreground">{formatKm(k1)}</div>
       <div className="relative">
         <svg

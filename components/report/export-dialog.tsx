@@ -25,7 +25,8 @@ type Step = { kind: 'options' } | { kind: 'generating' } | { kind: 'ready'; file
 /**
  * Exportar el historial de trabajos en PDF (p. ej. para mostrarlo al vender el auto).
  * En dos pasos: primero las opciones y se genera; después Compartir/Descargar con un toque nuevo,
- * porque el navegador sólo deja compartir justo después de que el usuario toca algo.
+ * porque el navegador sólo deja compartir justo después de que el usuario toca algo. La librería de PDF
+ * se descarga recién al generar, así no pesa en el resto de la app. Cerrar el menú de compartir no es un error.
  */
 export function ExportReportDialog({ car, open, onClose }: { car: Car; open: boolean; onClose: () => void }) {
   const { today } = useData()
@@ -58,7 +59,6 @@ export function ExportReportDialog({ car, open, onClose }: { car: Car; open: boo
     setError(null)
     setStep({ kind: 'generating' })
     try {
-      // La librería de PDF se descarga recién acá: no pesa en el resto de la app.
       const [{ pdf }, { ServiceReportPdf }] = await Promise.all([import('@react-pdf/renderer'), import('./service-report-pdf')])
       const report = buildServiceReport({ car, jobs, rules, options: { showCosts, period, from }, today })
       const blob = await pdf(<ServiceReportPdf report={report} origin={window.location.origin} />).toBlob()
@@ -75,7 +75,6 @@ export function ExportReportDialog({ car, open, onClose }: { car: Car; open: boo
     try {
       await navigator.share({ files: [file], title: `Historial de ${carName(car)}` })
     } catch (err) {
-      // Cerrar el menú de compartir no es un error.
       if ((err as Error).name !== 'AbortError') toast.error('No se pudo compartir', { description: 'Probá con Descargar.' })
     }
   }

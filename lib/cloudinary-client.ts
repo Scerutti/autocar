@@ -9,10 +9,10 @@ const mb = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('es-AR', {
 
 /**
  * Revisa la foto y la achica en el navegador antes de subirla: las del celular pesan 3-10 MB y quedan
- * en unos cientos de KB (JPG de hasta 1600 px). Si no sirve, tira PhotoError con el motivo.
+ * en unos cientos de KB (JPG de hasta 1600 px). Si no sirve, tira PhotoError con el motivo. Algunas
+ * fotos (p. ej. HEIC en Windows) llegan sin tipo: en ese caso decide si se puede abrir.
  */
 export async function preparePhoto(file: File): Promise<Blob> {
-  // Algunas fotos (p. ej. HEIC en Windows) llegan sin tipo: en ese caso decide si se puede abrir.
   if (file.type && !file.type.startsWith('image/')) throw new PhotoError('El archivo tiene que ser una foto.')
   if (file.size > PHOTO_MAX_INPUT_MB * 1024 * 1024) {
     throw new PhotoError(`La foto pesa ${mb(file.size)} y el máximo es ${PHOTO_MAX_INPUT_MB} MB. Probá con otra.`)
