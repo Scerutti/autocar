@@ -25,6 +25,18 @@ export function computeAvgKmPerDay(readings: { km: number; date: Date }[], now =
   return avg > 0 ? Math.round(avg * 10) / 10 : null
 }
 
+/**
+ * La lectura que define el km actual del auto: la de más km. Si hay empate, la más reciente.
+ * null si no tiene lecturas.
+ */
+export function topReading<T extends { km: number; date: Date }>(readings: readonly T[]): T | null {
+  let top: T | null = null
+  for (const r of readings) {
+    if (!top || r.km > top.km || (r.km === top.km && r.date.getTime() > top.date.getTime())) top = r
+  }
+  return top
+}
+
 export type KmValidation = { ok: true; warning?: string } | { ok: false; error: string }
 
 export function validateKmReading(newKm: number, currentKm: number): KmValidation {

@@ -18,7 +18,7 @@ import {
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
 import { defaultWarnings } from './maintenance'
-import { computeAvgKmPerDay } from './odometer'
+import { computeAvgKmPerDay, topReading } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import {
   DEFAULT_SETTINGS,
@@ -157,7 +157,8 @@ type Part = keyof UserData
 
 export function subscribeUserData(
   uid: string,
-  onChange: (patch: Partial<UserData>, loaded: Part) => void,
+  // fromCache: la foto sale de la caché local y puede no tener lo último del servidor.
+  onChange: (patch: Partial<UserData>, loaded: Part, fromCache: boolean) => void,
   onError: (e: Error) => void,
 ): Unsubscribe {
   const subs: Unsubscribe[] = []
@@ -178,13 +179,16 @@ export function subscribeUserData(
             },
           },
           'settings',
+          snap.metadata.fromCache,
         )
       },
       onError,
     ),
   )
   const listen = <T,>(name: CollectionName, part: Part, map: (d: QueryDocumentSnapshot<DocumentData>) => T) =>
-    subs.push(onSnapshot(col(uid, name), snap => onChange({ [part]: snap.docs.map(map) }, part), onError))
+    subs.push(
+      onSnapshot(col(uid, name), snap => onChange({ [part]: snap.docs.map(map) }, part, snap.metadata.fromCache), onError),
+    )
 
   listen('cars', 'cars', carFrom)
   listen('rules', 'rules', ruleFrom)
@@ -228,19 +232,33 @@ export async function recordKm(uid: string, car: Car, readings: OdometerReading[
   await batch.commit()
 }
 
-/** Km actual del auto a partir de sus lecturas: la más alta manda. */
-function carKmFrom(readings: OdometerReading[]) {
-  const latest = readings.reduce<OdometerReading | null>((best, r) => (!best || r.km > best.km ? r : best), null)
+/** Km actual del auto a partir de sus lecturas (de un solo auto): la más alta manda. */
+export function carKmFrom(readings: OdometerReading[]) {
+  const top = topReading(readings)
   return {
-    currentKm: latest?.km ?? 0,
-    kmUpdatedAt: latest ? Timestamp.fromDate(latest.date) : null,
+    currentKm: top?.km ?? 0,
+    kmUpdatedAt: top ? Timestamp.fromDate(top.date) : null,
     avgKmPerDay: computeAvgKmPerDay(readings),
   }
+}
+
+/**
+ * Corrige el km guardado en el auto con sus lecturas. Hace falta porque se escribe desde el cliente
+ * con lo que el dispositivo tenía en memoria (una carga offline o dos dispositivos cruzados pueden
+ * dejarlo viejo), y el cron lo lee de ahí para los vencimientos por km.
+ */
+export async function syncCarKm(uid: string, carId: string, readings: OdometerReading[]) {
+  const carReadings = readings.filter(r => r.carId === carId)
+  if (!carReadings.length) return
+  const batch = writeBatch(firestore())
+  batch.update(doc(col(uid, 'cars'), carId), carKmFrom(carReadings))
+  await batch.commit()
 }
 
 /** Borra una lectura (para corregir un error de tipeo) y recalcula el km actual con las que quedan. */
 export async function deleteReading(uid: string, car: Car, readings: OdometerReading[], readingId: string) {
   const remaining = readings.filter(r => r.carId === car.id && r.id !== readingId)
+  if (!remaining.length) throw new Error('No podés borrar el único registro de km del auto.')
   const batch = writeBatch(firestore())
   batch.delete(doc(col(uid, 'odometer'), readingId))
   batch.update(doc(col(uid, 'cars'), car.id), carKmFrom(remaining))
