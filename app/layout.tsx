@@ -4,7 +4,7 @@ import type { Metadata, Viewport } from 'next'
 import { Providers } from '@/components/providers/providers'
 import './globals.css'
 
-// Íconos: app/favicon.ico y app/apple-icon.png (convenciones de Next); los de la PWA van en app/manifest.ts.
+/** Íconos: app/favicon.ico y app/apple-icon.png (convenciones de Next); los de la PWA van en app/manifest.ts. */
 export const metadata: Metadata = {
   title: { default: 'AutoCar — Mantenimiento simple', template: '%s · AutoCar' },
   description: 'Llevá el mantenimiento de tus autos al día, sin sorpresas.',

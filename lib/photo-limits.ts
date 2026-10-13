@@ -1,6 +1,7 @@
-// Límites de las fotos, compartidos por el navegador (que achica antes de subir) y el servidor (que firma la subida).
-
-/** Lado más largo con el que se guarda una foto, en px. */
+/**
+ * Lado más largo con el que se guarda una foto, en px. Los límites de este módulo los comparten el
+ * navegador (que achica antes de subir) y el servidor (que firma la subida).
+ */
 export const PHOTO_MAX_SIDE = 1600
 
 /**
@@ -14,6 +15,9 @@ export const PHOTO_UPLOAD_FORMATS = 'jpg,png,webp'
 
 /** Fotos por día que puede subir cada cuenta: la app está abierta a cualquiera y esto acota abusos. */
 export const PHOTO_DAILY_LIMIT = 10
+
+/** Firmas por día: más que las fotos, para que una subida que falla por la señal no gaste el cupo. */
+export const PHOTO_DAILY_SIGNATURES = 15
 
 export interface PhotoUsage {
   day: string

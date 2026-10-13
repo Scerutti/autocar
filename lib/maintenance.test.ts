@@ -61,7 +61,6 @@ describe('getRuleState', () => {
   })
 
   it('estima la fecha por km con el uso promedio y avisa si llega dentro del margen de días', () => {
-    // faltan 1000 km a 50 km/día = 20 días -> dentro de los 30 días de aviso
     const s = getRuleState(service, { currentKm: 14000, avgKmPerDay: 50 }, '2026-03-01')
     expect(s.estimatedKmDate).toBe('2026-03-21')
     expect(s.daysUntilDue).toBe(20)

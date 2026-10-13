@@ -1,9 +1,13 @@
-// Fechas "de calendario" (sin hora) se guardan como 'YYYY-MM-DD'.
-// Instantes (cuándo se cargó algo) se manejan como Date y en Firestore como Timestamp.
+/**
+ * Fechas "de calendario" (sin hora) se guardan como 'YYYY-MM-DD'.
+ * Instantes (cuándo se cargó algo) se manejan como Date y en Firestore como Timestamp.
+ */
 export type ISODate = string
 
-// Un auto anda a nafta, a nafta + GNC o a gasoil (no hay autos sólo a GNC, y el equipo de GNC es para
-// motores nafteros). La nafta y el gasoil pueden ser súper o premium.
+/**
+ * Un auto anda a nafta, a nafta + GNC o a gasoil (no hay autos sólo a GNC, y el equipo de GNC es para
+ * motores nafteros). La nafta y el gasoil pueden ser súper o premium.
+ */
 export type FuelType = 'nafta' | 'gasoil' | 'gnc'
 export type FuelGrade = 'super' | 'premium'
 

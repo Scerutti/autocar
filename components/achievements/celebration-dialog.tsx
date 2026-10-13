@@ -11,7 +11,7 @@ import type { Car } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { Medal } from './medal'
 
-// Colores del confeti: azul de la marca, dorado de las medallas y tonos de las categorías.
+/** Colores del confeti: azul de la marca, dorado de las medallas y tonos de las categorías. */
 const CONFETTI = ['#1a9cfb', '#f5b829', '#fde68a', '#fb923c', '#a78bfa', '#22d3ee', '#f472b6']
 
 /** Destellos que salen de la medalla. Posiciones fijas (no al azar) para que se vea igual siempre. */
@@ -80,6 +80,8 @@ type View = { kind: 'item'; index: number; fromSummary: boolean } | { kind: 'sum
 /**
  * Celebración de logros nuevos. Uno: se muestra solo. De 2 a 4: de a uno, con "1 de 3", "Siguiente" y
  * "Saltar" (al resumen). Cinco o más: primero el resumen, y desde ahí se puede ver cada uno.
+ * El que se está viendo cuenta como visto (si se corta la app a mitad de la tanda, no se repite). Al
+ * cambiar de logro el foco vuelve al botón principal, porque el contenido se vuelve a montar.
  */
 export function CelebrationDialog({
   open,
@@ -103,14 +105,12 @@ export function CelebrationDialog({
   const [view, setView] = useState<View>(() => (mode === 'summary' ? { kind: 'summary' } : { kind: 'item', index: 0, fromSummary: false }))
   const primaryRef = useRef<HTMLButtonElement>(null)
 
-  // El que se está viendo cuenta como visto (si se corta la app a mitad de la tanda, no se repite).
   const current = view.kind === 'item' ? items[view.index] : null
   useEffect(() => {
     if (view.kind === 'summary') onSeen(items.map(s => s.def.id))
     else if (current) onSeen([current.def.id])
   }, [view]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Al cambiar de logro el foco sigue en el botón principal (el contenido se vuelve a montar).
   useEffect(() => {
     if (open) primaryRef.current?.focus()
   }, [view]) // eslint-disable-line react-hooks/exhaustive-deps

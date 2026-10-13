@@ -2,17 +2,26 @@ import { randomUUID } from 'node:crypto'
 import { adminDb, authorize } from '@/lib/firebase/admin'
 import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
 import { todayInTimeZone } from '@/lib/dates'
-import { nextPhotoUsage, PHOTO_DAILY_LIMIT, PHOTO_MAX_SIDE, PHOTO_UPLOAD_FORMATS } from '@/lib/photo-limits'
+import {
+  nextPhotoUsage,
+  PHOTO_DAILY_LIMIT,
+  PHOTO_DAILY_SIGNATURES,
+  PHOTO_MAX_SIDE,
+  PHOTO_UPLOAD_FORMATS,
+} from '@/lib/photo-limits'
 import { DEFAULT_SETTINGS } from '@/lib/types'
 
-/** Cuenta una foto más del día; false si la cuenta ya llegó al máximo. */
+/**
+ * Cuenta una firma más del día; false si la cuenta ya llegó al máximo. Se cuenta al firmar, antes de
+ * subir, así que el tope es más alto que las fotos: deja margen para reintentar si la subida falla.
+ * usage/{uid} está fuera de users/{uid}: las reglas no dejan que el usuario lo toque.
+ */
 async function takePhotoQuota(uid: string) {
-  // usage/{uid} está fuera de users/{uid}: las reglas no dejan que el usuario lo toque.
   const db = adminDb()
   const ref = db.collection('usage').doc(uid)
   const today = todayInTimeZone(DEFAULT_SETTINGS.timezone)
   return db.runTransaction(async tx => {
-    const next = nextPhotoUsage((await tx.get(ref)).data(), today)
+    const next = nextPhotoUsage((await tx.get(ref)).data(), today, PHOTO_DAILY_SIGNATURES)
     if (next) tx.set(ref, next, { merge: true })
     return next != null
   })
@@ -24,6 +33,7 @@ async function takePhotoQuota(uid: string) {
  * un achique al guardar (por si alguien saltea el que hace el navegador). La firma vence a la hora.
  * También va firmado un public_id único y overwrite=false: cada firma sirve para una sola foto (si se
  * reusa, Cloudinary devuelve la misma imagen en vez de crear otra), así el límite diario no se saltea.
+ * El public_id final queda folder/public_id, o sea autocar/{uid}/{uuid}: el borrado depende de ese prefijo.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
@@ -41,7 +51,6 @@ export async function POST(request: Request) {
     return Response.json({ error: 'No se pudo preparar la subida de la foto' }, { status: 500 })
   }
 
-  // El public_id final queda folder/public_id, o sea autocar/{uid}/{uuid}: el borrado depende de ese prefijo.
   const params = {
     folder: userFolder(uid),
     public_id: randomUUID(),

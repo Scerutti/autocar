@@ -36,10 +36,13 @@ function Road() {
   )
 }
 
+/**
+ * El logo carga lazy: React precarga todo <img> de un Server Component y esta página viaja en el árbol de
+ * todas las rutas; sin eso el logo se descargaría en cada página aunque no se vea.
+ */
 export default function NotFound() {
   return (
     <main className="relative flex min-h-dvh flex-col items-center overflow-hidden px-6 pb-40 pt-[max(3rem,env(safe-area-inset-top))] text-center">
-      {/* Grilla tipo mapa y brillo azul de fondo */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.07)_1px,transparent_1px)] bg-[size:26px_26px] [mask-image:radial-gradient(ellipse_at_center,black_20%,transparent_70%)]"
@@ -47,8 +50,6 @@ export default function NotFound() {
       <div aria-hidden className="pointer-events-none absolute -top-48 left-1/2 size-[42rem] -translate-x-1/2 rounded-full bg-primary/15 blur-3xl" />
 
       <Link href="/" aria-label="AutoCar, ir al inicio" className="relative rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        {/* lazy: React precarga todo <img> de un Server Component y esta página viaja en el árbol de
-            todas las rutas; sin esto el logo se descargaría en cada página aunque no se vea. */}
         <BrandLogo loading="lazy" className="w-32 sm:w-36" />
       </Link>
 

@@ -37,7 +37,8 @@ export interface FuelStats {
  * Estadísticas de un tipo de combustible.
  * El consumo sólo es confiable si el auto usa un solo combustible: con nafta + GNC los km
  * entre dos cargas de nafta incluyen los recorridos a GNC. Por eso `consumption` se calcula
- * sólo cuando `singleFuel` es true.
+ * sólo cuando `singleFuel` es true. Las cargas sin km también se gastaron en el tramo entre dos
+ * tanques llenos: se ubican por fecha entre los dos.
  */
 export function computeFuelStats(loads: FuelLoad[], fuelType: FuelType, singleFuel: boolean): FuelStats {
   const ofType = loads.filter(l => l.fuelType === fuelType)
@@ -60,7 +61,6 @@ export function computeFuelStats(loads: FuelLoad[], fuelType: FuelType, singleFu
       }
       pending += l.quantity
       if (l.fullTank) {
-        // Las cargas sin km también se gastaron en este tramo: se ubican por fecha entre los dos tanques llenos.
         pending += sumBetween(withoutKm, prevFull, l, x => x.quantity)
         distance += l.km! - prevFull.km!
         quantity += pending

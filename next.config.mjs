@@ -3,47 +3,59 @@ import { readFileSync } from 'node:fs'
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
 const isDev = process.env.NODE_ENV === 'development'
-// trim: un espacio o salto de línea colado en la variable de Vercel dejaría el header inválido.
+/** trim: un espacio o salto de línea colado en la variable de Vercel dejaría el header inválido. */
 const authDomain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN?.trim()
 const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim()
 
-// Donde Firebase abre el iframe oculto del login: el authDomain (puede ser el propio dominio, vía el rewrite
-// de /__/auth) y el <proyecto>.firebaseapp.com al que apunta ese rewrite. Sin variables, cualquier firebaseapp.com.
+/**
+ * Donde Firebase abre el iframe oculto del login: el authDomain (puede ser el propio dominio, vía el rewrite
+ * de /__/auth) y el <proyecto>.firebaseapp.com al que apunta ese rewrite. Sin variables, cualquier firebaseapp.com.
+ */
 const authFrames = [authDomain && `https://${authDomain}`, projectId && `https://${projectId}.firebaseapp.com`].filter(Boolean)
 
-// CSP sin nonce (las páginas son estáticas): por eso script-src lleva 'unsafe-inline' para la hidratación de Next.
+/**
+ * CSP sin nonce (las páginas son estáticas): por eso script-src lleva 'unsafe-inline' para la hidratación de Next.
+ * - script-src: 'wasm-unsafe-eval' porque yoga-layout (lo usa @react-pdf para el PDF) compila WebAssembly;
+ *   apis.google.com para gapi (login con Google de Firebase Auth); reCAPTCHA Enterprise de App Check (sólo se
+ *   carga con NEXT_PUBLIC_RECAPTCHA_SITE_KEY); 'unsafe-eval' sólo en desarrollo (trazas de error de React).
+ * - style-src 'unsafe-inline': los style={...} de React son estilos inline.
+ * - img-src: fotos de los autos (Cloudinary) y avatar de la cuenta de Google (googleusercontent).
+ * - connect-src: googleapis (Firestore con sus streams, identitytoolkit/securetoken del login, App Check),
+ *   reCAPTCHA, subida firmada de fotos a Cloudinary y, en desarrollo, ws/wss para el HMR de Next.
+ * - frame-src: el iframe del login de Firebase (authFrames) y el de reCAPTCHA Enterprise (App Check).
+ * - worker-src: el service worker de los push (/sw.js).
+ */
 const csp = [
   "default-src 'self'",
   [
     "script-src 'self' 'unsafe-inline'",
-    // yoga-layout (lo usa @react-pdf para armar el PDF) compila WebAssembly.
     "'wasm-unsafe-eval'",
-    // gapi: lo carga Firebase Auth para el login con Google.
     'https://apis.google.com',
-    // React usa eval en desarrollo para las trazas de error.
+    'https://www.google.com/recaptcha/',
+    'https://www.gstatic.com/recaptcha/',
     isDev && "'unsafe-eval'",
   ],
-  // Los style={...} de React son estilos inline.
   "style-src 'self' 'unsafe-inline'",
   [
     "img-src 'self' data: blob:",
-    // Fotos de los autos.
     'https://res.cloudinary.com',
-    // Avatar de la cuenta de Google.
     'https://*.googleusercontent.com',
   ],
   "font-src 'self' data:",
   [
     "connect-src 'self'",
-    // Firestore (incluidos los streams), identitytoolkit/securetoken del login y www.googleapis.com.
     'https://*.googleapis.com',
-    // Subida firmada de fotos.
+    'https://www.google.com/recaptcha/',
     'https://api.cloudinary.com',
-    // HMR de Next en desarrollo.
     isDev && 'ws: wss:',
   ],
-  ['frame-src', "'self'", ...(authFrames.length ? authFrames : ['https://*.firebaseapp.com'])],
-  // Service worker de los push (/sw.js).
+  [
+    'frame-src',
+    "'self'",
+    ...(authFrames.length ? authFrames : ['https://*.firebaseapp.com']),
+    'https://www.google.com/recaptcha/',
+    'https://recaptcha.google.com/recaptcha/',
+  ],
   "worker-src 'self'",
   "manifest-src 'self'",
   "object-src 'none'",
@@ -56,7 +68,7 @@ const csp = [
   .map(d => (Array.isArray(d) ? d.filter(Boolean).join(' ') : d))
   .join('; ')
 
-// Lo que la app no usa (las fotos se eligen con <input type=file>, no con la cámara). web-share queda permitido: lo usa el PDF.
+/** Lo que la app no usa (las fotos se eligen con <input type=file>, no con la cámara). web-share queda permitido: lo usa el PDF. */
 const permissionsPolicy = [
   'camera=()',
   'microphone=()',
@@ -73,14 +85,22 @@ const permissionsPolicy = [
   'browsing-topics=()',
 ].join(', ')
 
-/** @type {import('next').NextConfig} */
+/**
+ * - env: versión y commit del deploy, para el pie de Ajustes. VERCEL_GIT_COMMIT_SHA sólo existe en los builds de Vercel.
+ * - turbopack.root: hay un pnpm-lock.yaml suelto en la carpeta del usuario; se fija la raíz al proyecto.
+ * - rewrites: sirve el handler de login de Firebase (/__/auth) desde el mismo dominio de la app, así el login con
+ *   Google funciona en Safari/iOS (sin cookies de terceros) cuando NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN apunta al
+ *   dominio de la app en producción.
+ * - headers: la CSP general no se aplica a /__/auth (código de Google con sus propias necesidades); la entrada de
+ *   /sw.js va última para que su CSP pise la general.
+ *
+ * @type {import('next').NextConfig}
+ */
 const nextConfig = {
-  // Versión y commit del deploy, para el pie de Ajustes. VERCEL_GIT_COMMIT_SHA sólo existe en los builds de Vercel.
   env: {
     APP_VERSION: version,
     APP_COMMIT: (process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 7),
   },
-  // Hay un pnpm-lock.yaml suelto en la carpeta del usuario; fijamos la raíz al proyecto.
   turbopack: { root: import.meta.dirname },
   images: {
     unoptimized: true,
@@ -88,9 +108,6 @@ const nextConfig = {
   async rewrites() {
     const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
     if (!projectId) return []
-    // Sirve el handler de login de Firebase desde el mismo dominio de la app.
-    // Así el login con Google funciona en Safari/iOS (sin cookies de terceros) cuando
-    // NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN apunta al dominio de la app en producción.
     return [{ source: '/__/auth/:path*', destination: `https://${projectId}.firebaseapp.com/__/auth/:path*` }]
   },
   async headers() {
@@ -106,12 +123,10 @@ const nextConfig = {
         ],
       },
       {
-        // Todo menos el handler de login de Firebase (/__/auth, servido por el rewrite): es código de Google con sus propias necesidades.
         source: '/((?!__/auth/).*)',
         headers: [{ key: 'Content-Security-Policy', value: csp }],
       },
       {
-        // Va última para que su CSP pise la general.
         source: '/sw.js',
         headers: [
           { key: 'Content-Type', value: 'application/javascript; charset=utf-8' },

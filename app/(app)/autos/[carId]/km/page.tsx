@@ -5,7 +5,7 @@ import { NotFound, PageBody, PageHeader, carName } from '@/components/common'
 import { KmForm } from '@/components/km-form'
 import { useCar } from '@/components/providers/data-provider'
 
-// Pantalla a la que lleva el recordatorio semanal: un solo campo y listo.
+/** Pantalla a la que lleva el recordatorio semanal: un solo campo y listo. */
 export default function KmPage() {
   const { carId } = useParams<{ carId: string }>()
   const router = useRouter()

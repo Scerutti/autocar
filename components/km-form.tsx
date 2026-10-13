@@ -17,7 +17,8 @@ import { carName } from './common'
 /**
  * Carga de km en dos pasos: escribir y confirmar. La confirmación muestra el número grande y la
  * diferencia con el último registro, para frenar errores de tipeo (un cero de más o de menos).
- * Va dentro del mismo formulario (no un diálogo encima de otro).
+ * Va dentro del mismo formulario (no un diálogo encima de otro). Al guardar, el aviso muestra cuánto falta
+ * para el próximo mantenimiento.
  */
 export function KmForm({
   car,
@@ -65,7 +66,6 @@ export function KmForm({
       status = await settle(recordKm(uid, car, odometer, km))
     })
     if (!ok) return setStep('enter')
-    // Lo que importa al cargar km: cuánto falta para el próximo mantenimiento.
     const next = rulesWithState(rules.filter(r => r.carId === car.id), { ...car, currentKm: km }, today)[0]
     toastSaved(`${formatKm(km)} guardados`, status, next ? summarizeRule(next.rule.name, next.state) : carName(car))
     onDone()
@@ -149,10 +149,12 @@ export function KmForm({
   )
 }
 
-/** Diálogo para cargar km sin salir de la pantalla. `car = null` lo cierra. */
+/**
+ * Diálogo para cargar km sin salir de la pantalla. `car = null` lo cierra. Conserva el último auto mientras
+ * corre la animación de cierre.
+ */
 export function KmDialog({ car, onClose }: { car: Car | null; onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
-  // Conserva el último auto mientras corre la animación de cierre.
   const [shown, setShown] = useState(car)
   if (car && car !== shown) setShown(car)
 

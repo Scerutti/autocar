@@ -80,6 +80,11 @@ function shuffled<T>(items: T[]) {
 
 type UserReport = { uid: string; messages: number; sent: number; error?: string }
 
+/**
+ * Manda los avisos del día a un usuario y guarda cuáles se avisaron. Las escrituras son independientes (no un
+ * batch): si se borró un mantenimiento, los demás se guardan igual. El código 5 (NOT_FOUND) es un mantenimiento
+ * que se borró mientras corría el cron: no hay nada que guardar.
+ */
 async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<UserReport> {
   const db = adminDb()
   const x = userDoc.data()
@@ -102,19 +107,28 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
   const { sent, delivered } = await sendToUser(userDoc.id, messages)
   const updates = updatesToPersist(ruleUpdates, delivered)
   if (updates.length) {
-    const batch = db.batch()
+    const writer = db.bulkWriter()
+    writer.onWriteError(err => err.code !== 5 && err.failedAttempts < 3)
     for (const u of updates) {
-      batch.update(userDoc.ref.collection('rules').doc(u.ruleId), {
-        lastNotifiedStatus: u.lastNotifiedStatus,
-        lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
-      })
+      writer
+        .update(userDoc.ref.collection('rules').doc(u.ruleId), {
+          lastNotifiedStatus: u.lastNotifiedStatus,
+          lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
+        })
+        .catch(e => {
+          if (e.code !== 5) console.error('Cron: no se guardó el aviso', userDoc.id, u.ruleId, e)
+        })
     }
-    await batch.commit()
+    await writer.close()
   }
   return { uid: userDoc.id, messages: messages.length, sent }
 }
 
-// Vercel Cron la llama una vez por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET".
+/**
+ * Vercel Cron la llama una vez por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET".
+ * Cada worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de un usuario no corta a
+ * los demás.
+ */
 export async function GET(request: Request) {
   const startedAt = Date.now()
   if (!authorized(request.headers.get('authorization'))) {
@@ -125,7 +139,6 @@ export async function GET(request: Request) {
   const users = shuffled((await adminDb().collection('users').get()).docs)
   const report: UserReport[] = []
 
-  // Cada worker toma el próximo usuario hasta que no quedan o se acaba el tiempo.
   let next = 0
   const worker = async () => {
     while (next < users.length && Date.now() - startedAt < TIME_BUDGET_MS) {
@@ -133,7 +146,6 @@ export async function GET(request: Request) {
       try {
         report.push(await processUser(userDoc, now))
       } catch (e) {
-        // El error de un usuario no corta a los demás.
         console.error('Cron: error con usuario', userDoc.id, e)
         report.push({ uid: userDoc.id, messages: 0, sent: 0, error: (e as Error).message })
       }

@@ -6,9 +6,6 @@ import { RadioGroup } from '@base-ui/react/radio-group'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// Opciones a la vista en lugar de desplegables: más fáciles de entender y de tocar en el celular.
-// Base UI da el comportamiento de radio accesible: flechas para moverse, un solo tab stop, roles ARIA.
-
 export interface Choice<T extends string> {
   value: T
   label: ReactNode
@@ -17,6 +14,11 @@ export interface Choice<T extends string> {
   ariaLabel?: string
 }
 
+/**
+ * Props de Segmented y ChoiceChips: opciones a la vista en lugar de desplegables, más fáciles de entender y de
+ * tocar en el celular. Base UI da el comportamiento de radio accesible: flechas para moverse, un solo tab stop,
+ * roles ARIA.
+ */
 interface ChoiceGroupProps<T extends string> {
   value: T | null
   onChange: (value: T) => void

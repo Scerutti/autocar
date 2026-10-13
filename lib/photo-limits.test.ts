@@ -18,7 +18,6 @@ describe('isOwnPublicId', () => {
   const folder = 'autocar/uid123'
   it('acepta las fotos de la carpeta del usuario', () => {
     expect(isOwnPublicId('autocar/uid123/0b7c1e4a-2f3d-4c5b-9a8e-1d2c3b4a5f6e', folder)).toBe(true)
-    // ids viejos, al azar de Cloudinary
     expect(isOwnPublicId('autocar/uid123/x8kq2ymzv0abcdef', folder)).toBe(true)
   })
   it('rechaza otras carpetas', () => {

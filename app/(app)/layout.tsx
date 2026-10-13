@@ -18,7 +18,8 @@ const isPermissionDenied = (e: Error | null) => (e as { code?: string } | null)?
 /**
  * Primera vez que entra una cuenta: Firestore todavía no la conoce (no está en allowlist) y rechaza la
  * carga. Le pedimos al servidor que la registre y volvemos a cargar. Si falla otra vez no reintenta
- * solo, para no quedar en un bucle.
+ * solo, para no quedar en un bucle. El intento automático corre una sola vez (en desarrollo React corre
+ * los efectos dos veces).
  */
 function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
   const { getToken, signOut } = useAuth()
@@ -38,7 +39,6 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
   }
 
   useEffect(() => {
-    // Una sola vez (en desarrollo React corre los efectos dos veces).
     if (!auto || started.current) return
     started.current = true
     void join()
@@ -62,15 +62,27 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
   )
 }
 
+/**
+ * Muestra la app cuando cargan los datos. Si falla, el detalle técnico va a la consola y en pantalla un mensaje
+ * claro. Firestore cancela el listener que falló: reintentar vuelve a montar DataProvider.
+ */
 function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: () => void; children: React.ReactNode }) {
   const { loading, error } = useData()
+
+  useEffect(() => {
+    if (error && !isPermissionDenied(error)) console.error('Error cargando datos', error)
+  }, [error])
+
   if (isPermissionDenied(error)) return <Join auto={attempt === 0} onJoined={onRetry} />
   return (
     <AppShell>
       {error ? (
         <div className="mx-auto max-w-md p-8 text-center">
           <p className="font-medium">No se pudieron cargar tus datos</p>
-          <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+          <p className="mt-2 text-sm text-muted-foreground">Revisá la conexión y probá de nuevo.</p>
+          <Button onClick={onRetry} size="lg" className="mt-6 h-11 w-full">
+            Reintentar
+          </Button>
         </div>
       ) : loading ? (
         <Loading />
@@ -81,11 +93,11 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
   )
 }
 
+/** Los reintentos de carga se cuentan por cuenta: cambiar la key vuelve a montar DataProvider (y a pedir los datos). */
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
-  // Reintentos de carga por cuenta: cambiar la key vuelve a montar DataProvider (y a pedir los datos).
   const [retry, setRetry] = useState({ uid: '', attempt: 0 })
 
   useEffect(() => {

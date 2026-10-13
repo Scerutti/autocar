@@ -3,8 +3,7 @@
 import { Menu as MenuPrimitive } from '@base-ui/react/menu'
 import { cn } from '@/lib/utils'
 
-// Menú accesible: navegación con flechas, Escape y clic afuera para cerrar, foco devuelto al trigger.
-
+/** Menú accesible: navegación con flechas, Escape y clic afuera para cerrar, foco devuelto al trigger. */
 const DropdownMenu = MenuPrimitive.Root
 const DropdownMenuTrigger = MenuPrimitive.Trigger
 const DropdownMenuGroup = MenuPrimitive.Group

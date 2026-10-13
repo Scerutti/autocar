@@ -3,10 +3,11 @@
 import { AlertDialog as AlertDialogPrimitive } from '@base-ui/react/alert-dialog'
 import { cn } from '@/lib/utils'
 
-// Diálogo de confirmación (role="alertdialog"): no se cierra tocando afuera, hay que elegir.
-// Usar sólo para acciones importantes que no se pueden deshacer; para el resto conviene
-// hacer la acción y ofrecer "Deshacer" en un toast.
-
+/**
+ * Diálogo de confirmación (role="alertdialog"): no se cierra tocando afuera, hay que elegir.
+ * Usar sólo para acciones importantes que no se pueden deshacer; para el resto conviene
+ * hacer la acción y ofrecer "Deshacer" en un toast.
+ */
 const AlertDialog = AlertDialogPrimitive.Root
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 const AlertDialogClose = AlertDialogPrimitive.Close

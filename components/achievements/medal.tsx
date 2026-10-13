@@ -57,7 +57,7 @@ const ICONS: Record<string, LucideIcon> = {
   'una-historia-sobre-ruedas': BookOpen,
 }
 
-// Tonos decorativos del centro de la medalla, uno por categoría.
+/** Tonos decorativos del centro de la medalla, uno por categoría. */
 const CORE: Record<AchievementCategory, [string, string]> = {
   inicio: ['#a78bfa', '#5b21b6'],
   constancia: ['#4fb6ff', '#1d4ed8'],

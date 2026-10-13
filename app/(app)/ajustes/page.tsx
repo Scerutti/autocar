@@ -16,7 +16,7 @@ import { currentSubscription, disablePush, enablePush, pushSupport, type PushSup
 import { errorMessage, toast } from '@/lib/toast'
 import type { UserSettings } from '@/lib/types'
 
-// Lunes primero, como en el calendario argentino.
+/** Lunes primero, como en el calendario argentino. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
 const DAY_OPTIONS = WEEK_ORDER.map(i => ({ value: String(i), label: WEEKDAYS[i].slice(0, 3), ariaLabel: WEEKDAYS[i] }))
 
@@ -30,6 +30,11 @@ function Section({ title, description, children }: { title: string; description?
   )
 }
 
+/**
+ * Notificaciones push del dispositivo y recordatorio semanal de km.
+ * Si el servidor falla, la prueba puede no responder JSON (p. ej. una página de error de Vercel).
+ * El toast del recordatorio usa un id fijo para reemplazarse en vez de apilarse.
+ */
 function Notifications() {
   const { uid, settings } = useData()
   const { getToken } = useAuth()
@@ -87,7 +92,6 @@ function Notifications() {
     setBusy(true)
     try {
       const res = await fetch('/api/push/test', { method: 'POST', headers: { Authorization: `Bearer ${await getToken()}` } })
-      // Si el servidor falla puede no responder JSON (p. ej. una página de error de Vercel).
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error ?? `El servidor tuvo un problema (error ${res.status}). Probá de nuevo en un rato.`)
       if (json.sent) {
@@ -104,7 +108,6 @@ function Notifications() {
     }
   }
 
-  // Se confirma antes de guardar; con id fijo el toast se reemplaza en vez de apilarse.
   function saveReminder(next: UserSettings['reminder'], message: string) {
     saveSettings(uid, { reminder: next }).catch(e => toast.error('No se pudo guardar el recordatorio', { description: errorMessage(e) }))
     toast.success(message, { id: 'reminder' })

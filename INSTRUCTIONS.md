@@ -47,7 +47,7 @@ GitHub Actions (`.github/workflows/ci.yml`) corre `typecheck` y `npm test` en ca
 
 Completar `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` y `CLOUDINARY_API_SECRET` (Dashboard de Cloudinary). El secret sólo lo usa el servidor para firmar las subidas; las fotos quedan en la carpeta `autocar/<uid>`.
 
-Fotos (`lib/photo-limits.ts`): se aceptan archivos de hasta 25 MB y el navegador los achica a JPG de 1600 px (quedan en unos cientos de KB) antes de subirlos. La firma del servidor además limita los formatos (JPG/PNG/WebP) y achica al guardar, por si alguien saltea el navegador. Cada cuenta puede subir hasta 10 fotos por día (contador en `usage/{uid}`, que sólo toca el servidor). El plan gratis de Cloudinary no acepta imágenes de más de 10 MB.
+Fotos (`lib/photo-limits.ts`): se aceptan archivos de hasta 25 MB y el navegador los achica a JPG de 1600 px (quedan en unos cientos de KB) antes de subirlos. La firma del servidor además limita los formatos (JPG/PNG/WebP) y achica al guardar, por si alguien saltea el navegador. Cada cuenta puede subir hasta 10 fotos por día (contador en `usage/{uid}`, que sólo toca el servidor). El contador suma al firmar, antes de subir, así que permite 15 firmas por día: una subida que falla por la señal se puede reintentar sin gastar el cupo. El plan gratis de Cloudinary no acepta imágenes de más de 10 MB.
 
 ### 3. Web Push
 
@@ -77,6 +77,19 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<dominio>/api/cron/daily
 
 Después de publicar, `curl -X POST https://<dominio>/api/access` tiene que responder 401 con JSON (no 500): así se sabe que las API routes cargan bien.
 
+### 5. App Check
+
+Con App Check, Firestore sólo acepta pedidos que vienen de la app (no de un script con un ID token). El código lo activa sólo si `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` tiene valor; sin la variable la app funciona igual que antes.
+
+1. Google Cloud Console → **Security → reCAPTCHA** → crear una clave de tipo sitio web con los dominios: el de Vercel y `localhost`.
+2. Firebase **App Check → Apps** → la app web → registrar con **reCAPTCHA Enterprise** y pegar esa clave.
+3. Poner la clave en `NEXT_PUBLIC_RECAPTCHA_SITE_KEY`, en `.env.local` y en Vercel (Production y Preview), y volver a publicar.
+4. Mirar las métricas de **App Check → APIs → Cloud Firestore** unos días sin forzar: los pedidos tienen que llegar casi todos verificados.
+5. Recién ahí, **Aplicar** (enforce) para Cloud Firestore.
+6. Google Cloud → **Facturación → Presupuestos y alertas**: crear un presupuesto con alerta por mail, por si alguien gasta la cuota igual.
+
+En desarrollo local alcanza con la misma clave, porque `localhost` está entre sus dominios. Si reCAPTCHA no anda (por ejemplo, en un dominio que no está en la clave), se usa un token de depuración: `self.FIREBASE_APPCHECK_DEBUG_TOKEN = true` tiene que estar definido antes de que se inicialice App Check (el código no lo trae), el SDK imprime el token en la consola y se registra en Firebase **App Check → Apps → ⋮ → Administrar tokens de depuración**. Ese token es secreto: no lo subas al repo.
+
 ## Marca
 
 - `assets/brand/autocar-logo.png` es el logo original (fuente, no se sirve).
@@ -104,7 +117,7 @@ Después de publicar, `curl -X POST https://<dominio>/api/access` tiene que resp
 ## Seguridad
 
 - **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.
-- **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Si pasa, las salidas son App Check (reCAPTCHA) o cerrar el acceso.
+- **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Para eso está App Check con reCAPTCHA Enterprise (ver [Puesta en marcha → 5. App Check](#5-app-check)); si no alcanza, queda cerrar el acceso.
 - **Datos**: cada cuenta sólo lee y escribe `users/{su uid}`. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
 - **Reglas de Firestore**: sólo aceptan las colecciones y los campos que guarda la app, con largo máximo en los textos (funciones `valid*` en [`firestore.rules`](firestore.rules)). **Si agregás un campo o una colección, sumalo ahí y volvé a publicar las reglas**: si no, esa escritura falla con `permission-denied` en producción.
 - **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` (comparado en tiempo constante) y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.

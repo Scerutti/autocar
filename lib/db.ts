@@ -18,7 +18,7 @@ import {
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
 import { defaultWarnings } from './maintenance'
-import { computeAvgKmPerDay } from './odometer'
+import { computeAvgKmPerDay, topReading } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import {
   DEFAULT_SETTINGS,
@@ -34,7 +34,7 @@ import {
   type UserSettings,
 } from './types'
 
-// Todo cuelga de users/{uid}; las colecciones hijas guardan carId para poder consultar entre autos.
+/** Todo cuelga de users/{uid}; las colecciones hijas guardan carId para poder consultar entre autos. */
 const userDoc = (uid: string) => doc(firestore(), 'users', uid)
 const col = (uid: string, name: CollectionName) => collection(firestore(), 'users', uid, name)
 
@@ -50,8 +50,6 @@ function toDate(v: unknown): Date | null {
 
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-
-// ---- Conversión Firestore -> tipos de la app (tolerante a campos faltantes)
 
 function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
   const x = d.data()
@@ -141,8 +139,6 @@ function achievementFrom(d: QueryDocumentSnapshot<DocumentData>): AchievementRec
   }
 }
 
-// ---- Suscripciones en tiempo real
-
 export interface UserData {
   settings: UserSettings
   cars: Car[]
@@ -155,9 +151,14 @@ export interface UserData {
 
 type Part = keyof UserData
 
+/**
+ * Escucha en tiempo real los ajustes y todas las colecciones del usuario. En `onChange`, `fromCache`
+ * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
+ * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
+ */
 export function subscribeUserData(
   uid: string,
-  onChange: (patch: Partial<UserData>, loaded: Part) => void,
+  onChange: (patch: Partial<UserData>, loaded: Part, fromCache: boolean) => void,
   onError: (e: Error) => void,
 ): Unsubscribe {
   const subs: Unsubscribe[] = []
@@ -167,7 +168,6 @@ export function subscribeUserData(
       snap => {
         const x = snap.data()
         if (!snap.exists() && !snap.metadata.fromCache) {
-          // Primer ingreso: crea el documento con la configuración por defecto (lo necesita el cron).
           setDoc(userDoc(uid), { ...DEFAULT_SETTINGS, createdAt: Timestamp.now() }, { merge: true }).catch(onError)
         }
         onChange(
@@ -178,13 +178,16 @@ export function subscribeUserData(
             },
           },
           'settings',
+          snap.metadata.fromCache,
         )
       },
       onError,
     ),
   )
   const listen = <T,>(name: CollectionName, part: Part, map: (d: QueryDocumentSnapshot<DocumentData>) => T) =>
-    subs.push(onSnapshot(col(uid, name), snap => onChange({ [part]: snap.docs.map(map) }, part), onError))
+    subs.push(
+      onSnapshot(col(uid, name), snap => onChange({ [part]: snap.docs.map(map) }, part, snap.metadata.fromCache), onError),
+    )
 
   listen('cars', 'cars', carFrom)
   listen('rules', 'rules', ruleFrom)
@@ -194,8 +197,6 @@ export function subscribeUserData(
   listen('achievements', 'achievements', achievementFrom)
   return () => subs.forEach(u => u())
 }
-
-// ---- Kilometraje
 
 /**
  * Registra una lectura del odómetro y, si es la más alta, actualiza el km actual del auto
@@ -228,19 +229,33 @@ export async function recordKm(uid: string, car: Car, readings: OdometerReading[
   await batch.commit()
 }
 
-/** Km actual del auto a partir de sus lecturas: la más alta manda. */
-function carKmFrom(readings: OdometerReading[]) {
-  const latest = readings.reduce<OdometerReading | null>((best, r) => (!best || r.km > best.km ? r : best), null)
+/** Km actual del auto a partir de sus lecturas (de un solo auto): la más alta manda. */
+export function carKmFrom(readings: OdometerReading[]) {
+  const top = topReading(readings)
   return {
-    currentKm: latest?.km ?? 0,
-    kmUpdatedAt: latest ? Timestamp.fromDate(latest.date) : null,
+    currentKm: top?.km ?? 0,
+    kmUpdatedAt: top ? Timestamp.fromDate(top.date) : null,
     avgKmPerDay: computeAvgKmPerDay(readings),
   }
+}
+
+/**
+ * Corrige el km guardado en el auto con sus lecturas. Hace falta porque se escribe desde el cliente
+ * con lo que el dispositivo tenía en memoria (una carga offline o dos dispositivos cruzados pueden
+ * dejarlo viejo), y el cron lo lee de ahí para los vencimientos por km.
+ */
+export async function syncCarKm(uid: string, carId: string, readings: OdometerReading[]) {
+  const carReadings = readings.filter(r => r.carId === carId)
+  if (!carReadings.length) return
+  const batch = writeBatch(firestore())
+  batch.update(doc(col(uid, 'cars'), carId), carKmFrom(carReadings))
+  await batch.commit()
 }
 
 /** Borra una lectura (para corregir un error de tipeo) y recalcula el km actual con las que quedan. */
 export async function deleteReading(uid: string, car: Car, readings: OdometerReading[], readingId: string) {
   const remaining = readings.filter(r => r.carId === car.id && r.id !== readingId)
+  if (!remaining.length) throw new Error('No podés borrar el único registro de km del auto.')
   const batch = writeBatch(firestore())
   batch.delete(doc(col(uid, 'odometer'), readingId))
   batch.update(doc(col(uid, 'cars'), car.id), carKmFrom(remaining))
@@ -260,8 +275,6 @@ export async function restoreReading(uid: string, car: Car, readings: OdometerRe
   batch.update(doc(col(uid, 'cars'), car.id), carKmFrom(all))
   await batch.commit()
 }
-
-// ---- Autos
 
 export type CarInput = Pick<Car, 'brand' | 'model' | 'version' | 'year' | 'plate' | 'fuelTypes'> & {
   photoUrl?: string | null
@@ -291,8 +304,8 @@ export async function updateCar(uid: string, carId: string, data: Partial<CarInp
 
 type RelatedName = 'rules' | 'jobs' | 'fuel' | 'odometer'
 
+/** Borra en tandas de 450: un batch admite hasta 500 operaciones. */
 async function deleteRefs(refs: ReturnType<typeof doc>[]) {
-  // Un batch admite hasta 500 operaciones.
   for (let i = 0; i < refs.length; i += 450) {
     const batch = writeBatch(firestore())
     refs.slice(i, i + 450).forEach(r => batch.delete(r))
@@ -320,15 +333,13 @@ export async function deleteCar(uid: string, carId: string, known: Partial<Recor
   if (leftovers.length) await deleteRefs(leftovers)
 }
 
-// ---- Mantenimientos
-
 export type RuleInput = Pick<
   MaintenanceRule,
   'carId' | 'name' | 'intervalKm' | 'intervalTime' | 'repeat' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
 >
 
+/** Guarda un mantenimiento. Al editar se resetea el aviso para que vuelva a notificar con los datos nuevos. */
 export async function saveRule(uid: string, data: RuleInput, ruleId = newId(uid, 'rules')) {
-  // Al editar se resetea el aviso para que vuelva a notificar con los datos nuevos.
   await setDoc(doc(col(uid, 'rules'), ruleId), { ...data, lastNotifiedAt: null, lastNotifiedStatus: null })
   return ruleId
 }
@@ -348,8 +359,6 @@ export async function restoreRule(uid: string, rule: MaintenanceRule) {
   })
 }
 
-// ---- Trabajos
-
 export type JobInput = Omit<Job, 'id' | 'createdAt'>
 
 /** "Volver al taller en…": recordatorio de una sola vez que se crea junto con un trabajo. */
@@ -362,6 +371,10 @@ export interface FollowUp {
  * Guarda un trabajo. Los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
  * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una
  * sola vez se borran. Si el km es mayor al actual se registra, y opcionalmente agenda la vuelta al taller.
+ * Cada mantenimiento marcado se escribe aparte del trabajo y de los demás: si alguno ya no existe (borrado
+ * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo.
+ * Se commitea primero el trabajo (Firestore respeta el orden) y los mantenimientos no se esperan: sin
+ * conexión quedaría colgado, y si alguno falla el trabajo ya está a salvo.
  */
 export async function saveJob(
   uid: string,
@@ -370,20 +383,23 @@ export async function saveJob(
   jobId?: string,
   followUp?: FollowUp | null,
 ) {
-  const batch = writeBatch(firestore())
+  const jobBatch = writeBatch(firestore())
   const id = jobId ?? newId(uid, 'jobs')
   const existing = jobId ? {} : { createdAt: Timestamp.now() }
-  batch.set(doc(col(uid, 'jobs'), id), { ...data, ...existing }, { merge: true })
+  jobBatch.set(doc(col(uid, 'jobs'), id), { ...data, ...existing }, { merge: true })
 
   const doneKm = data.km ?? ctx.car.currentKm
+  const ruleBatches: { ruleId: string; batch: WriteBatch }[] = []
   for (const rule of ctx.rules.filter(r => data.ruleIds.includes(r.id))) {
     const isNewer = !rule.lastDoneDate || data.date >= rule.lastDoneDate
     if (!isNewer) continue
+    const ruleBatch = writeBatch(firestore())
+    ruleBatches.push({ ruleId: rule.id, batch: ruleBatch })
     if (!rule.repeat) {
-      batch.delete(doc(col(uid, 'rules'), rule.id))
+      ruleBatch.delete(doc(col(uid, 'rules'), rule.id))
       continue
     }
-    batch.update(doc(col(uid, 'rules'), rule.id), {
+    ruleBatch.update(doc(col(uid, 'rules'), rule.id), {
       lastDoneKm: rule.intervalKm != null ? doneKm : rule.lastDoneKm,
       lastDoneDate: data.date,
       lastNotifiedAt: null,
@@ -391,7 +407,7 @@ export async function saveJob(
     })
   }
   if (followUp) {
-    batch.set(doc(col(uid, 'rules')), {
+    jobBatch.set(doc(col(uid, 'rules')), {
       carId: ctx.car.id,
       name: followUp.name,
       intervalKm: null,
@@ -405,9 +421,13 @@ export async function saveJob(
     })
   }
   if (data.km != null && data.km > ctx.car.currentKm) {
-    addReadingToBatch(batch, uid, ctx.car, ctx.readings, data.km, 'job')
+    addReadingToBatch(jobBatch, uid, ctx.car, ctx.readings, data.km, 'job')
   }
-  await batch.commit()
+  const saved = jobBatch.commit()
+  for (const r of ruleBatches) {
+    r.batch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', id, r.ruleId, e))
+  }
+  await saved
   return id
 }
 
@@ -422,8 +442,6 @@ export async function restoreJob(uid: string, job: Job) {
   const { id, createdAt, ...data } = job
   await setDoc(doc(col(uid, 'jobs'), id), { ...data, createdAt: Timestamp.fromDate(createdAt) })
 }
-
-// ---- Combustible
 
 export type FuelInput = Omit<FuelLoad, 'id' | 'createdAt'>
 
@@ -456,8 +474,6 @@ export async function restoreFuel(uid: string, load: FuelLoad) {
   await setDoc(doc(col(uid, 'fuel'), id), { ...data, createdAt: Timestamp.fromDate(createdAt) })
 }
 
-// ---- Ajustes y notificaciones
-
 export async function saveSettings(uid: string, settings: Partial<UserSettings>) {
   await setDoc(userDoc(uid), settings, { merge: true })
 }
@@ -482,8 +498,6 @@ export async function deletePushSubscription(uid: string, endpoint: string) {
   batch.delete(doc(col(uid, 'pushSubscriptions'), await sha256(endpoint)))
   await batch.commit()
 }
-
-// ---- Logros
 
 /**
  * Guarda los logros conseguidos. Es idempotente: el id del documento es el del logro y la transacción

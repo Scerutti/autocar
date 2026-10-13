@@ -2,10 +2,6 @@ import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/render
 import type { RuleStatus } from '@/lib/maintenance'
 import type { ServiceReport } from '@/lib/report'
 
-// PDF "Historial de mantenimiento". Se carga recién al exportar (import dinámico), así la librería
-// de PDF no pesa en el resto de la app. Fondo blanco para que se imprima bien; la franja navy lleva
-// el logo, que tiene partes blancas.
-
 const C = {
   navy: '#0a111c',
   blue: '#1a9cfb',
@@ -26,8 +22,8 @@ const STATUS_COLORS: Record<RuleStatus, { fg: string; bg: string }> = {
 export const REPORT_DISCLAIMER =
   'Este informe se generó con AutoCar a partir de los datos que cargó el titular del vehículo. Es un resumen informativo: no es una factura ni un comprobante fiscal, no reemplaza la documentación emitida por talleres o concesionarias y no certifica el estado mecánico del vehículo.'
 
+/** Estilos del PDF. Sin lineHeight en `page`: con eso react-pdf no dibuja el pie (fixed), y en textos sueltos deja huecos. */
 const s = StyleSheet.create({
-  // Sin lineHeight en la página: con eso react-pdf no dibuja el pie (fixed), y en textos sueltos deja huecos.
   page: { paddingTop: 32, paddingHorizontal: 36, paddingBottom: 78, fontFamily: 'Helvetica', fontSize: 9.5, color: C.ink },
   header: {
     backgroundColor: C.navy,
@@ -85,7 +81,7 @@ const s = StyleSheet.create({
   pageNumber: { flex: 1, fontSize: 7.5, color: C.muted, textAlign: 'right' },
 })
 
-// Anchos de las columnas de la tabla de trabajos
+/** Anchos de las columnas de la tabla de trabajos. */
 const W = { date: 96, cost: 72 }
 const R = { name: 140, last: 112, status: 58 }
 
@@ -98,6 +94,11 @@ function SectionTitle({ children, note }: { children: string; note?: string }) {
   )
 }
 
+/**
+ * PDF "Historial de mantenimiento". Se carga recién al exportar (import dinámico), así la librería de PDF no
+ * pesa en el resto de la app. Fondo blanco para que se imprima bien; la franja navy lleva el logo, que tiene
+ * partes blancas. El pie se repite en todas las páginas.
+ */
 export function ServiceReportPdf({ report, origin }: { report: ServiceReport; origin: string }) {
   const showCosts = report.total != null
   const stats = [
@@ -117,7 +118,6 @@ export function ServiceReportPdf({ report, origin }: { report: ServiceReport; or
       language="es-AR"
     >
       <Page size="A4" style={s.page}>
-        {/* Pie en todas las páginas */}
         <View style={s.footer} fixed>
           <Text style={s.disclaimer}>{REPORT_DISCLAIMER}</Text>
           <Text style={s.pageNumber} render={({ pageNumber, totalPages }) => `Página ${pageNumber} de ${totalPages}`} />

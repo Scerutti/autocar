@@ -4,13 +4,15 @@ import { Dialog as DialogPrimitive } from '@base-ui/react/dialog'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// Base UI se encarga de lo difícil: foco atrapado y devuelto al cerrar, Escape, clic afuera,
-// bloqueo del scroll de fondo y atributos ARIA (role="dialog", aria-labelledby/-describedby).
-
+/**
+ * Base UI se encarga de lo difícil: foco atrapado y devuelto al cerrar, Escape, clic afuera,
+ * bloqueo del scroll de fondo y atributos ARIA (role="dialog", aria-labelledby/-describedby).
+ */
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
 const DialogClose = DialogPrimitive.Close
 
+/** Mobile: hoja que sube desde abajo. Desktop: tarjeta centrada. */
 function DialogContent({
   className,
   children,
@@ -27,7 +29,6 @@ function DialogContent({
         <DialogPrimitive.Popup
           data-slot="dialog-content"
           className={cn(
-            // Mobile: hoja que sube desde abajo. Desktop: tarjeta centrada.
             'relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-2xl border border-white/10 bg-popover p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-popover-foreground shadow-2xl shadow-black/50 outline-none',
             'transition-[translate,scale,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] data-starting-style:translate-y-full data-ending-style:translate-y-full motion-reduce:transition-none',
             'sm:rounded-2xl sm:pb-5 sm:data-starting-style:translate-y-0 sm:data-starting-style:scale-95 sm:data-starting-style:opacity-0 sm:data-ending-style:translate-y-0 sm:data-ending-style:scale-95 sm:data-ending-style:opacity-0',

@@ -220,7 +220,6 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
   const { uid, odometer } = useData()
   const confirm = useConfirm()
 
-  // Para corregir un error de tipeo. Igual queda "Deshacer" en el aviso.
   async function remove(r: OdometerReading) {
     const confirmed = await confirm({
       tone: 'danger',
@@ -273,6 +272,7 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
   )
 }
 
+/** Cambia de pestaña con replaceState en vez de router.replace: es instantáneo y no le pide la página al servidor. */
 function CarDetail() {
   const { carId } = useParams<{ carId: string }>()
   const params = useSearchParams()
@@ -334,7 +334,6 @@ function CarDetail() {
           </div>
         </div>
 
-        {/* replaceState en vez de router.replace: cambia la pestaña al instante, sin pedirle la página al servidor. */}
         <Tabs value={tab} onValueChange={v => window.history.replaceState(null, '', `?tab=${v}`)}>
           <TabsList className="h-10! w-full">
             <TabsTrigger value="estado">Estado</TabsTrigger>

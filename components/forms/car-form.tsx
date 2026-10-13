@@ -18,7 +18,7 @@ import type { Car, FuelType } from '@/lib/types'
 import { toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
-// Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC).
+/** Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC). */
 type FuelChoice = 'nafta' | 'dual' | 'gasoil'
 
 const FUEL_CHOICES: Record<FuelChoice, { label: string; fuelTypes: FuelType[] }> = {
@@ -30,6 +30,13 @@ const FUEL_OPTIONS = (Object.keys(FUEL_CHOICES) as FuelChoice[]).map(c => ({ val
 
 const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gasoil') ? 'gasoil' : f.includes('gnc') ? 'dual' : 'nafta')
 
+/**
+ * Alta y edición de un auto. La foto se revisa y achica apenas se elige: si no sirve, el aviso aparece ahí mismo.
+ * Borrar fotos en Cloudinary es "mejor esfuerzo": si falla, no frena el guardado. Si el servidor rechaza el
+ * guardado (enseguida o al volver la señal), se borra la foto nueva para que no quede huérfana. La foto vieja se
+ * borra recién cuando el servidor confirma (si rechaza el cambio, el auto la sigue usando), y sin esperarlo: sin
+ * señal el guardado quedaría colgado hasta que vuelva.
+ */
 export function CarForm({ car }: { car?: Car }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -45,7 +52,6 @@ export function CarForm({ car }: { car?: Car }) {
   const [plate, setPlate] = useState(car?.plate ?? '')
   const [fuel, setFuel] = useState<FuelChoice>(car ? toChoice(car.fuelTypes) : 'nafta')
   const [km, setKm] = useState('')
-  // La foto se revisa y achica apenas se elige: si no sirve, el aviso aparece ahí mismo.
   const [photo, setPhoto] = useState<Blob | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
@@ -126,10 +132,13 @@ export function CarForm({ car }: { car?: Car }) {
 
     const ok = await run(async () => {
       const oldPublicId = car?.photoPublicId ?? null
+      const dropImage = (publicId: string) => getToken().then(t => deleteImage(publicId, t)).catch(() => {})
+      let uploadedId: string | null = null
       if (photo) {
         setStatus('Subiendo foto…')
         const token = await getToken()
         const up = await uploadImage(photo, token)
+        uploadedId = up.publicId
         data.photoUrl = up.url
         data.photoPublicId = up.publicId
       } else if (removePhoto) {
@@ -138,10 +147,11 @@ export function CarForm({ car }: { car?: Car }) {
       }
       setStatus('Guardando…')
       const carId = car?.id ?? newId(uid, 'cars')
-      const saved: SaveStatus = car
-        ? await settle(updateCar(uid, car.id, data))
-        : await settle(createCar(uid, data, kmNum!, carId))
-      if (oldPublicId && (photo || removePhoto)) void deleteImage(oldPublicId, await getToken())
+      const write: Promise<unknown> = car ? updateCar(uid, car.id, data) : createCar(uid, data, kmNum!, carId)
+      const newPublicId = uploadedId
+      if (newPublicId) write.catch(() => dropImage(newPublicId))
+      const saved: SaveStatus = await settle(write)
+      if (oldPublicId && (photo || removePhoto)) write.then(() => dropImage(oldPublicId), () => {})
       if (car) toastSaved('Cambios guardados', saved)
       else toastSaved('Auto agregado', saved, 'Ahora sumale los mantenimientos: service, VTV, seguro…')
       router.replace(`/autos/${carId}`)
@@ -245,7 +255,10 @@ export function CarForm({ car }: { car?: Car }) {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-/** Borrar un auto borra todo su historial y la foto: no se puede deshacer. */
+/**
+ * Borrar un auto borra todo su historial y la foto: no se puede deshacer. Primero sale de la pantalla del
+ * auto, para no mostrar "no encontrado" mientras se borra.
+ */
 function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -263,7 +276,6 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     ] as const
     const present = counts.filter(([n]) => n > 0)
     const related = present.map(([n, one, many]) => plural(n, one, many))
-    // "se borra 1 registro" / "se borran 2 trabajos y 1 carga"
     const verb = present.length === 1 && present[0][0] === 1 ? 'se borra' : 'se borran'
     const list = related.length > 1 ? `${related.slice(0, -1).join(', ')} y ${related.at(-1)}` : related[0]
     const confirmed = await confirm({
@@ -274,7 +286,6 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     })
     if (!confirmed) return
 
-    // Primero salimos de la pantalla del auto para no mostrar "no encontrado" mientras se borra.
     router.replace('/')
     runInBackground(
       (async () => {
