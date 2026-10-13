@@ -64,13 +64,23 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
 
 function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: () => void; children: React.ReactNode }) {
   const { loading, error } = useData()
+
+  useEffect(() => {
+    // El detalle técnico va a la consola; en pantalla mostramos un mensaje claro.
+    if (error && !isPermissionDenied(error)) console.error('Error cargando datos', error)
+  }, [error])
+
   if (isPermissionDenied(error)) return <Join auto={attempt === 0} onJoined={onRetry} />
   return (
     <AppShell>
       {error ? (
         <div className="mx-auto max-w-md p-8 text-center">
           <p className="font-medium">No se pudieron cargar tus datos</p>
-          <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+          <p className="mt-2 text-sm text-muted-foreground">Revisá la conexión y probá de nuevo.</p>
+          {/* Firestore cancela el listener que falló: reintentar vuelve a montar DataProvider. */}
+          <Button onClick={onRetry} size="lg" className="mt-6 h-11 w-full">
+            Reintentar
+          </Button>
         </div>
       ) : loading ? (
         <Loading />
