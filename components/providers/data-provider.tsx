@@ -61,8 +61,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id)
   }, [])
 
-  // Si el km guardado en el auto no coincide con sus lecturas, lo corrige (el cron lee el guardado).
-  // Siempre lo lleva a la lectura más alta, así dos dispositivos no se pelean. Sólo corre con autos y
+  // Si el km guardado en el auto es menor que su lectura más alta, lo sube (el cron lee el guardado).
+  // Nunca lo baja: un auto viejo con más km que sus lecturas queda como está, y los km que bajan a
+  // propósito ya los escribe deleteReading. Así dos dispositivos no se pelean. Sólo corre con autos y
   // lecturas confirmados por el servidor: con la caché local podría faltar una lectura de otro dispositivo
   // y bajaría el km. Espera un momento a que se asienten; una corrección que falló no se reintenta.
   const fixing = useRef(new Set<string>())
@@ -73,7 +74,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       for (const car of data.cars) {
         const readings = data.odometer.filter(r => r.carId === car.id)
         const top = topReading(readings)
-        if (!top || top.km === car.currentKm) continue
+        if (!top || top.km <= car.currentKm) continue
         const key = `${car.id}:${top.km}`
         if (fixing.current.has(key)) continue
         fixing.current.add(key)
@@ -86,12 +87,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }, [data.cars, data.odometer, kmReady, uid])
 
   const value = useMemo<DataState>(() => {
-    // El km que se muestra sale de las lecturas (la más alta manda), no sólo de lo guardado en el auto,
-    // que puede haber quedado viejo hasta que se corrige.
+    // Si una lectura supera al km guardado en el auto (que puede haber quedado viejo hasta que se corrige),
+    // se muestra esa. Sólo hacia arriba: un auto viejo con más km que sus lecturas queda como está.
     const cars = data.cars
       .map(c => {
         const top = topReading(data.odometer.filter(r => r.carId === c.id))
-        return top && top.km !== c.currentKm ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
+        return top && top.km > c.currentKm ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))
