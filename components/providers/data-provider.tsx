@@ -24,12 +24,23 @@ const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 
 
 const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [] }
 
+/**
+ * Datos del usuario en vivo desde Firestore. Si la app queda abierta pasada la medianoche, recalcula los
+ * vencimientos. Si una lectura supera al km guardado en el auto (que puede haber quedado viejo hasta que se
+ * corrige), se muestra esa.
+ *
+ * Corrección automática del km: si el km guardado en el auto es menor que su lectura más alta, lo sube (el cron
+ * lee el guardado). Nunca lo baja: un auto viejo con más km que sus lecturas queda como está, y los km que bajan
+ * a propósito ya los escribe deleteReading; así dos dispositivos no se pelean. Sólo corre con autos y lecturas
+ * confirmados por el servidor (`synced`), no con la caché local: ahí podría faltar una lectura de otro
+ * dispositivo y bajaría el km. Espera un momento a que se asienten los datos; una corrección que falló no se
+ * reintenta.
+ */
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const uid = user!.uid
   const [data, setData] = useState<UserData>(EMPTY)
   const [loaded, setLoaded] = useState<Set<keyof UserData>>(new Set())
-  // Partes cuya última foto vino del servidor (no de la caché local).
   const [synced, setSynced] = useState<Set<keyof UserData>>(new Set())
   const [error, setError] = useState<Error | null>(null)
   const [today, setToday] = useState(() => toISODate(new Date()))
@@ -55,17 +66,11 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     )
   }, [uid])
 
-  // Si la app queda abierta pasada la medianoche, recalcula los vencimientos.
   useEffect(() => {
     const id = setInterval(() => setToday(toISODate(new Date())), 60_000)
     return () => clearInterval(id)
   }, [])
 
-  // Si el km guardado en el auto es menor que su lectura más alta, lo sube (el cron lee el guardado).
-  // Nunca lo baja: un auto viejo con más km que sus lecturas queda como está, y los km que bajan a
-  // propósito ya los escribe deleteReading. Así dos dispositivos no se pelean. Sólo corre con autos y
-  // lecturas confirmados por el servidor: con la caché local podría faltar una lectura de otro dispositivo
-  // y bajaría el km. Espera un momento a que se asienten; una corrección que falló no se reintenta.
   const fixing = useRef(new Set<string>())
   const kmReady = synced.has('cars') && synced.has('odometer')
   useEffect(() => {
@@ -87,8 +92,6 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }, [data.cars, data.odometer, kmReady, uid])
 
   const value = useMemo<DataState>(() => {
-    // Si una lectura supera al km guardado en el auto (que puede haber quedado viejo hasta que se corrige),
-    // se muestra esa. Sólo hacia arriba: un auto viejo con más km que sus lecturas queda como está.
     const cars = data.cars
       .map(c => {
         const top = topReading(data.odometer.filter(r => r.carId === c.id))

@@ -80,6 +80,7 @@ function AchievementTile({ status, car }: { status: AchievementStatus; car: Car 
   )
 }
 
+/** En celulares angostos el filtro achica la letra para que "Desbloqueados" entre sin desbordar. */
 export default function AchievementsPage() {
   const { cars, carById } = useData()
   const { statuses, unlocked, total } = useAchievements()
@@ -133,7 +134,6 @@ export default function AchievementsPage() {
               </div>
             </section>
 
-            {/* En celulares angostos achica la letra para que "Desbloqueados" entre sin desbordar. */}
             <Segmented
               value={filter}
               onChange={setFilter}

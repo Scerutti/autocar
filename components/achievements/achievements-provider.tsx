@@ -30,6 +30,7 @@ const RETRY_MS = [5_000, 30_000, 120_000, 300_000]
  * Desbloquea los logros que se cumplen con los datos ya guardados en Firestore (no con lo que hay
  * en un formulario). Corre después de cualquier cambio, así cubre km, trabajos, cargas y
  * mantenimientos sin tocar cada formulario. Sin conexión no lo intenta: espera a que vuelva la señal.
+ * Si ya hay una transacción en curso no arranca otra: cuando termina cambia `key` y vuelve a correr.
  */
 function useAutoUnlock(uid: string, statuses: AchievementStatus[]) {
   const unlocks = useMemo(() => pendingUnlocks(statuses), [statuses])
@@ -50,7 +51,6 @@ function useAutoUnlock(uid: string, statuses: AchievementStatus[]) {
     if (!key) return
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     const timer = setTimeout(() => {
-      // Si ya hay una transacción en curso, cuando termine cambia `key` y esto vuelve a correr.
       if (running.current || !navigator.onLine) return
       running.current = true
       unlockAchievements(uid, latest.current)
@@ -78,10 +78,12 @@ const OPEN_DELAY_MS = 900
 /**
  * Muestra las celebraciones pendientes de a una tanda: las que estaban pendientes cuando se abre.
  * Lo que se desbloquee mientras está abierta queda para la tanda siguiente (nunca dos ventanas a la vez).
+ * `seen` guarda lo ya marcado como visto en esta sesión, por si la escritura todavía no volvió en el
+ * snapshot. Sin señal la marca queda en la caché local y se sincroniza después; si falla, el logro
+ * vuelve a aparecer la próxima vez.
  */
 function CelebrationHost({ statuses }: { statuses: AchievementStatus[] }) {
   const { uid, achievements, cars } = useData()
-  // Lo ya marcado como visto en esta sesión, por si la escritura todavía no volvió en el snapshot.
   const seen = useRef(new Set<string>())
   const pending = useMemo(() => pendingCelebrations(achievements).filter(r => !seen.current.has(r.id)), [achievements])
   const [queue, setQueue] = useState<AchievementRecord[] | null>(null)
@@ -101,7 +103,6 @@ function CelebrationHost({ statuses }: { statuses: AchievementStatus[] }) {
       const fresh = ids.filter(id => !seen.current.has(id))
       if (!fresh.length) return
       fresh.forEach(id => seen.current.add(id))
-      // Sin señal queda en la caché local y se sincroniza después; si falla, vuelve a aparecer la próxima vez.
       markAchievementsCelebrated(uid, fresh).catch(() => fresh.forEach(id => seen.current.delete(id)))
     },
     [uid],

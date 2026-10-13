@@ -1,8 +1,10 @@
-// Contenido del manual de usuario (npm run manual lo convierte en docs/manual-de-usuario.pdf).
-// Al cambiar la app: actualizar el texto y las capturas (375 px de ancho, con la patente pixelada), subir
-// manualVersion, apuntar appVersion a la versión descripta y sumar una fila a history.
-// Bloques: p (párrafo), steps (pasos numerados), bullets, fig (imagen con epígrafe), table, note, qa.
-// **texto** = negrita (nombres de botones y opciones).
+/**
+ * Contenido del manual de usuario (npm run manual lo convierte en docs/manual-de-usuario.pdf).
+ * Al cambiar la app: actualizar el texto y las capturas (375 px de ancho, con la patente pixelada), subir
+ * manualVersion, apuntar appVersion a la versión descripta y sumar una fila a history.
+ * Bloques: p (párrafo), steps (pasos numerados), bullets, fig (imagen con epígrafe), table, note, qa.
+ * **texto** = negrita (nombres de botones y opciones).
+ */
 
 export const META = {
   title: 'Manual de usuario',

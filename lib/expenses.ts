@@ -3,7 +3,8 @@ import type { FuelLoad, Job, JobCategory } from './types'
 export type ExpenseCategory = JobCategory | 'combustible'
 
 export interface MonthTotals {
-  month: number // 0-11
+  /** Mes de 0 (enero) a 11 (diciembre). */
+  month: number
   jobs: number
   fuel: number
   total: number

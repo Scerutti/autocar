@@ -19,13 +19,17 @@ import { LinkButton, RuleProgress, StatusBadge } from '../common'
 
 const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n))
 
+/**
+ * Alta y edición de un mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
+ * vacíos = automáticos según el intervalo. Si no se repite, se cuenta desde los km actuales. `pickerKey` cambia al
+ * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
+ */
 export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { uid, today } = useData()
   const { saving, error, setError, run } = useSaver()
 
-  // Los de GNC sólo tienen sentido si el auto tiene equipo.
   const presets = RULE_PRESETS.filter(p => !p.requires || car.fuelTypes.includes(p.requires))
 
   const [name, setName] = useState(rule?.name ?? '')
@@ -34,10 +38,8 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const [intervalTime, setIntervalTime] = useState<TimeInterval | null>(rule?.intervalTime ?? null)
   const [lastKm, setLastKm] = useState(numOrEmpty(rule ? rule.lastDoneKm : car.currentKm))
   const [lastDate, setLastDate] = useState(rule?.lastDoneDate ?? today)
-  // Márgenes de aviso: vacío = automático según el intervalo.
   const [warnKm, setWarnKm] = useState(rule ? String(rule.warnKm) : '')
   const [warnDays, setWarnDays] = useState(rule ? String(rule.warnDays) : '')
-  // Cambia al aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
   const [pickerKey, setPickerKey] = useState(0)
 
   const kmInterval = parseNumberInput(intervalKm) || null
@@ -46,7 +48,6 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
     intervalKm: kmInterval,
     intervalTime,
     repeat,
-    // Si no se repite, se cuenta desde los km actuales.
     lastDoneKm: kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.lastDoneKm ?? car.currentKm)) : null,
     lastDoneDate: lastDate || null,
     warnKm: parseNumberInput(warnKm) ?? auto.warnKm,

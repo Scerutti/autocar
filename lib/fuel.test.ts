@@ -43,7 +43,7 @@ describe('computeFuelStats', () => {
     const loads = [
       load({ km: 1000, quantity: 45 }),
       load({ km: 1300, quantity: 20, fullTank: false }),
-      load({ km: 1600, quantity: 30 }), // 600 km con 50 L = 12 km/L
+      load({ km: 1600, quantity: 30 }),
     ]
     const s = computeFuelStats(loads, 'nafta', true)
     expect(s.consumption).toBe(12)
@@ -57,7 +57,7 @@ describe('computeFuelStats', () => {
     const loads = [
       load({ date: '2026-03-01', km: 1000, quantity: 45 }),
       load({ date: '2026-03-10', km: null, quantity: 40, fullTank: false }),
-      load({ date: '2026-03-20', km: 2000, quantity: 40 }), // 1000 km con 80 L = 12,5 km/L (antes daba 25)
+      load({ date: '2026-03-20', km: 2000, quantity: 40 }),
     ]
     expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(12.5)
   })
@@ -65,7 +65,7 @@ describe('computeFuelStats', () => {
     const loads = [
       load({ date: '2026-03-01', km: 1000, quantity: 45 }),
       load({ date: '2026-03-10', km: null, quantity: 30 }),
-      load({ date: '2026-03-20', km: 1900, quantity: 30 }), // 900 km con 60 L = 15 km/L
+      load({ date: '2026-03-20', km: 1900, quantity: 30 }),
     ]
     expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(15)
   })
@@ -73,8 +73,8 @@ describe('computeFuelStats', () => {
     const loads = [
       load({ date: '2026-03-01', km: 1000, quantity: 45, createdAt: new Date(1) }),
       load({ date: '2026-03-20', km: null, quantity: 10, fullTank: false, createdAt: new Date(2) }),
-      load({ date: '2026-03-20', km: 1500, quantity: 40, createdAt: new Date(3) }), // 500 km con 50 L
-      load({ date: '2026-03-20', km: null, quantity: 99, fullTank: false, createdAt: new Date(4) }), // después: no cuenta
+      load({ date: '2026-03-20', km: 1500, quantity: 40, createdAt: new Date(3) }),
+      load({ date: '2026-03-20', km: null, quantity: 99, fullTank: false, createdAt: new Date(4) }),
     ]
     expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(10)
   })
@@ -82,7 +82,7 @@ describe('computeFuelStats', () => {
     const loads = [
       load({ date: '2026-02-01', km: null, quantity: 99 }),
       load({ date: '2026-03-01', km: 1000, quantity: 45 }),
-      load({ date: '2026-03-20', km: 1600, quantity: 50 }), // 600 km con 50 L = 12 km/L
+      load({ date: '2026-03-20', km: 1600, quantity: 50 }),
     ]
     expect(computeFuelStats(loads, 'nafta', true).consumption).toBe(12)
   })
@@ -102,7 +102,7 @@ describe('computeCostPerKm', () => {
       load({ date: '2026-03-01', km: 1000, total: 99999 }),
       load({ date: '2026-03-10', km: null, total: 20000 }),
       load({ date: '2026-03-20', km: 2000, total: 30000 }),
-      load({ date: '2026-03-25', km: null, total: 77777 }), // después de la última con km: no cuenta
+      load({ date: '2026-03-25', km: null, total: 77777 }),
     ]
     expect(computeCostPerKm(loads)).toBe(50)
   })
@@ -147,7 +147,6 @@ describe('summarizeExpenses', () => {
     expect(s.total).toBe(160000)
     expect(s.months[1]).toMatchObject({ jobs: 100000, fuel: 40000, total: 140000 })
     expect(s.byCategory[0]).toEqual({ category: 'service', total: 100000 })
-    // Febrero (primer mes con gastos) a marzo = 2 meses
     expect(s.monthlyAverage).toBeCloseTo(160000 / 2)
   })
 
@@ -166,7 +165,6 @@ describe('parseNumberInput', () => {
     expect(parseNumberInput('')).toBeNull()
   })
   it('lee igual lo que se rellena al editar (toNumberInput)', () => {
-    // Con String(35.123) = "35.123" se leía como 35123.
     for (const n of [35.123, 12.5, 1250.75, 40, 86420, 0.5, 1.234]) {
       expect(parseNumberInput(toNumberInput(n))).toBe(n)
     }
@@ -201,8 +199,8 @@ describe('combustibles: nafta, gasoil y GNC', () => {
   it('calcula el consumo de un auto gasolero', () => {
     const loads = [
       load({ fuelType: 'gasoil', km: 10000, quantity: 50 }),
-      load({ fuelType: 'gasoil', grade: 'premium', km: 10800, quantity: 50 }), // 800 km con 50 L = 16 km/L
-      load({ fuelType: 'nafta', km: 11000, quantity: 99 }), // de antes de cambiarle el combustible: no cuenta
+      load({ fuelType: 'gasoil', grade: 'premium', km: 10800, quantity: 50 }),
+      load({ fuelType: 'nafta', km: 11000, quantity: 99 }),
     ]
     const s = computeFuelStats(loads, 'gasoil', true)
     expect(s.consumption).toBe(16)
@@ -223,7 +221,6 @@ describe('combustibles: nafta, gasoil y GNC', () => {
     expect(fuelTypeFromDoc('gnc')).toBe('gnc')
     expect(fuelTypeFromDoc(undefined)).toBe('nafta')
     expect(fuelTypesFromDoc(['gasoil'])).toEqual(['gasoil'])
-    // No existe gasoil + GNC: queda gasoil.
     expect(fuelTypesFromDoc(['gasoil', 'gnc'])).toEqual(['gasoil'])
   })
   it('último precio por variante', () => {
@@ -255,7 +252,6 @@ describe('entryKmWarning', () => {
   })
   it('avisa si uno nuevo con fecha anterior al último registro lleva justo esos km', () => {
     expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: true }, car)).toMatch(/último registro.*anterior/)
-    // Con otros km, el mismo día del registro o al editar uno viejo, no.
     expect(entryKmWarning({ date: '2026-06-01', km: 40000, isNew: true }, car)).toBeNull()
     expect(entryKmWarning({ date: '2026-09-10', km: 51000, isNew: true }, car)).toBeNull()
     expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: false }, car)).toBeNull()

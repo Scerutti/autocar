@@ -32,6 +32,10 @@ const CATEGORY_OPTIONS = (Object.keys(JOB_CATEGORY_LABELS) as JobCategory[]).map
   icon: CATEGORY_ICONS[value],
 }))
 
+/**
+ * Alta y edición de un trabajo. Los mantenimientos que se repiten vuelven a contar desde este trabajo; los de
+ * una sola vez quedan cumplidos. "Volver al taller en…" sólo aparece al cargar un trabajo nuevo.
+ */
 export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -50,7 +54,6 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
   const [workshop, setWorkshop] = useState(job?.workshop ?? '')
   const [notes, setNotes] = useState(job?.notes ?? '')
   const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
-  // "Volver al taller en…" (sólo al cargar un trabajo nuevo).
   const [comeBack, setComeBack] = useState(false)
   const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
 
@@ -75,7 +78,6 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
 
     const followUp: FollowUp | null =
       comeBack && comeBackIn ? { name: `Volver al taller: ${title.trim()}`, intervalTime: comeBackIn } : null
-    // Los que se repiten vuelven a contar desde este trabajo; los de una sola vez quedan cumplidos.
     const done = rules.filter(r => ruleIds.includes(r.rule.id)).map(r => r.rule)
     const reset = done.filter(r => r.repeat).map(r => r.name)
     const completed = done.filter(r => !r.repeat).map(r => r.name)

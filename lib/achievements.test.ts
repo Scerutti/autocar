@@ -14,7 +14,8 @@ import {
 import { addDays } from './dates'
 import type { AchievementRecord, Car, FuelLoad, Job, MaintenanceRule, OdometerReading } from './types'
 
-const TODAY = '2026-10-09' // viernes
+/** Un viernes. */
+const TODAY = '2026-10-09'
 
 const car = (extra: Partial<Car> = {}): Car => ({
   id: 'c1',
@@ -129,9 +130,9 @@ describe('catálogo', () => {
 
 describe('semanas y rachas', () => {
   it('la semana empieza el lunes', () => {
-    expect(weekStart('2026-10-09')).toBe('2026-10-05') // viernes
-    expect(weekStart('2026-10-05')).toBe('2026-10-05') // lunes
-    expect(weekStart('2026-10-11')).toBe('2026-10-05') // domingo
+    expect(weekStart('2026-10-09')).toBe('2026-10-05')
+    expect(weekStart('2026-10-05')).toBe('2026-10-05')
+    expect(weekStart('2026-10-11')).toBe('2026-10-05')
   })
 
   it('varios registros en la misma semana cuentan una vez', () => {
@@ -139,7 +140,6 @@ describe('semanas y rachas', () => {
   })
 
   it('la racha sigue a través del cambio de año', () => {
-    // miércoles 31/12/2025 cae en la semana del lunes 29/12; el 5/1/2026 es el lunes siguiente
     expect(weeklyStats(['2025-12-22', '2025-12-31', '2026-01-05'], '2026-01-06')).toEqual({ weeks: 3, best: 3, current: 3 })
   })
 
@@ -221,7 +221,6 @@ describe('combustible y gastos', () => {
     expect(find(evaluate({ fuel: one }), 'cada-gota-cuenta').met).toBe(false)
     const two = [fuel({ km: 10000, date: '2026-09-01' }), fuel({ km: 10500, date: '2026-09-10' })]
     expect(find(evaluate({ fuel: two }), 'cada-gota-cuenta').met).toBe(true)
-    // Sin tanque lleno no hay consumo confiable
     const notFull = two.map(f => ({ ...f, fullTank: false }))
     expect(find(evaluate({ fuel: notFull }), 'cada-gota-cuenta').met).toBe(false)
   })
@@ -344,7 +343,7 @@ describe('seguimiento a largo plazo', () => {
 
 describe('próximo logro', () => {
   it('sugiere algo que se pueda hacer antes que un hito que llega con el tiempo', () => {
-    const c = car({ createdAt: new Date('2025-11-01T12:00:00') }) // casi un año: "Un viejo conocido" va por el 90 %
+    const c = car({ createdAt: new Date('2025-11-01T12:00:00') })
     const next = nextAchievement(evaluate({ cars: [c], jobs: [job(), job()] }))
     expect(next?.def.id).toBe('manos-a-la-obra')
   })

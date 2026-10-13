@@ -24,7 +24,10 @@ const RENOTIFY_DAYS = 7
  */
 export const MAX_MESSAGES_PER_RUN = 6
 
-/** Tope de mantenimientos al día que se limpian por corrida: el batch de Firestore admite 500 escrituras. */
+/**
+ * Tope de mantenimientos al día que se limpian por corrida: el batch de Firestore admite 500 escrituras.
+ * Los que pasan el tope se limpian en la próxima corrida.
+ */
 export const MAX_CLEARS_PER_RUN = 400
 
 /** Tag del resumen "Y X avisos más": siempre el mismo, así reemplaza al del día anterior. */
@@ -33,7 +36,7 @@ export const MORE_TAG = 'more'
 /** Tag del pedido de km de todos los autos juntos, cuando los de cada auto no entran en el tope. */
 export const KM_TAG = 'km'
 
-// Servicios de push de los navegadores: Chrome/Edge/Opera (FCM), Firefox, Edge en Windows (WNS) y Safari.
+/** Servicios de push de los navegadores: Chrome/Edge/Opera (FCM), Firefox, Edge en Windows (WNS) y Safari. */
 const PUSH_HOSTS = ['.googleapis.com', '.mozilla.com', '.windows.com', '.apple.com']
 
 /**
@@ -66,6 +69,10 @@ export function updatesToPersist(ruleUpdates: RuleNotificationUpdate[], delivere
 /**
  * Decide qué avisos mandar hoy a un usuario. Es pura para poder testearla;
  * el cron se encarga de leer Firestore, enviar y persistir las actualizaciones.
+ * Un mantenimiento que volvió a estar al día se limpia para que avise en el próximo ciclo. El pedido de
+ * km no se guarda en ningún lado, así que nunca se recorta: si no entra todo, los de varios autos van en
+ * un solo mensaje (desde el inicio se cargan los km de cada uno) con lugar reservado. Si no entran todos
+ * los avisos, van primero los vencidos y después los por vencer (los más urgentes antes).
  */
 export function planDailyNotifications(input: {
   settings: UserSettings
@@ -76,7 +83,6 @@ export function planDailyNotifications(input: {
 }): { messages: PushPayload[]; ruleUpdates: RuleNotificationUpdate[] } {
   const { settings, cars, rules, today, now } = input
   const ruleUpdates: RuleNotificationUpdate[] = []
-  // Cada aviso de mantenimiento con la actualización a guardar si se manda.
   const ruleCandidates: { message: PushPayload; update: RuleNotificationUpdate; state: RuleState }[] = []
   const kmMessages: PushPayload[] = []
 
@@ -98,8 +104,6 @@ export function planDailyNotifications(input: {
     const state = getRuleState(rule, car, today)
 
     if (state.status !== 'soon' && state.status !== 'overdue') {
-      // Volvió a estar al día (se hizo el mantenimiento): limpiar para que avise en el próximo ciclo.
-      // Las que pasan el tope se limpian en la próxima corrida.
       if (rule.lastNotifiedStatus && ruleUpdates.length < MAX_CLEARS_PER_RUN)
         ruleUpdates.push({ ruleId: rule.id, lastNotifiedStatus: null, notified: false })
       continue
@@ -123,22 +127,18 @@ export function planDailyNotifications(input: {
     })
   }
 
-  // El pedido de km no se guarda en ningún lado, así que nunca se recorta: si no entra todo, los de
-  // varios autos van en un solo mensaje (desde el inicio se cargan los km de cada uno) con lugar reservado.
   const allFit = ruleCandidates.length + kmMessages.length <= MAX_MESSAGES_PER_RUN
   const km =
     allFit || kmMessages.length <= 1
       ? kmMessages
       : [{ title: '¿Cuántos km tienen tus autos?', body: `Tocá para cargar los km de tus ${cars.length} autos.`, url: '/', tag: KM_TAG }]
 
-  // Si no entran todos los avisos: primero los vencidos, después los por vencer (los más urgentes antes).
   ruleCandidates.sort((a, b) => compareRuleStates(a.state, b.state))
   const ruleSlots = MAX_MESSAGES_PER_RUN - km.length
   const fits = ruleCandidates.length <= ruleSlots
   const kept = fits ? ruleCandidates : ruleCandidates.slice(0, ruleSlots - 1)
 
   const messages = [...kept.map(c => c.message), ...km]
-  // Sólo se guardan como avisados los que se mandan; el resto vuelve a salir en otra corrida.
   for (const c of kept) ruleUpdates.push(c.update)
   if (!fits) {
     const rest = ruleCandidates.length - kept.length

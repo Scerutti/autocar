@@ -67,8 +67,8 @@ export function RuleProgress({ progress, status, className }: { progress: number
   )
 }
 
+/** Tonos decorativos por auto; se evitan verde/amarillo/rojo para no confundirlos con los estados. */
 export const CAR_ACCENTS = [
-  // Tonos decorativos por auto; se evitan verde/amarillo/rojo para no confundirlos con los estados.
   'from-primary/20 via-primary/5',
   'from-violet-400/20 via-violet-400/5',
   'from-fuchsia-400/15 via-fuchsia-400/5',

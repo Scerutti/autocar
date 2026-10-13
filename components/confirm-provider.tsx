@@ -34,6 +34,7 @@ const ConfirmContext = createContext<Confirm | null>(null)
 /**
  * Un único diálogo de confirmación para toda la app: `if (!(await confirm({...}))) return`.
  * Resuelve true sólo con el botón de confirmar; Cancelar, Escape o abrir otra confirmación dan false.
+ * El contenido se limpia recién cuando terminó la animación de cierre.
  */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<ConfirmOptions | null>(null)
@@ -66,7 +67,6 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       <AlertDialog
         open={open}
         onOpenChange={next => !next && settle(false)}
-        // El contenido se limpia recién cuando terminó la animación de cierre.
         onOpenChangeComplete={next => !next && setRequest(null)}
       >
         <AlertDialogContent initialFocus={danger ? cancelRef : confirmRef}>

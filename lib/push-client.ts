@@ -15,9 +15,9 @@ export function isStandalone() {
   )
 }
 
+/** Si este dispositivo puede recibir push. En iPhone sólo hay push si la app está agregada a la pantalla de inicio. */
 export function pushSupport(): PushSupport {
   if (typeof window === 'undefined') return 'unsupported'
-  // En iPhone sólo hay push si la app está agregada a la pantalla de inicio.
   if (isIOS() && !isStandalone()) return 'needs-install'
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return 'unsupported'
   return 'supported'

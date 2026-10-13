@@ -1,6 +1,7 @@
-// Límites de las fotos, compartidos por el navegador (que achica antes de subir) y el servidor (que firma la subida).
-
-/** Lado más largo con el que se guarda una foto, en px. */
+/**
+ * Lado más largo con el que se guarda una foto, en px. Los límites de este módulo los comparten el
+ * navegador (que achica antes de subir) y el servidor (que firma la subida).
+ */
 export const PHOTO_MAX_SIDE = 1600
 
 /**

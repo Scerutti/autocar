@@ -9,7 +9,6 @@ describe('topReading', () => {
     expect(topReading(readings)).toBe(readings[1])
   })
   it('manda el km aunque la lectura más alta tenga una fecha anterior', () => {
-    // Una carga offline sincroniza tarde: no por ser la última en llegar baja el km.
     const readings = [reading(50_500, '2026-09-01'), reading(50_200, '2026-09-05')]
     expect(topReading(readings)).toBe(readings[0])
   })

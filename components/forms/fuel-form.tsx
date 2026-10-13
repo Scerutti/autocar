@@ -27,12 +27,17 @@ import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@
 
 type PriceMode = 'unit' | 'total'
 
-// Para reconocer la premium en el surtidor.
+/** Para reconocer la premium en el surtidor. */
 const PREMIUM_HINTS: Partial<Record<FuelType, string>> = {
   nafta: 'Premium es la Infinia, V-Power o Quantium.',
   gasoil: 'Premium es el Infinia Diesel, V-Power Diesel o Quantium Diesel.',
 }
 
+/**
+ * Alta y edición de una carga de combustible. Al editar una carga vieja se respeta su combustible aunque el
+ * auto haya cambiado. Precio y estación se sugieren desde la carga más reciente de ese combustible (y de esa
+ * calidad, si se indica), también al cambiar de combustible o de calidad.
+ */
 export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -40,10 +45,8 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const { fuel: carFuel } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
-  // Lo que se le carga a este auto. Al editar una carga vieja se respeta su combustible aunque el auto haya cambiado.
   const types = load && !car.fuelTypes.includes(load.fuelType) ? [...car.fuelTypes, load.fuelType] : car.fuelTypes
   const liquid = types.find(isLiquidFuel) ?? 'nafta'
-  // La carga más reciente de ese combustible (y de esa calidad, si se indica): sugiere precio y estación.
   const lastOf = (t: FuelType, g?: FuelGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
   const initialType: FuelType = load?.fuelType ?? carFuel.find(f => types.includes(f.fuelType))?.fuelType ?? types[0]
   const initialGrade: FuelGrade = load?.grade ?? lastOf(isLiquidFuel(initialType) ? initialType : liquid)?.grade ?? 'super'
@@ -68,7 +71,6 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
     total: mode === 'total' ? priceNum : null,
   })
 
-  // Al cambiar de combustible o de calidad, sugerir el último precio que pagaste por esa.
   function suggestFrom(t: FuelType, g: FuelGrade | null) {
     if (load) return
     const last = lastOf(t, g)
@@ -87,7 +89,6 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   }
 
   function changeMode(m: PriceMode) {
-    // Al cambiar de modo, convertir el valor ya cargado.
     if (amounts) setPrice(toNumberInput(m === 'unit' ? amounts.unitPrice : amounts.total))
     setMode(m)
   }

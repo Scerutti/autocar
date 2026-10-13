@@ -3,9 +3,6 @@ import { formatDate, formatKm, formatMoney } from './format'
 import type { RuleStatus, RuleWithState } from './maintenance'
 import { FUEL_LABELS, JOB_CATEGORY_LABELS, type Car, type ISODate, type Job } from './types'
 
-// Datos del PDF "Historial de mantenimiento": sólo trabajos (no cargas de combustible) y el estado
-// de los mantenimientos periódicos. Es pura para poder testearla; el dibujo está en components/report.
-
 export type ReportPeriod = 'all' | '1y' | '3y' | 'custom'
 
 export interface ReportOptions {
@@ -71,6 +68,11 @@ export function pdfText(s: string): string {
 
 const optional = (s: string | null | undefined) => (s ? pdfText(s) || null : null)
 
+/**
+ * Datos del PDF "Historial de mantenimiento": sólo trabajos (no cargas de combustible) y el estado de
+ * los mantenimientos periódicos (los de una sola vez, como "volver al taller", son recordatorios, no
+ * historial). Es pura para poder testearla; el dibujo está en components/report.
+ */
 export function buildServiceReport(input: {
   car: Car
   jobs: Job[]
@@ -84,7 +86,6 @@ export function buildServiceReport(input: {
     .filter(j => j.carId === car.id && (!from || j.date >= from))
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime())
 
-  // Sólo los periódicos: los de una sola vez ("volver al taller") son recordatorios, no historial.
   const rules = input.rules
     .filter(({ rule }) => rule.repeat)
     .map(({ rule, state }) => {

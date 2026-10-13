@@ -1,10 +1,11 @@
 import type { FuelGrade, FuelType, IntervalUnit, TimeInterval } from './types'
 
-// Lectura tolerante de documentos de Firestore, compartida por el cliente y el cron.
-
 const UNITS: IntervalUnit[] = ['day', 'week', 'month', 'year']
 
-/** Intervalo de tiempo de un mantenimiento (acepta el formato viejo `intervalMonths`). */
+/**
+ * Intervalo de tiempo de un mantenimiento (acepta el formato viejo `intervalMonths`). Como el resto de
+ * este módulo, lee documentos de Firestore de forma tolerante y lo comparten el cliente y el cron.
+ */
 export function intervalFromDoc(x: Record<string, unknown>): TimeInterval | null {
   const t = x.intervalTime as { amount?: unknown; unit?: unknown } | null | undefined
   if (t && typeof t.amount === 'number' && t.amount > 0 && UNITS.includes(t.unit as IntervalUnit)) {
