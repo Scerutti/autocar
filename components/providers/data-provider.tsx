@@ -1,9 +1,10 @@
 'use client'
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { subscribeUserData, type UserData } from '@/lib/db'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { subscribeUserData, syncCarKm, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
 import { rulesWithState, type RuleWithState } from '@/lib/maintenance'
+import { topReading } from '@/lib/odometer'
 import { DEFAULT_SETTINGS, type Car } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
@@ -28,17 +29,27 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const uid = user!.uid
   const [data, setData] = useState<UserData>(EMPTY)
   const [loaded, setLoaded] = useState<Set<keyof UserData>>(new Set())
+  // Partes cuya última foto vino del servidor (no de la caché local).
+  const [synced, setSynced] = useState<Set<keyof UserData>>(new Set())
   const [error, setError] = useState<Error | null>(null)
   const [today, setToday] = useState(() => toISODate(new Date()))
 
   useEffect(() => {
     setData(EMPTY)
     setLoaded(new Set())
+    setSynced(new Set())
     return subscribeUserData(
       uid,
-      (patch, part) => {
+      (patch, part, fromCache) => {
         setData(d => ({ ...d, ...patch }))
         setLoaded(s => (s.has(part) ? s : new Set(s).add(part)))
+        setSynced(s => {
+          if (s.has(part) === !fromCache) return s
+          const next = new Set(s)
+          if (fromCache) next.delete(part)
+          else next.add(part)
+          return next
+        })
       },
       setError,
     )
@@ -50,8 +61,39 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id)
   }, [])
 
+  // Si el km guardado en el auto no coincide con sus lecturas, lo corrige (el cron lee el guardado).
+  // Siempre lo lleva a la lectura más alta, así dos dispositivos no se pelean. Sólo corre con autos y
+  // lecturas confirmados por el servidor: con la caché local podría faltar una lectura de otro dispositivo
+  // y bajaría el km. Espera un momento a que se asienten; una corrección que falló no se reintenta.
+  const fixing = useRef(new Set<string>())
+  const kmReady = synced.has('cars') && synced.has('odometer')
+  useEffect(() => {
+    if (!kmReady) return
+    const id = setTimeout(() => {
+      for (const car of data.cars) {
+        const readings = data.odometer.filter(r => r.carId === car.id)
+        const top = topReading(readings)
+        if (!top || top.km === car.currentKm) continue
+        const key = `${car.id}:${top.km}`
+        if (fixing.current.has(key)) continue
+        fixing.current.add(key)
+        syncCarKm(uid, car.id, readings)
+          .then(() => fixing.current.delete(key))
+          .catch(e => console.warn('No se pudo corregir el km del auto', car.id, e))
+      }
+    }, 2000)
+    return () => clearTimeout(id)
+  }, [data.cars, data.odometer, kmReady, uid])
+
   const value = useMemo<DataState>(() => {
-    const cars = [...data.cars].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    // El km que se muestra sale de las lecturas (la más alta manda), no sólo de lo guardado en el auto,
+    // que puede haber quedado viejo hasta que se corrige.
+    const cars = data.cars
+      .map(c => {
+        const top = topReading(data.odometer.filter(r => r.carId === c.id))
+        return top && top.km !== c.currentKm ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
+      })
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))
     const rulesByCar = new Map<string, RuleWithState[]>()
     for (const car of cars) {
