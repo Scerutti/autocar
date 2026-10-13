@@ -1,6 +1,7 @@
 'use client'
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app'
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
 import { getAuth, type Auth } from 'firebase/auth'
 import {
   getFirestore,
@@ -24,10 +25,18 @@ export const isFirebaseConfigured = Boolean(config.apiKey && config.projectId &&
 let app: FirebaseApp | undefined
 let auth: Auth | undefined
 let db: Firestore | undefined
+let appCheckReady = false
 
 function firebaseApp() {
   if (!isFirebaseConfigured) throw new Error('Firebase no está configurado: completá las variables NEXT_PUBLIC_FIREBASE_* en .env.local')
   app ??= getApps().length ? getApp() : initializeApp(config)
+  // App Check (reCAPTCHA Enterprise): Firestore sólo acepta pedidos que vienen de la app, no de un script.
+  // Va antes del primer uso de Firestore. Sin la variable queda apagado.
+  const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY
+  if (!appCheckReady && siteKey && typeof window !== 'undefined') {
+    initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(siteKey), isTokenAutoRefreshEnabled: true })
+    appCheckReady = true
+  }
   return app
 }
 

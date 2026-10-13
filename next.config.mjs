@@ -20,6 +20,9 @@ const csp = [
     "'wasm-unsafe-eval'",
     // gapi: lo carga Firebase Auth para el login con Google.
     'https://apis.google.com',
+    // reCAPTCHA Enterprise de App Check (sólo se carga con NEXT_PUBLIC_RECAPTCHA_SITE_KEY).
+    'https://www.google.com/recaptcha/',
+    'https://www.gstatic.com/recaptcha/',
     // React usa eval en desarrollo para las trazas de error.
     isDev && "'unsafe-eval'",
   ],
@@ -35,14 +38,24 @@ const csp = [
   "font-src 'self' data:",
   [
     "connect-src 'self'",
-    // Firestore (incluidos los streams), identitytoolkit/securetoken del login y www.googleapis.com.
+    // Firestore (incluidos los streams), identitytoolkit/securetoken del login, www.googleapis.com
+    // y content-firebaseappcheck.googleapis.com (App Check).
     'https://*.googleapis.com',
+    // reCAPTCHA Enterprise de App Check.
+    'https://www.google.com/recaptcha/',
     // Subida firmada de fotos.
     'https://api.cloudinary.com',
     // HMR de Next en desarrollo.
     isDev && 'ws: wss:',
   ],
-  ['frame-src', "'self'", ...(authFrames.length ? authFrames : ['https://*.firebaseapp.com'])],
+  [
+    'frame-src',
+    "'self'",
+    ...(authFrames.length ? authFrames : ['https://*.firebaseapp.com']),
+    // iframe de reCAPTCHA Enterprise (App Check).
+    'https://www.google.com/recaptcha/',
+    'https://recaptcha.google.com/recaptcha/',
+  ],
   // Service worker de los push (/sw.js).
   "worker-src 'self'",
   "manifest-src 'self'",
