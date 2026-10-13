@@ -126,10 +126,14 @@ export function CarForm({ car }: { car?: Car }) {
 
     const ok = await run(async () => {
       const oldPublicId = car?.photoPublicId ?? null
+      // Borrar en Cloudinary es "mejor esfuerzo": si falla, no frena el guardado.
+      const dropImage = (publicId: string) => getToken().then(t => deleteImage(publicId, t)).catch(() => {})
+      let uploadedId: string | null = null
       if (photo) {
         setStatus('Subiendo foto…')
         const token = await getToken()
         const up = await uploadImage(photo, token)
+        uploadedId = up.publicId
         data.photoUrl = up.url
         data.photoPublicId = up.publicId
       } else if (removePhoto) {
@@ -138,10 +142,15 @@ export function CarForm({ car }: { car?: Car }) {
       }
       setStatus('Guardando…')
       const carId = car?.id ?? newId(uid, 'cars')
-      const saved: SaveStatus = car
-        ? await settle(updateCar(uid, car.id, data))
-        : await settle(createCar(uid, data, kmNum!, carId))
-      if (oldPublicId && (photo || removePhoto)) void deleteImage(oldPublicId, await getToken())
+      const write: Promise<unknown> = car ? updateCar(uid, car.id, data) : createCar(uid, data, kmNum!, carId)
+      // Si el servidor rechaza el guardado (enseguida o al volver la señal), la foto nueva no la usa nadie:
+      // la borramos para que no quede huérfana en Cloudinary.
+      const newPublicId = uploadedId
+      if (newPublicId) write.catch(() => dropImage(newPublicId))
+      const saved: SaveStatus = await settle(write)
+      // La foto vieja se borra recién cuando el servidor confirma: si rechaza el cambio, el auto la sigue usando.
+      // No lo esperamos: sin señal quedaría colgado hasta que vuelva.
+      if (oldPublicId && (photo || removePhoto)) write.then(() => dropImage(oldPublicId), () => {})
       if (car) toastSaved('Cambios guardados', saved)
       else toastSaved('Auto agregado', saved, 'Ahora sumale los mantenimientos: service, VTV, seguro…')
       router.replace(`/autos/${carId}`)
