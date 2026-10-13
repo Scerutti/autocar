@@ -362,6 +362,8 @@ export interface FollowUp {
  * Guarda un trabajo. Los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
  * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una
  * sola vez se borran. Si el km es mayor al actual se registra, y opcionalmente agenda la vuelta al taller.
+ * Cada mantenimiento marcado se escribe aparte del trabajo y de los demás: si alguno ya no existe (borrado
+ * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo.
  */
 export async function saveJob(
   uid: string,
@@ -370,20 +372,23 @@ export async function saveJob(
   jobId?: string,
   followUp?: FollowUp | null,
 ) {
-  const batch = writeBatch(firestore())
+  const jobBatch = writeBatch(firestore())
   const id = jobId ?? newId(uid, 'jobs')
   const existing = jobId ? {} : { createdAt: Timestamp.now() }
-  batch.set(doc(col(uid, 'jobs'), id), { ...data, ...existing }, { merge: true })
+  jobBatch.set(doc(col(uid, 'jobs'), id), { ...data, ...existing }, { merge: true })
 
   const doneKm = data.km ?? ctx.car.currentKm
+  const ruleBatches: { ruleId: string; batch: WriteBatch }[] = []
   for (const rule of ctx.rules.filter(r => data.ruleIds.includes(r.id))) {
     const isNewer = !rule.lastDoneDate || data.date >= rule.lastDoneDate
     if (!isNewer) continue
+    const ruleBatch = writeBatch(firestore())
+    ruleBatches.push({ ruleId: rule.id, batch: ruleBatch })
     if (!rule.repeat) {
-      batch.delete(doc(col(uid, 'rules'), rule.id))
+      ruleBatch.delete(doc(col(uid, 'rules'), rule.id))
       continue
     }
-    batch.update(doc(col(uid, 'rules'), rule.id), {
+    ruleBatch.update(doc(col(uid, 'rules'), rule.id), {
       lastDoneKm: rule.intervalKm != null ? doneKm : rule.lastDoneKm,
       lastDoneDate: data.date,
       lastNotifiedAt: null,
@@ -391,7 +396,7 @@ export async function saveJob(
     })
   }
   if (followUp) {
-    batch.set(doc(col(uid, 'rules')), {
+    jobBatch.set(doc(col(uid, 'rules')), {
       carId: ctx.car.id,
       name: followUp.name,
       intervalKm: null,
@@ -405,9 +410,15 @@ export async function saveJob(
     })
   }
   if (data.km != null && data.km > ctx.car.currentKm) {
-    addReadingToBatch(batch, uid, ctx.car, ctx.readings, data.km, 'job')
+    addReadingToBatch(jobBatch, uid, ctx.car, ctx.readings, data.km, 'job')
   }
-  await batch.commit()
+  // Se commitea primero el trabajo (Firestore respeta el orden). Los mantenimientos no se esperan:
+  // sin conexión quedaría colgado, y si alguno falla el trabajo ya está a salvo.
+  const saved = jobBatch.commit()
+  for (const r of ruleBatches) {
+    r.batch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', id, r.ruleId, e))
+  }
+  await saved
   return id
 }
 
