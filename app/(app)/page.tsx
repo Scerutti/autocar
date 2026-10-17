@@ -2,17 +2,20 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, CarFront, ChevronRight, Plus } from 'lucide-react'
+import { AlertTriangle, CarFront, ChevronRight, Gauge, Plus } from 'lucide-react'
 import { AchievementsCard } from '@/components/achievements/achievements-card'
 import { ActivityList, mergeActivity } from '@/components/activity'
 import { CarCard } from '@/components/car-card'
 import { BrandMark } from '@/components/brand'
 import { EmptyState, LinkButton, PageBody, PageHeader, SectionTitle, StatusBadge, carName } from '@/components/common'
 import { KmDialog } from '@/components/km-form'
+import { PendingBell } from '@/components/pending/pending-bell'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
+import { Button } from '@/components/ui/button'
 import { formatToday } from '@/lib/format'
 import { describeRemaining } from '@/lib/maintenance'
+import { kmDueDay, kmDueSince } from '@/lib/pending'
 
 function greeting() {
   const h = new Date().getHours()
@@ -21,9 +24,13 @@ function greeting() {
 
 export default function HomePage() {
   const { user } = useAuth()
-  const { cars, rulesByCar, jobs, fuel, carById } = useData()
+  const { cars, rulesByCar, jobs, fuel, carById, settings, today } = useData()
   const [kmCarId, setKmCarId] = useState<string | null>(null)
   const kmCar = kmCarId ? carById.get(kmCarId) : null
+  const kmDue = cars.flatMap(car => {
+    const since = kmDueSince(settings, car, today)
+    return since ? [{ car, since }] : []
+  })
 
   const alerts = cars.flatMap(car =>
     (rulesByCar.get(car.id) ?? [])
@@ -40,9 +47,12 @@ export default function HomePage() {
         title={`${greeting()}${firstName ? `, ${firstName}` : ''}`}
         leading={<BrandMark className="size-11 lg:hidden" />}
         actions={
-          <LinkButton href="/autos/nuevo" aria-label="Agregar auto" size="icon" className="size-9">
-            <Plus />
-          </LinkButton>
+          <>
+            <LinkButton href="/autos/nuevo" aria-label="Agregar auto" size="icon" className="size-9">
+              <Plus />
+            </LinkButton>
+            <PendingBell />
+          </>
         }
       />
       <PageBody>
@@ -59,13 +69,38 @@ export default function HomePage() {
           />
         ) : (
           <>
+            {kmDue.length > 0 && (
+              <section aria-label="Km pendientes" className="mb-8 space-y-3">
+                {kmDue.map(({ car, since }) => (
+                  <div key={car.id} className="flex items-center gap-3 rounded-xl border border-warning/25 bg-warning/5 p-4">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+                      <Gauge className="size-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">Te faltan los km de tu {carName(car)}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">Te los pedimos {kmDueDay(since, today)}. Así los avisos de mantenimiento llegan a tiempo.</p>
+                    </div>
+                    <Button onClick={() => setKmCarId(car.id)} className="h-9 shrink-0 gap-1.5">
+                      <Gauge /> Cargar
+                    </Button>
+                  </div>
+                ))}
+              </section>
+            )}
             <SectionTitle
               title="Tus autos"
               subtitle={alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'cosa para revisar' : 'cosas para revisar'}.` : 'Todo bajo control, sin sorpresas.'}
             />
             <div className="grid gap-5 xl:grid-cols-2">
               {cars.map((car, i) => (
-                <CarCard key={car.id} car={car} index={i} rules={rulesByCar.get(car.id) ?? []} onUpdateKm={() => setKmCarId(car.id)} />
+                <CarCard
+                  key={car.id}
+                  car={car}
+                  index={i}
+                  rules={rulesByCar.get(car.id) ?? []}
+                  kmDue={kmDue.some(k => k.car.id === car.id)}
+                  onUpdateKm={() => setKmCarId(car.id)}
+                />
               ))}
             </div>
 

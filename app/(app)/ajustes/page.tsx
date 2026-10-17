@@ -1,8 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Bell, BellOff, CalendarDays, LogOut, Send, Share, Smartphone } from 'lucide-react'
+import Link from 'next/link'
+import { Bell, BellOff, CalendarDays, ChevronRight, LogOut, Send, Share, Smartphone, Sparkles } from 'lucide-react'
 import { useConfirm } from '@/components/confirm-provider'
+import { DismissibleHint } from '@/components/dismissible-hint'
+import { useNovedades } from '@/components/novedades/use-novedades'
+import { PendingBell } from '@/components/pending/pending-bell'
 import { Button } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
 import { Checkbox } from '@/components/ui/form'
@@ -150,13 +154,12 @@ function Notifications() {
     <Section title="Notificaciones" description="Te avisamos de mantenimientos por vencer y te pedimos los km una vez por semana.">
       <div className="space-y-6">
         {support === 'needs-install' && (
-          <div className="flex gap-3 rounded-xl border border-warning/20 bg-warning/5 p-4 text-sm">
-            <Smartphone aria-hidden className="size-5 shrink-0 text-warning" />
+          <DismissibleHint id="instalar-iphone" icon={Smartphone}>
             <p>
               En iPhone las notificaciones funcionan sólo con la app instalada: tocá <Share className="inline size-4" /> <b>Compartir</b> y después{' '}
               <b>Agregar a inicio</b>. Abrila desde el ícono y volvé a esta pantalla.
             </p>
-          </div>
+          </DismissibleHint>
         )}
         {support === 'unsupported' && <p className="text-sm text-muted-foreground">Este navegador no soporta notificaciones push.</p>}
         {support === 'supported' && (
@@ -195,6 +198,26 @@ function Notifications() {
   )
 }
 
+/** Entrada a la sección de novedades, con un punto si hay alguna sin ver. */
+function NovedadesLink() {
+  const { unseen } = useNovedades()
+  return (
+    <Link href="/novedades" className="flex items-center gap-3 rounded-2xl border border-white/8 bg-card/60 p-5 hover:bg-card/80">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <Sparkles className="size-5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <h2 className="flex items-center gap-2 font-semibold">
+          Novedades
+          {unseen.length > 0 && <span className="size-2 rounded-full bg-primary" aria-label="Hay novedades sin ver" />}
+        </h2>
+        <p className="mt-0.5 text-sm text-muted-foreground">Qué hay de nuevo en cada versión de la app.</p>
+      </div>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+    </Link>
+  )
+}
+
 export default function SettingsPage() {
   const { user, signOut } = useAuth()
   const confirm = useConfirm()
@@ -213,7 +236,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Ajustes" />
+      <PageHeader title="Ajustes" actions={<PendingBell />} />
       <PageBody className="mx-auto max-w-2xl space-y-5">
         <Section title="Cuenta">
           <div className="flex items-center justify-between gap-4">
@@ -237,6 +260,7 @@ export default function SettingsPage() {
           </div>
         </Section>
         <Notifications />
+        <NovedadesLink />
         <footer className="pt-2 text-center text-xs text-muted-foreground">
           AutoCar v{process.env.APP_VERSION}
           {process.env.APP_COMMIT && <span className="font-mono"> · {process.env.APP_COMMIT}</span>}

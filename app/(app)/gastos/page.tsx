@@ -6,6 +6,7 @@ import { Wallet } from 'lucide-react'
 import { CarFilter } from '@/components/car-filter'
 import { CategoryBars, ChartCard, Legend, MonthlyBars } from '@/components/charts'
 import { EmptyState, Loading, PageBody, PageHeader } from '@/components/common'
+import { PendingBell } from '@/components/pending/pending-bell'
 import { Select } from '@/components/ui/select'
 import { useData } from '@/components/providers/data-provider'
 import { expenseYears, summarizeExpenses } from '@/lib/expenses'
@@ -42,7 +43,10 @@ function Expenses() {
         title="Gastos"
         subtitle="Trabajos y combustible."
         actions={
-          <Select value={year} onChange={setYear} items={years.map(y => ({ value: y, label: String(y) }))} className="h-10 w-28" aria-label="Año" />
+          <>
+            <Select value={year} onChange={setYear} items={years.map(y => ({ value: y, label: String(y) }))} className="h-10 w-28" aria-label="Año" />
+            <PendingBell />
+          </>
         }
       />
       <PageBody className="space-y-6">

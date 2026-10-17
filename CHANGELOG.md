@@ -2,6 +2,21 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.1.0
+
+Pendientes, novedades y avisos que se pueden ocultar.
+
+### Novedades
+
+- **Pendientes**: una campanita en la cabecera de las pantallas principales junta lo que hay para hacer: los km del recordatorio semanal, los mantenimientos vencidos y los por vencer. El número cuenta los vencidos y los km. Sale de los datos, no de las notificaciones: lo resuelto desaparece solo, aunque se haya descartado el aviso del celular.
+- **Km de la semana en el Inicio**: si faltan los km del recordatorio, el Inicio lo avisa con un botón para cargarlos, y la tarjeta del auto lo marca.
+- **Novedades**: sección nueva (desde Ajustes o la campanita) con lo nuevo de cada versión contado para el usuario. Las versiones destacadas se anuncian una vez con una ventana. Lo visto se guarda en el dispositivo, y a una cuenta nueva no se le anuncia lo que ya encontró hecho.
+- **Avisos que se pueden ocultar**: el consejo para instalar la app en iPhone tiene "No mostrar más", con opción de deshacer.
+
+### Mantenimiento
+
+- Lo nuevo para el usuario vive en `lib/novedades.ts`, aparte de este CHANGELOG. Cada versión con cambios visibles suma ahí su entrada.
+
 ## 1.0.3
 
 Arreglos de la auditoría de código: datos que se podían perder o quedar mal, y una app más robusta ante errores. Para el usuario la app funciona igual, salvo el botón "Reintentar".
