@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { AchievementsProvider } from '@/components/achievements/achievements-provider'
 import { AppShell } from '@/components/app-shell'
 import { BrandLogo } from '@/components/brand'
+import { NovedadesHost } from '@/components/novedades/novedades-host'
 import { Loading } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/providers/auth-provider'
@@ -87,7 +88,10 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
       ) : loading ? (
         <Loading />
       ) : (
-        <AchievementsProvider>{children}</AchievementsProvider>
+        <AchievementsProvider>
+          {children}
+          <NovedadesHost />
+        </AchievementsProvider>
       )}
     </AppShell>
   )

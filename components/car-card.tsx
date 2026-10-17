@@ -15,11 +15,14 @@ export function CarCard({
   car,
   index,
   rules,
+  kmDue = false,
   onUpdateKm,
 }: {
   car: Car
   index: number
   rules: RuleWithState[]
+  /** Faltan los km del recordatorio semanal: se resalta el botón para cargarlos. */
+  kmDue?: boolean
   onUpdateKm: () => void
 }) {
   const next = rules[0]
@@ -58,8 +61,13 @@ export function CarCard({
               {formatNumber(car.currentKm)} <span className="text-sm font-normal text-muted-foreground">km</span>
             </p>
           </div>
-          {car.kmUpdatedAt && (
-            <p className="pb-1 text-right text-[11px] text-muted-foreground">Actualizado {timeAgo(car.kmUpdatedAt)}</p>
+          {kmDue ? (
+            <p className="pb-1 text-right text-[11px] font-medium text-warning">
+              Faltan los km de la semana
+              {car.kmUpdatedAt && <span className="block font-normal text-muted-foreground">Actualizado {timeAgo(car.kmUpdatedAt)}</span>}
+            </p>
+          ) : (
+            car.kmUpdatedAt && <p className="pb-1 text-right text-[11px] text-muted-foreground">Actualizado {timeAgo(car.kmUpdatedAt)}</p>
           )}
         </div>
         {next ? (
@@ -85,7 +93,7 @@ export function CarCard({
             <Plus className="size-4" /> Agregá el primer mantenimiento (service, VTV…)
           </Link>
         )}
-        <Button onClick={onUpdateKm} className="h-10 w-full gap-2 bg-foreground text-background hover:bg-foreground/90">
+        <Button onClick={onUpdateKm} className={cn('h-10 w-full gap-2', !kmDue && 'bg-foreground text-background hover:bg-foreground/90')}>
           <Gauge /> Cargar km
         </Button>
       </CardContent>

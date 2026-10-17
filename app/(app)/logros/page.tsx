@@ -6,6 +6,7 @@ import { ProgressBar, ProgressRing } from '@/components/achievements/achievement
 import { useAchievements } from '@/components/achievements/achievements-provider'
 import { Medal } from '@/components/achievements/medal'
 import { EmptyState, LinkButton, PageBody, PageHeader, carName } from '@/components/common'
+import { PendingBell } from '@/components/pending/pending-bell'
 import { useData } from '@/components/providers/data-provider'
 import { Segmented } from '@/components/ui/choice'
 import {
@@ -93,7 +94,7 @@ export default function AchievementsPage() {
 
   return (
     <>
-      <PageHeader title="Logros" subtitle="Pequeños logros, grandes cuidados." />
+      <PageHeader title="Logros" subtitle="Pequeños logros, grandes cuidados." actions={<PendingBell />} />
       <PageBody className="space-y-8">
         {cars.length === 0 && unlocked === 0 ? (
           <EmptyState

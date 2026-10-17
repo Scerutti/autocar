@@ -63,6 +63,8 @@ AutoCar es una app web para el celular (se instala como app) que te avisa cuánd
 
 - **Varios autos** por cuenta, cada uno con su foto.
 - **Notificaciones** en el celular cuando un mantenimiento está por vencer o se venció (en iPhone, con la app agregada a la pantalla de inicio).
+- **Pendientes**: la campanita junta los km por cargar y los mantenimientos vencidos o por vencer, aunque hayas descartado la notificación.
+- **Novedades**: lo nuevo de cada versión, contado en una sección de la app.
 - **Funciona sin señal**: lo que cargás en la estación de servicio se guarda y se sincroniza cuando vuelve la conexión.
 - **Antes de guardar o borrar, la app te pide que confirmes**, y casi todo lo que borrás se puede deshacer.
 - Tus datos son tuyos: cada cuenta sólo puede ver y cambiar lo suyo.

@@ -6,6 +6,7 @@ import { CarFront, Plus, Wrench } from 'lucide-react'
 import { ActivityList, mergeActivity } from '@/components/activity'
 import { CarFilter } from '@/components/car-filter'
 import { EmptyState, LinkButton, PageBody, PageHeader, carName } from '@/components/common'
+import { PendingBell } from '@/components/pending/pending-bell'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,28 +46,31 @@ export default function JobsPage() {
         title="Historial"
         subtitle="Trabajos y cargas de combustible."
         actions={
-          cars.length > 0 &&
-          (targetCar ? (
-            <LinkButton href={newHref(targetCar.id)} size="icon" aria-label="Agregar" className="size-9">
-              <Plus />
-            </LinkButton>
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger aria-label="Agregar" className={buttonVariants({ size: 'icon', className: 'size-9' })}>
-                <Plus />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                <DropdownMenuGroup>
-                  <DropdownMenuLabel>¿Para qué auto?</DropdownMenuLabel>
-                  {cars.map(c => (
-                    <DropdownMenuLinkItem key={c.id} render={<Link href={newHref(c.id)} />}>
-                      <CarFront /> {carName(c)}
-                    </DropdownMenuLinkItem>
-                  ))}
-                </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ))
+          <>
+            {cars.length > 0 &&
+              (targetCar ? (
+                <LinkButton href={newHref(targetCar.id)} size="icon" aria-label="Agregar" className="size-9">
+                  <Plus />
+                </LinkButton>
+              ) : (
+                <DropdownMenu>
+                  <DropdownMenuTrigger aria-label="Agregar" className={buttonVariants({ size: 'icon', className: 'size-9' })}>
+                    <Plus />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>¿Para qué auto?</DropdownMenuLabel>
+                      {cars.map(c => (
+                        <DropdownMenuLinkItem key={c.id} render={<Link href={newHref(c.id)} />}>
+                          <CarFront /> {carName(c)}
+                        </DropdownMenuLinkItem>
+                      ))}
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ))}
+            <PendingBell />
+          </>
         }
       />
       <PageBody className="space-y-5">
