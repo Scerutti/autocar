@@ -2,6 +2,14 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.1.1
+
+Arreglo del historial en PDF.
+
+### Arreglos
+
+- **Exportar historial en PDF**: el PDF se quedaba en "Armando el PDF…" y no se generaba. La política de seguridad del sitio (CSP) bloqueaba dos cosas que usa la librería del PDF: la carga de su WebAssembly (`connect-src data:`) y el worker que descomprime las imágenes (`worker-src blob:`).
+
 ## 1.1.0
 
 Pendientes, novedades y avisos que se pueden ocultar.
