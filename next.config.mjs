@@ -43,7 +43,7 @@ const csp = [
   ],
   "font-src 'self' data:",
   [
-    "connect-src 'self'",
+    "connect-src 'self' data:",
     'https://*.googleapis.com',
     'https://www.google.com/recaptcha/',
     'https://api.cloudinary.com',
@@ -56,7 +56,7 @@ const csp = [
     'https://www.google.com/recaptcha/',
     'https://recaptcha.google.com/recaptcha/',
   ],
-  "worker-src 'self'",
+  "worker-src 'self' blob:",
   "manifest-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
