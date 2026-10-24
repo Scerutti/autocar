@@ -12,6 +12,7 @@ import { useData } from '@/components/providers/data-provider'
 import { expenseYears, summarizeExpenses } from '@/lib/expenses'
 import { computeCostPerKm } from '@/lib/fuel'
 import { formatMoney, formatMoneyPrecise } from '@/lib/format'
+import { approvedJobs } from '@/lib/sharing'
 import { JOB_CATEGORY_LABELS } from '@/lib/types'
 
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -31,7 +32,7 @@ function Expenses() {
   const now = new Date()
   const [year, setYear] = useState(now.getFullYear())
 
-  const carJobs = carId === 'all' ? jobs : jobs.filter(j => j.carId === carId)
+  const carJobs = approvedJobs(carId === 'all' ? jobs : jobs.filter(j => j.carId === carId))
   const carFuel = carId === 'all' ? fuel : fuel.filter(f => f.carId === carId)
   const years = expenseYears(carJobs, carFuel, now.getFullYear())
   const s = summarizeExpenses(carJobs, carFuel, year, now)

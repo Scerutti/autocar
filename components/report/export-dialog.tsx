@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Download, FileText, Share2 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
@@ -9,6 +9,7 @@ import { Checkbox, Field, FormError, Input } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { carName } from '@/components/common'
 import { buildServiceReport, reportFileName, reportFrom, type ReportPeriod } from '@/lib/report'
+import { approvedJobs } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import type { Car } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -23,14 +24,15 @@ const PERIOD_OPTIONS: { value: ReportPeriod; label: string }[] = [
 type Step = { kind: 'options' } | { kind: 'generating' } | { kind: 'ready'; file: File; url: string; jobs: number }
 
 /**
- * Exportar el historial de trabajos en PDF (p. ej. para mostrarlo al vender el auto).
+ * Exportar el historial de trabajos en PDF (p. ej. para mostrarlo al vender el auto). Sólo entran los trabajos aprobados.
  * En dos pasos: primero las opciones y se genera; después Compartir/Descargar con un toque nuevo,
  * porque el navegador sólo deja compartir justo después de que el usuario toca algo. La librería de PDF
  * se descarga recién al generar, así no pesa en el resto de la app. Cerrar el menú de compartir no es un error.
  */
 export function ExportReportDialog({ car, open, onClose }: { car: Car; open: boolean; onClose: () => void }) {
   const { today } = useData()
-  const { jobs, rules } = useCar(car.id)
+  const { jobs: carJobs, rules } = useCar(car.id)
+  const jobs = useMemo(() => approvedJobs(carJobs), [carJobs])
   const [showCosts, setShowCosts] = useState(false)
   const [period, setPeriod] = useState<ReportPeriod>('all')
   const [from, setFrom] = useState('')

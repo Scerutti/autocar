@@ -15,6 +15,29 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.2.0',
+    date: '2026-10-24',
+    destacado: true,
+    items: [
+      {
+        title: 'Compartí un auto',
+        text: 'En "Editar auto" podés sumar hasta 2 personas con el mail con el que entran con Google. El auto les aparece apenas entran, sin aceptar nada, y con "Avisarle" les mandás el link por WhatsApp.',
+      },
+      {
+        title: 'Qué puede hacer cada uno',
+        text: 'Quien tiene el auto compartido ve todo y carga combustible, km y trabajos. Edita o borra sólo lo que cargó, y puede salir del auto cuando quiera. Editar el auto y el plan de mantenimiento sigue siendo del dueño.',
+      },
+      {
+        title: 'Trabajos para aprobar',
+        text: 'Los trabajos que carga otra persona quedan pendientes hasta que el dueño los aprueba desde la campanita: recién ahí cuentan en gastos y marcan los mantenimientos. Si el dueño lo rechaza, quien lo cargó lo puede corregir y volver a mandar.',
+      },
+      {
+        title: 'Cargado por',
+        text: 'En un auto compartido, cada trabajo, carga y registro de km dice quién lo cargó. Y los logros de cada uno cuentan sólo lo suyo.',
+      },
+    ],
+  },
+  {
     version: '1.1.0',
     date: '2026-10-17',
     destacado: true,

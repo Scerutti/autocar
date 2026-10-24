@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Fuel, Trash2 } from 'lucide-react'
+import { CreatedBy, ReadOnlyDetails } from '@/components/activity'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
@@ -13,6 +14,7 @@ import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { entryKmWarning } from '@/lib/odometer'
+import { canEditEntry } from '@/lib/sharing'
 import {
   FUEL_GRADE_LABELS,
   FUEL_LABELS,
@@ -33,12 +35,40 @@ const PREMIUM_HINTS: Partial<Record<FuelType, string>> = {
   gasoil: 'Premium es el Infinia Diesel, V-Power Diesel o Quantium Diesel.',
 }
 
+/** Una carga que no puedo editar porque la cargó otra persona. */
+function FuelDetails({ car, load }: { car: Car; load: FuelLoad }) {
+  const unit = FUEL_UNITS[load.fuelType]
+  return (
+    <ReadOnlyDetails
+      car={car}
+      record={load}
+      rows={[
+        { label: 'Combustible', value: fuelLabel(load) },
+        { label: 'Cantidad', value: `${formatNumber(load.quantity)} ${unit}` },
+        { label: `Precio por ${unit}`, value: formatMoneyPrecise(load.unitPrice) },
+        { label: 'Total', value: formatMoney(load.total) },
+        { label: 'Fecha', value: formatDate(load.date) },
+        ...(load.km != null ? [{ label: 'Km', value: formatKm(load.km) }] : []),
+        ...(isLiquidFuel(load.fuelType) ? [{ label: 'Tanque lleno', value: load.fullTank ? 'Sí' : 'No' }] : []),
+        ...(load.station ? [{ label: 'Estación', value: load.station }] : []),
+      ]}
+    />
+  )
+}
+
+/** Alta y edición de una carga de combustible. Si la carga no se puede editar (`canEditEntry`), se muestra en modo solo lectura. */
+export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
+  const { uid } = useData()
+  if (load && !canEditEntry(car, uid, load)) return <FuelDetails car={car} load={load} />
+  return <FuelEditor car={car} load={load} />
+}
+
 /**
- * Alta y edición de una carga de combustible. Al editar una carga vieja se respeta su combustible aunque el
+ * Formulario de la carga. Al editar una carga vieja se respeta su combustible aunque el
  * auto haya cambiado. Precio y estación se sugieren desde la carga más reciente de ese combustible (y de esa
  * calidad, si se indica), también al cambiar de combustible o de calidad.
  */
-export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
+function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, today, odometer } = useData()
@@ -161,6 +191,8 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 
   return (
     <form onSubmit={submit} className="mx-auto max-w-xl space-y-6" noValidate>
+      {load && <CreatedBy record={load} car={car} />}
+
       {types.length > 1 && (
         <FieldGroup label="¿Qué cargaste?">
           <Segmented value={fuelType} onChange={changeType} options={types.map(t => ({ value: t, label: FUEL_LABELS[t] }))} />
