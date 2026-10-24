@@ -39,7 +39,7 @@ const CATEGORY_OPTIONS = (Object.keys(JOB_CATEGORY_LABELS) as JobCategory[]).map
 export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { uid, today, odometer } = useData()
+  const { actor, today, odometer } = useData()
   const { rules } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
@@ -107,7 +107,7 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
     const ok = await run(async () => {
       status = await settle(
         saveJob(
-          uid,
+          actor,
           { car, rules: rules.map(r => r.rule), readings: odometer },
           {
             carId: car.id,
@@ -150,8 +150,8 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
     router.replace(`/autos/${car.id}?tab=trabajos`)
     removeWithUndo({
       message: 'Trabajo borrado',
-      remove: () => deleteJob(uid, job.id),
-      restore: () => restoreJob(uid, job),
+      remove: () => deleteJob(actor, job.carId, job.id),
+      restore: () => restoreJob(actor, job),
     })
   }
 
