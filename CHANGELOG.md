@@ -2,7 +2,9 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.1.2
+
+Los autos pasan a una estructura que se puede compartir, como base del grupo familiar. Para el usuario la app funciona igual. Antes de publicar hay que subir las reglas de Firestore y migrar los datos (ver `INSTRUCTIONS.md`, "Migración a `cars/`").
 
 ### Mantenimiento
 
