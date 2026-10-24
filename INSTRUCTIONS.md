@@ -118,7 +118,7 @@ En desarrollo local alcanza con la misma clave, porque `localhost` está entre s
 
 - **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.
 - **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Para eso está App Check con reCAPTCHA Enterprise (ver [Puesta en marcha → 5. App Check](#5-app-check)); si no alcanza, queda cerrar el acceso.
-- **Datos**: cada cuenta sólo lee y escribe `users/{su uid}` (ajustes, push y logros) y los autos de los que es dueña (`cars/{carId}` con `ownerUid` igual a su uid, y sus subcolecciones). Por ahora los autos no se comparten: `members` queda vacío. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
+- **Datos**: cada cuenta sólo lee y escribe `users/{su uid}` (ajustes, push y logros), los autos de los que es dueña (`cars/{carId}` con `ownerUid` igual a su uid, y sus subcolecciones) y, con permisos acotados, los autos que le compartieron (su mail en minúscula en `members`; ver [Autos compartidos](#autos-compartidos)). La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
 - **Reglas de Firestore**: sólo aceptan las colecciones y los campos que guarda la app, con largo máximo en los textos (funciones `valid*` en [`firestore.rules`](firestore.rules)). **Si agregás un campo o una colección, sumalo ahí y volvé a publicar las reglas**: si no, esa escritura falla con `permission-denied` en producción.
 - **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` (comparado en tiempo constante) y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.
 - **Fotos**: la firma de subida incluye un `public_id` único y `overwrite=false`, así cada firma sirve para una sola foto y el límite diario no se saltea.
@@ -154,21 +154,44 @@ Cada auto es un documento de primer nivel, `cars/{carId}`, y sus mantenimientos,
 | Colección | Qué guarda |
 |---|---|
 | `users/{uid}` | ajustes: `reminder { enabled, weekday }`, `timezone` |
-| `cars/{carId}` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto, y el dueño: `ownerUid`, `ownerName` y `members` (hasta 2 mails en minúscula; siempre vacío por ahora) |
+| `cars/{carId}` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto, y el dueño: `ownerUid`, `ownerName` y `members` (hasta 2 mails en minúscula de las personas con las que se compartió; el dueño no figura) |
 | `cars/{carId}/rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, última vez (km/fecha), márgenes de aviso |
-| `cars/{carId}/jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple, `status` (`approved`, `pending` o `rejected`; hoy siempre `approved`, y un trabajo sin el campo cuenta como aprobado) |
+| `cars/{carId}/jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple, `status` (`approved`, `pending` o `rejected`; un trabajo sin el campo cuenta como aprobado) y `reviewedAt` (cuándo el dueño aprobó o rechazó el trabajo de un miembro) |
 | `cars/{carId}/fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
 | `cars/{carId}/odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |
 | `users/{uid}/pushSubscriptions` | dispositivos suscriptos a notificaciones |
 | `users/{uid}/achievements` | logros conseguidos: el id del documento es el del logro; `carId`, `unlockedAt`, `celebratedAt` (null = celebración pendiente) |
 
 - **Autoría**: los trabajos, las cargas y las lecturas guardan `createdBy` (uid) y `createdByName` (nombre de Google o null). Se graban al crear y no cambian al editar; "Deshacer" los conserva. Los mantenimientos no la llevan: el plan de mantenimiento es del dueño. En el cliente, las escrituras de `lib/db.ts` reciben un `actor { uid, name }` (lo da `useData()`).
-- **Lectura**: `subscribeUserData` escucha los autos con `where('ownerUid', '==', uid)` (la regla de lectura depende de ese campo) y abre 4 listeners por auto. No hacen falta índices compuestos.
-- **Reglas**: el permiso de un hijo se decide con el documento del auto: `get()` para leer y borrar, `getAfter()` para crear y editar (así `createCar` puede crear el auto y su primera lectura en el mismo batch).
+- **Lectura**: `subscribeUserData` escucha los autos con dos consultas, `where('ownerUid', '==', uid)` y `where('members', 'array-contains', <mail en minúscula>)` (la regla de lectura depende de esos campos), une los resultados y abre 4 listeners por auto. No hacen falta índices compuestos.
+- **Reglas**: el permiso de un hijo se decide con el documento del auto: `get()` para leer y borrar, `getAfter()` para crear y editar (así `createCar` puede crear el auto y su primera lectura en el mismo batch). Para los miembros, lo mismo con `memberOfCar` y `memberOfCarAfter`.
 - **Borrar un auto**: `deleteCar` borra primero los hijos y el auto al final. Sin el auto, las reglas ya no dejan leer ni borrar sus hijos, y quedarían huérfanos.
 - **Estructura vieja**: `users/{uid}/cars|rules|jobs|fuel|odometer` y sus reglas siguen en pie, sin usarse, por si hay que volver atrás. Se borran en un cambio aparte, cuando todo esté confirmado en producción.
 
 Fuera de `users` y `cars`, y sólo accesibles desde el servidor: `allowlist/{mail}` (cuentas registradas, se completa sola) y `usage/{uid}` (fotos subidas en el día).
+
+### Autos compartidos
+
+El dueño comparte un auto desde "Editar auto" → Compartir, con hasta 2 mails (el mail de Google de cada persona). No hay invitación ni mails: el auto le aparece a la persona apenas entra a la app con ese mail, y **Avisarle** abre el menú de compartir del celular con el link. Los permisos del cliente viven en `lib/sharing.ts` (con tests); las reglas de Firestore dicen lo mismo.
+
+| | Dueño | Miembro |
+|---|---|---|
+| Ver el auto, sus mantenimientos, trabajos, cargas, km y gastos | sí | sí |
+| Editar o borrar el auto, cambiar la foto, compartir | sí | no |
+| Agregar, editar o borrar mantenimientos | sí | no (los ve en solo lectura) |
+| Cargar km y cargas de combustible | sí | sí (el km del auto sube enseguida) |
+| Editar o borrar cargas y registros de km | todos | sólo los suyos |
+| Cargar trabajos | sí, quedan `approved` | sí, quedan `pending`, sin "Volver al taller" |
+| Editar o borrar trabajos | todos | sólo los suyos `pending` o `rejected` |
+| Aprobar o rechazar trabajos | sí | no |
+| Salir del auto | no | sí (saca su mail de `members`) |
+
+- **Estados de un trabajo**: lo crea el dueño → `approved`. Lo crea un miembro → `pending`. El dueño aprueba → `approved` con `reviewedAt`, y recién ahí se aplican los efectos (`approveJob`: mantenimientos hechos y lectura de km a nombre del miembro, con los datos que tiene la app del dueño). El dueño rechaza → `rejected` con `reviewedAt`, sin efectos. El miembro edita un trabajo `pending` o `rejected` → vuelve a `pending`. Un trabajo `pending` o `rejected` no cuenta en gastos, reportes, totales ni logros, pero se ve en las listas con su etiqueta.
+- **Cargado por**: en un auto compartido (con miembros, o que me compartieron) cada registro dice quién lo cargó. Un registro sin `createdBy` cuenta como del dueño. En un auto sin compartir no se ve nada nuevo.
+- **Campanita**: al dueño, los trabajos para revisar (con Aprobar y Rechazar); al miembro, sus trabajos rechazados y "<dueño> te compartió su <auto>", una vez por auto (lo visto se guarda en el dispositivo).
+- **Logros**: cada persona suma sólo lo que cargó ella, y en trabajos sólo lo aprobado. En los autos que le compartieron no cuentan los mantenimientos (el plan es del dueño).
+- **Si la consulta de compartidos falla con `permission-denied`** (la app publicada antes que las reglas), la app sigue sin autos compartidos y deja un aviso en la consola.
+- **Avisos push para los miembros**: todavía no. Los vencimientos y el pedido de km le llegan sólo al dueño.
 
 ## Migración a `cars/`
 

@@ -2,6 +2,26 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.2.0
+
+Compartir un auto con hasta 2 personas, con aprobación de los trabajos que cargan. Las reglas de Firestore nuevas se publican antes del deploy (son compatibles con la 1.1.2). No hace falta migrar datos.
+
+### Novedades
+
+- **Compartir un auto**: en "Editar auto", el dueño suma hasta 2 mails (el de Google de cada persona) y los puede sacar. El auto le aparece a esa persona apenas entra, con "Compartido por <dueño>", sin aceptar nada. **Avisarle** abre el menú de compartir del celular con el link de la app (o copia el mensaje). No se mandan mails.
+- **Qué puede hacer cada uno**: quien tiene el auto compartido ve todo y carga combustible, km y trabajos; edita o borra sólo lo que cargó, y puede salir del auto. No edita ni borra el auto, no cambia la foto ni el plan de mantenimiento, y no ve "Volver al taller". El dueño sigue pudiendo todo.
+- **Trabajos para aprobar**: un trabajo que carga otra persona queda pendiente, sin marcar mantenimientos ni registrar km. El dueño lo aprueba o lo rechaza desde la campanita o desde el trabajo; al aprobarlo se aplican sus efectos. Uno rechazado se puede corregir y volver a mandar, o borrar.
+- **Campanita**: al dueño le muestra los trabajos para revisar, y a quien tiene un auto compartido, sus trabajos rechazados y los autos que le compartieron (una vez por auto).
+- **Cargado por**: en un auto compartido, cada trabajo, carga y registro de km dice quién lo cargó. Lo que no se puede editar se ve en modo solo lectura.
+- **Gastos, reporte en PDF y totales** cuentan sólo los trabajos aprobados. **Los logros** de cada persona cuentan sólo lo que cargó ella (en trabajos, sólo lo aprobado).
+
+### Mantenimiento
+
+- **Reglas de Firestore**: los miembros de un auto (su mail en minúscula en `members`) lo leen con sus mantenimientos, trabajos, cargas y lecturas; cambian del auto sólo el km o su propio mail (para salir); crean a su nombre y editan o borran sólo lo suyo. Un miembro nunca puede crear ni dejar un trabajo `approved`. `members` tiene que estar en minúscula, y los trabajos suman `reviewedAt`. Las reglas de `users/{uid}/…` no cambian. **Publicarlas antes de mergear**: con las reglas de la 1.1.2 la consulta de autos compartidos se rechaza (la app sigue andando, sin autos compartidos) y las escrituras nuevas fallan.
+- **Lectura**: `subscribeUserData` suma una consulta `where('members', 'array-contains', <mail en minúscula>)` a la de `ownerUid` y escucha la unión. Si esa consulta falla con `permission-denied`, sigue sin autos compartidos en lugar de mostrar el error.
+- **Permisos en el cliente** en `lib/sharing.ts` (con tests): quién edita qué, la validación de los mails y el filtro de los logros.
+- **`saveJob`** graba `pending` sin efectos si escribe un miembro; `approveJob` aplica los efectos con los datos del dueño y `rejectJob` lo deja `rejected`.
+
 ## 1.1.2
 
 Los autos pasan a una estructura que se puede compartir, como base del grupo familiar. Para el usuario la app funciona igual. Antes de publicar hay que subir las reglas de Firestore y migrar los datos (ver `INSTRUCTIONS.md`, "Migración a `cars/`").

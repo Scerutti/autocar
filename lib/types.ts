@@ -53,6 +53,11 @@ export interface Car {
   photoUrl: string | null
   photoPublicId: string | null
   createdAt: Date
+  /** Uid del dueño. Opcional en el tipo porque el cron y los logros arman autos sin él; lib/db.ts siempre lo completa. */
+  ownerUid?: string
+  ownerName?: string | null
+  /** Mails en minúscula de las personas con las que el dueño compartió el auto (hasta 2). El dueño no figura. */
+  members?: string[]
 }
 
 export interface MaintenanceRule {
@@ -111,6 +116,8 @@ export interface Job extends Authorship {
   ruleIds: string[]
   /** Un trabajo sin el campo (guardado antes de compartir autos) cuenta como aprobado. */
   status?: JobStatus
+  /** Cuándo el dueño aprobó o rechazó el trabajo de un miembro; null si nadie lo revisó. */
+  reviewedAt?: Date | null
   createdAt: Date
 }
 

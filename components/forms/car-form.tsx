@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Camera, CarFront, Trash2, X } from 'lucide-react'
+import { Camera, CarFront, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { carName } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
@@ -12,10 +13,11 @@ import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
-import { createCar, deleteCar, newCarId, updateCar, type CarInput } from '@/lib/db'
+import { addMember, createCar, deleteCar, newCarId, removeMember, updateCar, type CarInput } from '@/lib/db'
 import { formatKm, parseNumberInput } from '@/lib/format'
+import { MAX_MEMBERS, isCarOwner, memberError, normalizeEmail } from '@/lib/sharing'
 import type { Car, FuelType } from '@/lib/types'
-import { toast } from '@/lib/toast'
+import { errorMessage, toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
 /** Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC). */
@@ -41,7 +43,7 @@ export function CarForm({ car }: { car?: Car }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { actor } = useData()
+  const { actor, uid } = useData()
   const { saving, error, setError, run } = useSaver()
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -160,96 +162,236 @@ export function CarForm({ car }: { car?: Car }) {
   }
 
   return (
-    <form onSubmit={submit} className="mx-auto max-w-xl space-y-6" noValidate>
-      <div>
-        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
-        {currentPhoto ? (
-          <div className="relative overflow-hidden rounded-2xl border border-white/8">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={currentPhoto} alt="Foto del auto" className="aspect-video w-full object-cover" />
-            <div className="absolute bottom-3 right-3 flex gap-2">
+    <div className="mx-auto max-w-xl space-y-6">
+      <form onSubmit={submit} className="space-y-6" noValidate>
+        <div>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
+          {currentPhoto ? (
+            <div className="relative overflow-hidden rounded-2xl border border-white/8">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={currentPhoto} alt="Foto del auto" className="aspect-video w-full object-cover" />
+              <div className="absolute bottom-3 right-3 flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1.5 bg-black/60 backdrop-blur"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={preparing}
+                >
+                  <Camera /> {preparing ? 'Preparando…' : 'Cambiar'}
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="secondary"
+                  className="bg-black/60 backdrop-blur"
+                  aria-label="Quitar foto"
+                  onClick={clearPhoto}
+                  disabled={preparing}
+                >
+                  <X />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={preparing}
+              className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:pointer-events-none"
+            >
+              <div className="flex size-12 items-center justify-center rounded-2xl bg-white/[0.06]">
+                <CarFront className="size-6" />
+              </div>
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <Camera className="size-4" /> {preparing ? 'Preparando la foto…' : 'Agregar foto del auto'}
+              </span>
+              <span className="text-xs">Hasta {PHOTO_MAX_INPUT_MB} MB</span>
+            </button>
+          )}
+          <FormError className="mt-3">{photoError}</FormError>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Marca">
+            <Input value={brand} onChange={e => setBrand(e.target.value)} placeholder="Ford" autoCapitalize="words" required />
+          </Field>
+          <Field label="Modelo">
+            <Input value={model} onChange={e => setModel(e.target.value)} placeholder="Focus" autoCapitalize="words" required />
+          </Field>
+          <Field label="Versión" hint="Opcional">
+            <Input value={version} onChange={e => setVersion(e.target.value)} placeholder="SE 2.0" />
+          </Field>
+          <Field label="Año" hint="Opcional">
+            <Input value={year} onChange={e => setYear(e.target.value)} inputMode="numeric" placeholder="2018" maxLength={4} />
+          </Field>
+          <Field label="Patente" hint="Opcional" className="col-span-2 sm:col-span-1">
+            <Input value={plate} onChange={e => setPlate(e.target.value)} placeholder="AC 123 CD" autoCapitalize="characters" />
+          </Field>
+          {!car && (
+            <Field label="Km actuales" hint="Los que marca el tablero hoy" className="col-span-2 sm:col-span-1">
+              <Input value={km} onChange={e => setKm(e.target.value)} inputMode="numeric" placeholder="86420" required />
+            </Field>
+          )}
+        </div>
+
+        <FieldGroup label="Combustible" hint="Si tiene equipo de GNC, elegí Nafta + GNC. Si es diésel, elegí Gasoil.">
+          <Segmented value={fuel} onChange={setFuel} options={FUEL_OPTIONS} />
+        </FieldGroup>
+
+        <FormError>{error}</FormError>
+
+        <div className="flex gap-3">
+          <Button type="button" variant="outline" className="h-11 flex-1" onClick={() => router.back()}>
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={saving || preparing} className="h-11 flex-1">
+            {saving ? (status ?? 'Guardando…') : car ? 'Guardar cambios' : 'Agregar auto'}
+          </Button>
+        </div>
+      </form>
+
+      {car && isCarOwner(car, uid) && <ShareSection car={car} />}
+      {car && <DeleteCarSection car={car} disabled={saving} />}
+    </div>
+  )
+}
+
+/**
+ * Compartir el auto (sólo el dueño, al editarlo): hasta 2 mails, cada uno con su botón para sacarlo. Cada cambio
+ * se guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Avisarle" abre el menú
+ * de compartir del celular y, si el navegador no lo tiene, copia el mensaje.
+ */
+function ShareSection({ car }: { car: Car }) {
+  const confirm = useConfirm()
+  const { actor, email } = useData()
+  const [value, setValue] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const members = car.members ?? []
+  const full = members.length >= MAX_MEMBERS
+  const name = carName(car)
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault()
+    const mail = normalizeEmail(value)
+    const problem = memberError(mail, { ownerEmail: email, members })
+    if (problem) return setError(problem)
+    setError(null)
+    const confirmed = await confirm({
+      title: '¿Compartir el auto con este mail?',
+      description: 'Va a ver todo el auto apenas entre a la app con ese mail, y va a poder cargar combustible, km y trabajos. Los trabajos que cargue esperan tu aprobación.',
+      details: [
+        { label: 'Mail', value: mail },
+        { label: 'Auto', value: name },
+      ],
+      confirmLabel: 'Sí, compartir',
+      icon: UserPlus,
+    })
+    if (!confirmed) return
+    setBusy(true)
+    try {
+      const status = await settle(addMember(actor, car.id, mail))
+      setValue('')
+      toastSaved('Auto compartido', status, `Avisale a ${mail} que ya lo puede ver.`)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(mail: string) {
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: `¿Dejar de compartir el auto con ${mail}?`,
+      description: `Deja de ver tu ${name}. Lo que cargó queda en el historial.`,
+      confirmLabel: 'Sí, sacar',
+      icon: UserMinus,
+    })
+    if (!confirmed) return
+    try {
+      const status = await settle(removeMember(actor, car.id, mail))
+      toastSaved(`Ya no lo compartís con ${mail}`, status)
+    } catch (err) {
+      toast.error('No se pudo sacar el mail', { description: errorMessage(err) })
+    }
+  }
+
+  async function notify() {
+    const text = `Te compartí mi ${name} en AutoCar. Entrá con tu cuenta de Google:`
+    const url = window.location.origin
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: 'AutoCar', text, url })
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') toast.error('No se pudo compartir', { description: errorMessage(err) })
+      }
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(`${text} ${url}`)
+      toast.success('Copiamos el mensaje', { description: 'Pegalo en WhatsApp o donde quieras.' })
+    } catch (err) {
+      toast.error('No se pudo copiar el mensaje', { description: errorMessage(err) })
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-white/8 bg-card/60 p-4">
+      <p className="flex items-center gap-2 text-sm font-medium">
+        <Users aria-hidden className="size-4 text-primary" /> Compartir
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Hasta {MAX_MEMBERS} personas ven el auto y cargan combustible, km y trabajos. Los trabajos esperan tu aprobación.
+      </p>
+
+      {members.length > 0 && (
+        <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
+          {members.map(m => (
+            <li key={m} className="flex items-center gap-3 px-3.5 py-2.5">
+              <span className="min-w-0 flex-1 truncate text-sm">{m}</span>
               <Button
                 type="button"
-                size="sm"
-                variant="secondary"
-                className="gap-1.5 bg-black/60 backdrop-blur"
-                onClick={() => fileRef.current?.click()}
-                disabled={preparing}
-              >
-                <Camera /> {preparing ? 'Preparando…' : 'Cambiar'}
-              </Button>
-              <Button
-                type="button"
+                variant="ghost"
                 size="icon-sm"
-                variant="secondary"
-                className="bg-black/60 backdrop-blur"
-                aria-label="Quitar foto"
-                onClick={clearPhoto}
-                disabled={preparing}
+                aria-label={`Dejar de compartir con ${m}`}
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => remove(m)}
               >
                 <X />
               </Button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={preparing}
-            className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:pointer-events-none"
-          >
-            <div className="flex size-12 items-center justify-center rounded-2xl bg-white/[0.06]">
-              <CarFront className="size-6" />
-            </div>
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <Camera className="size-4" /> {preparing ? 'Preparando la foto…' : 'Agregar foto del auto'}
-            </span>
-            <span className="text-xs">Hasta {PHOTO_MAX_INPUT_MB} MB</span>
-          </button>
-        )}
-        <FormError className="mt-3">{photoError}</FormError>
-      </div>
+            </li>
+          ))}
+        </ul>
+      )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Marca">
-          <Input value={brand} onChange={e => setBrand(e.target.value)} placeholder="Ford" autoCapitalize="words" required />
+      <form onSubmit={add} className="mt-3 space-y-3" noValidate>
+        <Field label="Mail" hint={full ? `Ya lo compartiste con ${MAX_MEMBERS} personas.` : 'Tiene que ser el mail con el que la persona entra con Google.'}>
+          <Input
+            type="email"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="nombre@gmail.com"
+            autoCapitalize="none"
+            autoComplete="off"
+            disabled={full || busy}
+          />
         </Field>
-        <Field label="Modelo">
-          <Input value={model} onChange={e => setModel(e.target.value)} placeholder="Focus" autoCapitalize="words" required />
-        </Field>
-        <Field label="Versión" hint="Opcional">
-          <Input value={version} onChange={e => setVersion(e.target.value)} placeholder="SE 2.0" />
-        </Field>
-        <Field label="Año" hint="Opcional">
-          <Input value={year} onChange={e => setYear(e.target.value)} inputMode="numeric" placeholder="2018" maxLength={4} />
-        </Field>
-        <Field label="Patente" hint="Opcional" className="col-span-2 sm:col-span-1">
-          <Input value={plate} onChange={e => setPlate(e.target.value)} placeholder="AC 123 CD" autoCapitalize="characters" />
-        </Field>
-        {!car && (
-          <Field label="Km actuales" hint="Los que marca el tablero hoy" className="col-span-2 sm:col-span-1">
-            <Input value={km} onChange={e => setKm(e.target.value)} inputMode="numeric" placeholder="86420" required />
-          </Field>
-        )}
-      </div>
-
-      <FieldGroup label="Combustible" hint="Si tiene equipo de GNC, elegí Nafta + GNC. Si es diésel, elegí Gasoil.">
-        <Segmented value={fuel} onChange={setFuel} options={FUEL_OPTIONS} />
-      </FieldGroup>
-
-      <FormError>{error}</FormError>
-
-      <div className="flex gap-3">
-        <Button type="button" variant="outline" className="h-11 flex-1" onClick={() => router.back()}>
-          Cancelar
-        </Button>
-        <Button type="submit" disabled={saving || preparing} className="h-11 flex-1">
-          {saving ? (status ?? 'Guardando…') : car ? 'Guardar cambios' : 'Agregar auto'}
-        </Button>
-      </div>
-
-      {car && <DeleteCarSection car={car} disabled={saving} />}
-    </form>
+        <FormError>{error}</FormError>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" size="sm" className="gap-1.5" disabled={full || busy || !value.trim()}>
+            <UserPlus /> {busy ? 'Compartiendo…' : 'Compartir'}
+          </Button>
+          {members.length > 0 && (
+            <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => void notify()}>
+              <Send /> Avisarle
+            </Button>
+          )}
+        </div>
+      </form>
+    </section>
   )
 }
 

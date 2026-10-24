@@ -1,6 +1,8 @@
 'use client'
 
 import {
+  arrayRemove,
+  arrayUnion,
   collection,
   doc,
   getDocs,
@@ -12,6 +14,7 @@ import {
   where,
   writeBatch,
   type DocumentData,
+  type Query,
   type QueryDocumentSnapshot,
   type Unsubscribe,
   type WriteBatch,
@@ -92,6 +95,9 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     photoUrl: str(x.photoUrl),
     photoPublicId: str(x.photoPublicId),
     createdAt: toDate(x.createdAt) ?? new Date(0),
+    ownerUid: str(x.ownerUid) ?? '',
+    ownerName: str(x.ownerName),
+    members: Array.isArray(x.members) ? x.members.filter((m: unknown): m is string => typeof m === 'string') : [],
   }
 }
 
@@ -127,6 +133,7 @@ function jobFrom(d: QueryDocumentSnapshot<DocumentData>): Job {
     notes: str(x.notes),
     ruleIds: Array.isArray(x.ruleIds) ? x.ruleIds : [],
     status: statusFrom(x.status),
+    reviewedAt: toDate(x.reviewedAt),
     createdBy: str(x.createdBy),
     createdByName: str(x.createdByName),
     createdAt: toDate(x.createdAt) ?? new Date(0),
@@ -203,21 +210,33 @@ interface CarListeners {
   fromCache: Partial<Record<RelatedName, boolean>>
 }
 
+/** Una de las dos consultas de autos (los míos y los compartidos conmigo), con su última foto. */
+interface CarQuery {
+  ready: boolean
+  fromCache: boolean
+  docs: QueryDocumentSnapshot<DocumentData>[]
+}
+
 /**
  * Escucha en tiempo real los ajustes y todas las colecciones del usuario. En `onChange`, `fromCache`
  * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
  * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
  *
- * Los autos se escuchan filtrados por `ownerUid` (lo que pide la regla de lectura) y cada auto abre 4
- * listeners propios, que se abren y se cierran cuando el auto aparece o desaparece. `onChange` sigue
- * recibiendo una parte por colección: la de los mantenimientos, trabajos, cargas y lecturas sale cuando
- * todos los autos actuales entregaron su primera foto (enseguida si no hay autos), y `fromCache` es true
- * si alguna de esas fotos, o la lista de autos, salió de la caché. Si a un auto que ya había entregado
- * datos se le revoca el acceso (`permission-denied`, por ejemplo porque se borró desde otro dispositivo),
- * se lo da de baja sin avisar un error: la pantalla de error queda para los fallos reales.
+ * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
+ * compartieron (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la
+ * unión, y sale cuando las dos entregaron su primera foto. Si la de compartidos falla con
+ * `permission-denied` (la app publicada antes que las reglas nuevas), cuenta como "sin autos compartidos"
+ * y no como un error. Cada auto abre 4 listeners propios, que se abren y se cierran cuando el auto aparece
+ * o desaparece. `onChange` sigue recibiendo una parte por colección: la de los mantenimientos, trabajos,
+ * cargas y lecturas sale cuando todos los autos actuales entregaron su primera foto (enseguida si no hay
+ * autos), y `fromCache` es true si alguna de esas fotos, o alguna de las consultas de autos, salió de la
+ * caché. Si a un auto que ya había entregado datos se le revoca el acceso (`permission-denied`, por ejemplo
+ * porque se borró desde otro dispositivo o el dueño me sacó), se lo da de baja sin avisar un error: la
+ * pantalla de error queda para los fallos reales.
  */
 export function subscribeUserData(
   uid: string,
+  email: string | null,
   onChange: (patch: Partial<UserData>, loaded: Part, fromCache: boolean) => void,
   onError: (e: Error) => void,
 ): Unsubscribe {
@@ -305,28 +324,54 @@ export function subscribeUserData(
     }
   }
 
-  subs.push(
-    onSnapshot(
-      query(carsCol(), where('ownerUid', '==', uid)),
-      snap => {
-        const ids = snap.docs.map(d => d.id)
-        for (const [carId, entry] of perCar) {
-          if (!ids.includes(carId)) dropCar(carId, entry)
-        }
-        for (const carId of revoked) if (!ids.includes(carId)) revoked.delete(carId)
-        for (const carId of ids) if (!perCar.has(carId) && !revoked.has(carId)) listenCar(carId)
+  const owned: CarQuery = { ready: false, fromCache: true, docs: [] }
+  const shared: CarQuery = { ready: !email, fromCache: false, docs: [] }
 
-        const idsKey = [...ids].sort().join(',')
-        const changed = !carsReady || idsKey !== carIdsKey || snap.metadata.fromCache !== carsFromCache
-        carsReady = true
-        carIdsKey = idsKey
-        carsFromCache = snap.metadata.fromCache
-        onChange({ cars: snap.docs.map(carFrom) }, 'cars', snap.metadata.fromCache)
-        if (changed) RELATED.forEach(publish)
+  const publishCars = () => {
+    if (!owned.ready || !shared.ready) return
+    const byId = new Map([...owned.docs, ...shared.docs].map(d => [d.id, d]))
+    const ids = [...byId.keys()]
+    for (const [carId, entry] of perCar) {
+      if (!ids.includes(carId)) dropCar(carId, entry)
+    }
+    for (const carId of revoked) if (!ids.includes(carId)) revoked.delete(carId)
+    for (const carId of ids) if (!perCar.has(carId) && !revoked.has(carId)) listenCar(carId)
+
+    const fromCache = owned.fromCache || shared.fromCache
+    const idsKey = [...ids].sort().join(',')
+    const changed = !carsReady || idsKey !== carIdsKey || fromCache !== carsFromCache
+    carsReady = true
+    carIdsKey = idsKey
+    carsFromCache = fromCache
+    onChange({ cars: [...byId.values()].map(carFrom) }, 'cars', fromCache)
+    if (changed) RELATED.forEach(publish)
+  }
+
+  const listenCars = (target: CarQuery, q: Query<DocumentData>, onFail: (e: Error) => void) =>
+    onSnapshot(
+      q,
+      snap => {
+        target.ready = true
+        target.fromCache = snap.metadata.fromCache
+        target.docs = snap.docs
+        publishCars()
       },
-      onError,
-    ),
-  )
+      onFail,
+    )
+
+  subs.push(listenCars(owned, query(carsCol(), where('ownerUid', '==', uid)), onError))
+  if (email) {
+    subs.push(
+      listenCars(shared, query(carsCol(), where('members', 'array-contains', email)), e => {
+        if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
+        console.warn('No se pudieron leer los autos compartidos; se sigue sin ellos', e)
+        shared.ready = true
+        shared.fromCache = false
+        shared.docs = []
+        publishCars()
+      }),
+    )
+  }
   return () => {
     subs.forEach(u => u())
     perCar.forEach(entry => entry.unsubs.forEach(u => u()))
@@ -458,6 +503,27 @@ export async function updateCar(actor: Actor, carId: string, data: Partial<CarIn
   await batch.commit()
 }
 
+/**
+ * Suma o saca un mail de `members` (lo hace el dueño). Va con arrayUnion/arrayRemove y no con la lista que tiene
+ * la app, así un cambio hecho en otro dispositivo no se pisa. El tope de 2 lo controlan también las reglas.
+ */
+export async function addMember(actor: Actor, carId: string, email: string) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(carId), { members: arrayUnion(email) })
+  await batch.commit()
+}
+
+export async function removeMember(actor: Actor, carId: string, email: string) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(carId), { members: arrayRemove(email) })
+  await batch.commit()
+}
+
+/** El miembro sale de un auto compartido: saca su propio mail de `members`. Lo que cargó queda en el auto. */
+export async function leaveCar(actor: Actor, carId: string, email: string) {
+  await removeMember(actor, carId, email)
+}
+
 /** Borra en tandas de 450: un batch admite hasta 500 operaciones. */
 async function deleteRefs(refs: ReturnType<typeof doc>[]) {
   for (let i = 0; i < refs.length; i += 450) {
@@ -511,7 +577,7 @@ export async function restoreRule(actor: Actor, rule: MaintenanceRule) {
   })
 }
 
-export type JobInput = Omit<Job, 'id' | 'createdAt' | 'createdBy' | 'createdByName' | 'status'>
+export type JobInput = Omit<Job, 'id' | 'createdAt' | 'createdBy' | 'createdByName' | 'status' | 'reviewedAt'>
 
 /** "Volver al taller en…": recordatorio de una sola vez que se crea junto con un trabajo. */
 export interface FollowUp {
@@ -519,35 +585,27 @@ export interface FollowUp {
   intervalTime: TimeInterval
 }
 
+type JobContext = { car: Car; rules: MaintenanceRule[]; readings: OdometerReading[] }
+
 /**
- * Guarda un trabajo. Los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
- * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una
- * sola vez se borran. Si el km es mayor al actual se registra, y opcionalmente agenda la vuelta al taller.
- * Al crearlo se graba quién lo cargó y el estado `approved`; al editarlo no se tocan.
- * Cada mantenimiento marcado se escribe aparte del trabajo y de los demás: si alguno ya no existe (borrado
- * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo.
- * Se commitea primero el trabajo (Firestore respeta el orden) y los mantenimientos no se esperan: sin
- * conexión quedaría colgado, y si alguno falla el trabajo ya está a salvo.
+ * Los efectos de un trabajo aprobado: los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
+ * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una sola vez se
+ * borran. Si el km es mayor al actual, la lectura va en `jobBatch` a nombre de `author`.
+ * Cada mantenimiento marcado va en un batch aparte del trabajo y de los demás: si alguno ya no existe (borrado
+ * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo. Devuelve esos
+ * batches para commitearlos después del trabajo.
  */
-export async function saveJob(
-  actor: Actor,
-  ctx: { car: Car; rules: MaintenanceRule[]; readings: OdometerReading[] },
-  data: JobInput,
-  jobId?: string,
-  followUp?: FollowUp | null,
+function addJobEffects(
+  jobBatch: WriteBatch,
+  author: Actor,
+  ctx: JobContext,
+  job: Pick<Job, 'date' | 'km' | 'ruleIds'>,
 ) {
   const carId = ctx.car.id
-  const jobBatch = writeBatch(firestore())
-  const id = jobId ?? newChildId(carId, 'jobs')
-  const existing = jobId
-    ? {}
-    : { createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name, status: 'approved' satisfies JobStatus }
-  jobBatch.set(doc(carCol(carId, 'jobs'), id), { ...data, ...existing }, { merge: true })
-
-  const doneKm = data.km ?? ctx.car.currentKm
+  const doneKm = job.km ?? ctx.car.currentKm
   const ruleBatches: { ruleId: string; batch: WriteBatch }[] = []
-  for (const rule of ctx.rules.filter(r => data.ruleIds.includes(r.id))) {
-    const isNewer = !rule.lastDoneDate || data.date >= rule.lastDoneDate
+  for (const rule of ctx.rules.filter(r => job.ruleIds.includes(r.id))) {
+    const isNewer = !rule.lastDoneDate || job.date >= rule.lastDoneDate
     if (!isNewer) continue
     const ruleBatch = writeBatch(firestore())
     ruleBatches.push({ ruleId: rule.id, batch: ruleBatch })
@@ -557,11 +615,59 @@ export async function saveJob(
     }
     ruleBatch.update(doc(carCol(carId, 'rules'), rule.id), {
       lastDoneKm: rule.intervalKm != null ? doneKm : rule.lastDoneKm,
-      lastDoneDate: data.date,
+      lastDoneDate: job.date,
       lastNotifiedAt: null,
       lastNotifiedStatus: null,
     })
   }
+  if (job.km != null && job.km > ctx.car.currentKm) {
+    addReadingToBatch(jobBatch, author, ctx.car, ctx.readings, job.km, 'job')
+  }
+  return ruleBatches
+}
+
+/**
+ * Commitea primero el trabajo (Firestore respeta el orden) y los mantenimientos no se esperan: sin conexión
+ * quedaría colgado, y si alguno falla el trabajo ya está a salvo.
+ */
+async function commitJob(jobId: string, jobBatch: WriteBatch, ruleBatches: { ruleId: string; batch: WriteBatch }[]) {
+  const saved = jobBatch.commit()
+  for (const r of ruleBatches) {
+    r.batch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', jobId, r.ruleId, e))
+  }
+  await saved
+}
+
+/**
+ * Guarda un trabajo. Si lo guarda el dueño y queda aprobado, aplica sus efectos (`addJobEffects`) y,
+ * opcionalmente, agenda la vuelta al taller.
+ * Si lo guarda un miembro, queda `pending` sin efectos, aunque el km sea mayor al actual: los mantenimientos y
+ * el km quedan guardados en el trabajo y se aplican al aprobarlo (`approveJob`), así un trabajo rechazado no
+ * deja nada mal cargado. Un miembro que edita su trabajo (pendiente o rechazado) lo vuelve a `pending`.
+ * Al crearlo se graba quién lo cargó; al editarlo no se toca. El dueño que edita un trabajo de un miembro sin
+ * aprobar no le cambia el estado ni aplica efectos: eso pasa al aprobarlo.
+ */
+export async function saveJob(
+  actor: Actor,
+  ctx: JobContext,
+  data: JobInput,
+  existing?: Pick<Job, 'id' | 'status'>,
+  followUp?: FollowUp | null,
+) {
+  const carId = ctx.car.id
+  const member = ctx.car.ownerUid !== actor.uid
+  const jobBatch = writeBatch(firestore())
+  const id = existing?.id ?? newChildId(carId, 'jobs')
+  const status: JobStatus = member ? 'pending' : (existing?.status ?? 'approved')
+  const created = existing ? {} : { createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name }
+  const statusField = member || !existing ? { status } : {}
+  jobBatch.set(doc(carCol(carId, 'jobs'), id), { ...data, ...created, ...statusField }, { merge: true })
+
+  if (status !== 'approved') {
+    await jobBatch.commit()
+    return id
+  }
+  const ruleBatches = addJobEffects(jobBatch, actor, ctx, data)
   if (followUp) {
     jobBatch.set(doc(carCol(carId, 'rules')), {
       carId,
@@ -569,22 +675,34 @@ export async function saveJob(
       intervalKm: null,
       intervalTime: followUp.intervalTime,
       repeat: false,
-      lastDoneKm: doneKm,
+      lastDoneKm: data.km ?? ctx.car.currentKm,
       lastDoneDate: data.date,
       ...defaultWarnings(null, followUp.intervalTime),
       lastNotifiedAt: null,
       lastNotifiedStatus: null,
     })
   }
-  if (data.km != null && data.km > ctx.car.currentKm) {
-    addReadingToBatch(jobBatch, actor, ctx.car, ctx.readings, data.km, 'job')
-  }
-  const saved = jobBatch.commit()
-  for (const r of ruleBatches) {
-    r.batch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', id, r.ruleId, e))
-  }
-  await saved
+  await commitJob(id, jobBatch, ruleBatches)
   return id
+}
+
+/**
+ * El dueño aprueba el trabajo de un miembro: pasa a `approved` con `reviewedAt` y se aplican sus efectos con los
+ * mantenimientos y el km que tiene la app del dueño en ese momento. La lectura de km queda a nombre de quien
+ * cargó el trabajo.
+ */
+export async function approveJob(actor: Actor, ctx: JobContext, job: Job) {
+  const jobBatch = writeBatch(firestore())
+  jobBatch.update(doc(carCol(ctx.car.id, 'jobs'), job.id), { status: 'approved' satisfies JobStatus, reviewedAt: Timestamp.now() })
+  const author: Actor = { uid: job.createdBy ?? actor.uid, name: job.createdBy ? (job.createdByName ?? null) : actor.name }
+  await commitJob(job.id, jobBatch, addJobEffects(jobBatch, author, ctx, job))
+}
+
+/** El dueño rechaza el trabajo de un miembro: queda `rejected` sin efectos, y el miembro lo puede corregir o borrar. */
+export async function rejectJob(actor: Actor, carId: string, jobId: string) {
+  const batch = writeBatch(firestore())
+  batch.update(doc(carCol(carId, 'jobs'), jobId), { status: 'rejected' satisfies JobStatus, reviewedAt: Timestamp.now() })
+  await batch.commit()
 }
 
 export async function deleteJob(actor: Actor, carId: string, jobId: string) {
@@ -598,11 +716,12 @@ export async function deleteJob(actor: Actor, carId: string, jobId: string) {
  * tocado mantenimientos ni km.
  */
 export async function restoreJob(actor: Actor, job: Job) {
-  const { id, createdAt, createdBy, createdByName, status, ...data } = job
+  const { id, createdAt, createdBy, createdByName, status, reviewedAt, ...data } = job
   await setDoc(doc(carCol(job.carId, 'jobs'), id), {
     ...data,
     ...authorOf(job, actor),
     status: status ?? 'approved',
+    ...(reviewedAt ? { reviewedAt: Timestamp.fromDate(reviewedAt) } : {}),
     createdAt: Timestamp.fromDate(createdAt),
   })
 }

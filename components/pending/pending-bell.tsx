@@ -2,15 +2,19 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, Bell, CheckCircle2, ChevronRight, Gauge, Sparkles } from 'lucide-react'
+import { AlertTriangle, Bell, CheckCircle2, ChevronRight, CircleCheck, CircleX, Gauge, Sparkles, Users, Wrench } from 'lucide-react'
 import { StatusBadge, carName } from '@/components/common'
+import { useJobReview } from '@/components/forms/job-form'
 import { KmDialog } from '@/components/km-form'
 import { useNovedades } from '@/components/novedades/use-novedades'
 import { useData } from '@/components/providers/data-provider'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { formatDate, formatMoney } from '@/lib/format'
+import { readLocal, useLocalValue, writeLocal } from '@/lib/local-store'
 import { describeRemaining } from '@/lib/maintenance'
-import { kmDueDay, pendingItems, urgentCount, type PendingItem } from '@/lib/pending'
+import { kmDueDay, parseSeenCars, pendingItems, sharedSeenKey, unseenSharedCars, urgentCount, type PendingItem } from '@/lib/pending'
+import { authorLabel } from '@/lib/sharing'
 import { cn } from '@/lib/utils'
 
 const ROW = 'flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.02]'
@@ -40,26 +44,103 @@ function RuleRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'rul
 }
 
 /**
- * Campanita de la cabecera: junta lo pendiente (km por cargar, mantenimientos vencidos o por vencer) y las
- * novedades sin ver. Todo sale de los datos, no de las notificaciones: lo resuelto desaparece solo, aunque se
- * haya descartado el aviso del celular. El número cuenta lo urgente y las novedades; los por vencer no suman.
+ * Trabajo que cargó un miembro en un auto mío: link al detalle y, ahí mismo, Aprobar y Rechazar. Aprobar y
+ * Rechazar cierran la campanita antes de confirmar, como "Cargar" los km: así no quedan dos ventanas abiertas.
+ */
+function ReviewRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'review' }>; onNavigate: () => void }) {
+  const { car, job } = item
+  const { uid } = useData()
+  const { approve, reject } = useJobReview()
+  return (
+    <div className="px-4 py-3.5">
+      <Link href={`/autos/${car.id}/trabajos/${job.id}`} onClick={onNavigate} className="flex items-center gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+          <Wrench className="size-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">Revisar: {job.title}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {carName(car)} · {authorLabel(job, car, uid)} · {formatDate(job.date)} · {formatMoney(job.cost)}
+          </p>
+        </div>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      </Link>
+      <div className="mt-2.5 flex gap-2 pl-12">
+        <Button
+          size="sm"
+          className="gap-1.5"
+          onClick={() => {
+            onNavigate()
+            void approve(car, job)
+          }}
+        >
+          <CircleCheck /> Aprobar
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
+          onClick={() => {
+            onNavigate()
+            void reject(car, job)
+          }}
+        >
+          <CircleX /> Rechazar
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Campanita de la cabecera: junta lo pendiente (km por cargar, mantenimientos vencidos o por vencer, trabajos de
+ * los miembros para revisar, mis trabajos rechazados y los autos que me compartieron) y las novedades sin ver.
+ * Todo sale de los datos, no de las notificaciones: lo resuelto desaparece solo, aunque se haya descartado el aviso
+ * del celular. El número cuenta todo menos los por vencer, más las novedades.
+ *
+ * Un auto compartido se anuncia una sola vez por dispositivo: queda visto al abrir la campanita (o al tocarlo). Con
+ * la campanita abierta se sigue mostrando, para que no desaparezca mientras se lee.
  */
 export function PendingBell() {
-  const { settings, cars, rulesByCar, today, carById } = useData()
+  const { settings, cars, rulesByCar, jobs, uid, today, carById } = useData()
   const { unseen } = useNovedades()
   const [open, setOpen] = useState(false)
   const [kmCarId, setKmCarId] = useState<string | null>(null)
+  const seenKey = sharedSeenKey(uid)
+  const storedSeen = useLocalValue(seenKey)
+  const [shownSeen, setShownSeen] = useState<string[] | null>(null)
 
-  const items = useMemo(() => pendingItems({ settings, cars, rulesByCar, today }), [settings, cars, rulesByCar, today])
+  const liveSeen = useMemo(() => parseSeenCars(storedSeen), [storedSeen])
+  const seenShared = useMemo(
+    () => (storedSeen === undefined ? cars.map(c => c.id) : open && shownSeen ? shownSeen : liveSeen),
+    [storedSeen, cars, open, shownSeen, liveSeen],
+  )
+  const items = useMemo(
+    () => pendingItems({ settings, cars, rulesByCar, jobs, uid, seenShared, today }),
+    [settings, cars, rulesByCar, jobs, uid, seenShared, today],
+  )
   const count = urgentCount(items) + (unseen.length ? 1 : 0)
   const close = () => setOpen(false)
+
+  function markSharedSeen(carIds: string[]) {
+    if (!carIds.length) return
+    const current = parseSeenCars(readLocal(seenKey))
+    const next = [...new Set([...current, ...carIds])]
+    if (next.length !== current.length) writeLocal(seenKey, JSON.stringify(next))
+  }
+
+  function show() {
+    setShownSeen(liveSeen)
+    markSharedSeen(unseenSharedCars(cars, uid, liveSeen).map(c => c.id))
+    setOpen(true)
+  }
 
   return (
     <>
       <Button
         variant="outline"
         size="icon"
-        onClick={() => setOpen(true)}
+        onClick={show}
         aria-label={count ? `Pendientes: ${count}` : 'Pendientes'}
         className="relative size-9 border-white/10 bg-white/[0.03]"
       >
@@ -103,32 +184,74 @@ export function PendingBell() {
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </Link>
               )}
-              {items.map(item =>
-                item.kind === 'km' ? (
-                  <div key={`km-${item.car.id}`} className="flex items-center gap-3 px-4 py-3.5">
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
-                      <Gauge className="size-4" />
+              {items.map(item => {
+                if (item.kind === 'km') {
+                  return (
+                    <div key={`km-${item.car.id}`} className="flex items-center gap-3 px-4 py-3.5">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+                        <Gauge className="size-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">Cargar los km</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {carName(item.car)} · te los pedimos {kmDueDay(item.since, today)}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          close()
+                          setKmCarId(item.car.id)
+                        }}
+                      >
+                        Cargar
+                      </Button>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">Cargar los km</p>
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                        {carName(item.car)} · te los pedimos {kmDueDay(item.since, today)}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
+                  )
+                }
+                if (item.kind === 'review') return <ReviewRow key={`review-${item.job.id}`} item={item} onNavigate={close} />
+                if (item.kind === 'rejected') {
+                  return (
+                    <Link key={`rejected-${item.job.id}`} href={`/autos/${item.car.id}/trabajos/${item.job.id}`} onClick={close} className={ROW}>
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+                        <CircleX className="size-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">Rechazado: {item.job.title}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {carName(item.car)} · corregilo y volvé a mandarlo, o borralo
+                        </p>
+                      </div>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                    </Link>
+                  )
+                }
+                if (item.kind === 'shared') {
+                  return (
+                    <Link
+                      key={`shared-${item.car.id}`}
+                      href={`/autos/${item.car.id}`}
                       onClick={() => {
+                        markSharedSeen([item.car.id])
                         close()
-                        setKmCarId(item.car.id)
                       }}
+                      className={ROW}
                     >
-                      Cargar
-                    </Button>
-                  </div>
-                ) : (
-                  <RuleRow key={item.rule.id} item={item} onNavigate={close} />
-                ),
-              )}
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                        <Users className="size-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {item.car.ownerName ?? 'Alguien'} te compartió su {carName(item.car)}
+                        </p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">Podés cargar combustible, km y trabajos.</p>
+                      </div>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                    </Link>
+                  )
+                }
+                return <RuleRow key={item.rule.id} item={item} onNavigate={close} />
+              })}
             </div>
           )}
         </DialogContent>

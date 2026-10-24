@@ -8,10 +8,11 @@ import { IntervalPicker } from '@/components/interval-picker'
 import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Field, FormError, Input } from '@/components/ui/form'
-import { useData } from '@/components/providers/data-provider'
+import { useCar, useData } from '@/components/providers/data-provider'
 import { deleteRule, restoreRule, saveRule } from '@/lib/db'
 import { formatDate, formatKm, formatNumber, parseNumberInput } from '@/lib/format'
 import { defaultWarnings, describeRemaining, describeRuleInterval, getRuleState } from '@/lib/maintenance'
+import { isCarOwner } from '@/lib/sharing'
 import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { cn } from '@/lib/utils'
@@ -19,12 +20,71 @@ import { LinkButton, RuleProgress, StatusBadge } from '../common'
 
 const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n))
 
+/** Aviso para quien ve un auto compartido: el plan de mantenimiento es del dueño. */
+export const OWNER_ONLY_PLAN = 'Solo el dueño puede cambiar el plan.'
+
+/** Un mantenimiento de un auto que me compartieron: su estado, sin acciones. */
+function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
+  const { rules } = useCar(car.id)
+  const state = rules.find(r => r.rule.id === rule.id)?.state
+  const remaining = state ? describeRemaining(state) : null
+  return (
+    <div className="mx-auto max-w-xl space-y-4">
+      <p className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-sm text-muted-foreground">{OWNER_ONLY_PLAN}</p>
+      {state && state.status !== 'unknown' && (
+        <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <p className="min-w-0 truncate text-sm font-medium">Próximo {rule.name}</p>
+            <StatusBadge status={state.status} />
+          </div>
+          <RuleProgress progress={state.progress} status={state.status} />
+          <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+            {state.nextKm != null && (
+              <p>
+                A los {formatKm(state.nextKm)} · {remaining?.km}
+              </p>
+            )}
+            {state.nextDate && (
+              <p>
+                El {formatDate(state.nextDate)} · {remaining?.date}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+      <dl className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+        {[
+          { label: 'Cada cuánto', value: describeRuleInterval(rule) },
+          {
+            label: rule.repeat ? 'Última vez' : 'Desde',
+            value: [rule.lastDoneDate ? formatDate(rule.lastDoneDate) : null, rule.repeat && rule.lastDoneKm != null ? formatKm(rule.lastDoneKm) : null]
+              .filter(Boolean)
+              .join(' · ') || '—',
+          },
+        ].map(r => (
+          <div key={r.label} className="flex items-baseline justify-between gap-4 px-4 py-3 text-sm">
+            <dt className="shrink-0 text-muted-foreground">{r.label}</dt>
+            <dd className="min-w-0 text-right font-medium">{r.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
+/** Alta y edición de un mantenimiento. A quien no es el dueño se le muestra sólo su estado (`RuleDetails`). */
+export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
+  const { uid } = useData()
+  if (!isCarOwner(car, uid)) return rule ? <RuleDetails car={car} rule={rule} /> : null
+  return <RuleEditor car={car} rule={rule} />
+}
+
 /**
- * Alta y edición de un mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
+ * Formulario del mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
  * vacíos = automáticos según el intervalo. Si no se repite, se cuenta desde los km actuales. `pickerKey` cambia al
  * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
  */
-export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
+function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, today } = useData()
