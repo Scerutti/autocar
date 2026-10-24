@@ -61,14 +61,15 @@ service cloud.firestore {
 
     // ownerUid, ownerName y members sólo los guarda cars/{carId}; members son hasta 2 mails en minúscula. Las
     // reglas no tienen bucles: como en optIds, se acota la cantidad y el largo de la lista unida (join falla,
-    // y la regla deniega, si hay algo que no es texto).
+    // y la regla deniega, si hay algo que no es texto), y la lista unida tiene que estar en minúscula.
     function validCar(d) {
       return d.keys().hasOnly([
           'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
           'avgKmPerDay', 'photoUrl', 'photoPublicId', 'createdAt', 'ownerUid', 'ownerName', 'members'])
         && optText(d, 'ownerUid', 128) && optText(d, 'ownerName', 200)
         && (d.get('members', null) == null
-          || (d.members is list && d.members.size() <= 2 && d.members.join(',').size() <= 2 * 320))
+          || (d.members is list && d.members.size() <= 2 && d.members.join(',').size() <= 2 * 320
+            && d.members.join(',') == d.members.join(',').lower()))
         && optText(d, 'brand', 200) && optText(d, 'model', 200) && optText(d, 'version', 200)
         && optNum(d, 'year') && optText(d, 'plate', 50)
         && (d.get('fuelTypes', null) == null || (d.fuelTypes is list && d.fuelTypes.hasOnly(['nafta', 'gnc', 'gasoil'])))
@@ -91,13 +92,14 @@ service cloud.firestore {
         && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
     }
 
-    // createdBy, createdByName y status los guarda cars/{carId}/jobs; quién puede cambiarlos lo decide ese match.
+    // createdBy, createdByName, status y reviewedAt los guarda cars/{carId}/jobs; quién puede cambiarlos lo decide
+    // ese match. reviewedAt es cuándo el dueño aprobó o rechazó el trabajo de un miembro.
     function validJob(d) {
       return d.keys().hasOnly([
           'carId', 'date', 'km', 'title', 'category', 'cost', 'workshop', 'notes', 'ruleIds', 'createdAt',
-          'createdBy', 'createdByName', 'status'])
+          'createdBy', 'createdByName', 'status', 'reviewedAt'])
         && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
-        && d.get('status', 'approved') in ['approved', 'pending', 'rejected']
+        && d.get('status', 'approved') in ['approved', 'pending', 'rejected'] && optTime(d, 'reviewedAt')
         && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
         && optText(d, 'title', 500) && optText(d, 'category', 50) && optNum(d, 'cost')
         && optText(d, 'workshop', 200) && optText(d, 'notes', 5000)
@@ -149,44 +151,101 @@ service cloud.firestore {
       return isOwner(getAfter(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
     }
 
-    // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
-    // Los autos son documentos de primer nivel con dueño. Por ahora sólo el dueño lee y escribe: la consulta del
-    // cliente filtra por ownerUid, que es lo que pide la regla de lectura. Los hijos guardan el carId de la ruta;
-    // createdBy se fija al crear (el que escribe) y no cambia al editar.
-    match /cars/{carId} {
-      allow read, delete: if isOwner(resource.data.ownerUid);
-      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
-      allow update: if isOwner(resource.data.ownerUid) && request.resource.data.ownerUid == resource.data.ownerUid
-        && validCar(request.resource.data);
+    // Mail de quien pide, en minúscula: así se guarda en members y así lo busca la consulta de autos compartidos
+    // (where('members', 'array-contains', mail en minúscula)). Tiene que ser el mismo valor para que Firestore
+    // pueda probar la regla de lectura con esa consulta.
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
 
+    // Miembro de un auto, según sus datos: una cuenta registrada cuyo mail está en members.
+    function isMember(car) {
+      return request.auth != null && isAllowed() && myEmail() in car.members;
+    }
+
+    // Miembro del auto según el documento antes del pedido (leer y borrar), como ownsCar.
+    function memberOfCar(carId) {
+      return isMember(get(/databases/$(database)/documents/cars/$(carId)).data);
+    }
+
+    // Miembro del auto según el documento después del pedido (crear y editar), como ownsCarAfter.
+    function memberOfCarAfter(carId) {
+      return isMember(getAfter(/databases/$(database)/documents/cars/$(carId)).data);
+    }
+
+    // Lo único que un miembro cambia del auto: el km (al cargar km o una carga, o cuando la app lo corrige sola) o
+    // salir, que es sacar su propio mail de members y nada más.
+    function memberCarUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentKm', 'kmUpdatedAt', 'avgKmPerDay'])
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+          && request.resource.data.members.toSet() == resource.data.members.toSet().difference([myEmail()].toSet()));
+    }
+
+    // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
+    // Los autos son documentos de primer nivel con dueño y hasta 2 miembros. Leen el dueño y los miembros: el
+    // cliente pide los suyos por ownerUid y los compartidos por members, que es lo que piden estas reglas. El
+    // dueño crea, borra y edita el auto; el miembro sólo cambia el km o sale (memberCarUpdate). Los hijos guardan
+    // el carId de la ruta, y createdBy no cambia al editar.
+    match /cars/{carId} {
+      allow read: if isOwner(resource.data.ownerUid) || isMember(resource.data);
+      allow delete: if isOwner(resource.data.ownerUid);
+      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
+      allow update: if validCar(request.resource.data)
+        && ((isOwner(resource.data.ownerUid) && request.resource.data.ownerUid == resource.data.ownerUid)
+          || (isMember(resource.data) && memberCarUpdate()));
+
+      // El plan de mantenimiento es del dueño: los miembros sólo lo leen.
       match /rules/{ruleId} {
-        allow read, delete: if ownsCar(carId);
+        allow read: if ownsCar(carId) || memberOfCar(carId);
+        allow delete: if ownsCar(carId);
         allow create, update: if ownsCarAfter(carId) && validRule(request.resource.data)
           && request.resource.data.carId == carId;
       }
 
+      // El dueño crea con cualquier autor y estado (así "Deshacer" devuelve el trabajo de un miembro) y edita
+      // cualquier estado. El miembro crea a su nombre y nunca approved (rejected es para "Deshacer"), y edita o
+      // borra sólo un trabajo suyo pendiente o rechazado: al editarlo vuelve a pending y no toca reviewedAt.
       match /jobs/{jobId} {
-        allow read, delete: if ownsCar(carId);
-        allow create: if ownsCarAfter(carId) && validJob(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
-        allow update: if ownsCarAfter(carId) && validJob(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+        allow read: if ownsCar(carId) || memberOfCar(carId);
+        allow delete: if ownsCar(carId)
+          || (memberOfCar(carId) && resource.data.get('createdBy', null) == request.auth.uid
+            && resource.data.get('status', 'approved') != 'approved');
+        allow create: if validJob(request.resource.data) && request.resource.data.carId == carId
+          && (ownsCarAfter(carId)
+            || (memberOfCarAfter(carId) && request.resource.data.createdBy == request.auth.uid
+              && request.resource.data.get('status', 'approved') in ['pending', 'rejected']));
+        allow update: if validJob(request.resource.data) && request.resource.data.carId == carId
+          && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
+          && (ownsCarAfter(carId)
+            || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid
+              && resource.data.get('status', 'approved') in ['pending', 'rejected']
+              && request.resource.data.get('status', 'approved') == 'pending'
+              && request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null)));
       }
 
+      // El dueño crea con cualquier autor ("Deshacer" de algo de un miembro), edita y borra todo. El miembro crea a
+      // su nombre y edita o borra sólo lo suyo.
       match /fuel/{fuelId} {
-        allow read, delete: if ownsCar(carId);
-        allow create: if ownsCarAfter(carId) && validFuel(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
-        allow update: if ownsCarAfter(carId) && validFuel(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+        allow read: if ownsCar(carId) || memberOfCar(carId);
+        allow delete: if ownsCar(carId)
+          || (memberOfCar(carId) && resource.data.get('createdBy', null) == request.auth.uid);
+        allow create: if validFuel(request.resource.data) && request.resource.data.carId == carId
+          && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && request.resource.data.createdBy == request.auth.uid));
+        allow update: if validFuel(request.resource.data) && request.resource.data.carId == carId
+          && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
+          && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid));
       }
 
+      // Los mismos permisos que las cargas.
       match /odometer/{readingId} {
-        allow read, delete: if ownsCar(carId);
-        allow create: if ownsCarAfter(carId) && validReading(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
-        allow update: if ownsCarAfter(carId) && validReading(request.resource.data)
-          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+        allow read: if ownsCar(carId) || memberOfCar(carId);
+        allow delete: if ownsCar(carId)
+          || (memberOfCar(carId) && resource.data.get('createdBy', null) == request.auth.uid);
+        allow create: if validReading(request.resource.data) && request.resource.data.carId == carId
+          && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && request.resource.data.createdBy == request.auth.uid));
+        allow update: if validReading(request.resource.data) && request.resource.data.carId == carId
+          && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
+          && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid));
       }
     }
 

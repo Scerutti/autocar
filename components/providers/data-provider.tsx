@@ -10,6 +10,8 @@ import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
   uid: string
+  /** Mail del login en minúscula (como se guarda en `members`); null si la cuenta no tiene mail. */
+  email: string | null
   /** Quién escribe: va como autor de lo que se crea. */
   actor: Actor
   loading: boolean
@@ -42,6 +44,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const uid = user!.uid
   const displayName = user!.displayName
+  const email = user!.email ? user!.email.toLowerCase() : null
   const actor = useMemo<Actor>(() => ({ uid, name: displayName || null }), [uid, displayName])
   const [data, setData] = useState<UserData>(EMPTY)
   const [loaded, setLoaded] = useState<Set<keyof UserData>>(new Set())
@@ -55,6 +58,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setSynced(new Set())
     return subscribeUserData(
       uid,
+      email,
       (patch, part, fromCache) => {
         setData(d => ({ ...d, ...patch }))
         setLoaded(s => (s.has(part) ? s : new Set(s).add(part)))
@@ -68,7 +72,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       },
       setError,
     )
-  }, [uid])
+  }, [uid, email])
 
   useEffect(() => {
     const id = setInterval(() => setToday(toISODate(new Date())), 60_000)
@@ -116,6 +120,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       fuel: [...data.fuel].sort(byDateDesc),
       odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
       uid,
+      email,
       actor,
       loading: PARTS.some(p => !loaded.has(p)),
       error,
@@ -123,7 +128,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       carById,
       rulesByCar,
     }
-  }, [data, loaded, error, today, uid, actor])
+  }, [data, loaded, error, today, uid, email, actor])
 
   return <DataContext value={value}>{children}</DataContext>
 }

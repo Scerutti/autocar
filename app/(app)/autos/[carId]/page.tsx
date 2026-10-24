@@ -2,8 +2,8 @@
 
 import { Suspense, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useSearchParams } from 'next/navigation'
-import { CalendarClock, ChevronRight, FileText, Fuel, Gauge, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { CalendarClock, ChevronRight, FileText, Fuel, Gauge, LogOut, Pencil, Plus, Trash2, Users, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ActivityList, mergeActivity } from '@/components/activity'
@@ -27,12 +27,14 @@ import { ExportReportDialog } from '@/components/report/export-dialog'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { toISODate } from '@/lib/dates'
-import { deleteReading, restoreReading } from '@/lib/db'
+import { deleteReading, leaveCar, restoreReading } from '@/lib/db'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, type RuleWithState } from '@/lib/maintenance'
+import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
+import { toast } from '@/lib/toast'
 import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type OdometerReading } from '@/lib/types'
-import { removeWithUndo } from '@/lib/use-saver'
+import { removeWithUndo, runInBackground } from '@/lib/use-saver'
 
 const TABS = ['estado', 'trabajos', 'combustible', 'km'] as const
 type Tab = (typeof TABS)[number]
@@ -47,7 +49,11 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
   )
 }
 
-function RulesTab({ car, rules }: { car: Car; rules: RuleWithState[] }) {
+/** Mantenimientos del auto. Agregarlos es sólo del dueño: a un miembro no se le ofrece. */
+function RulesTab({ car, rules, owner }: { car: Car; rules: RuleWithState[]; owner: boolean }) {
+  if (!rules.length && !owner) {
+    return <EmptyState icon={Wrench} title="Sin mantenimientos" description="El dueño todavía no cargó mantenimientos para este auto." />
+  }
   if (!rules.length) {
     return (
       <EmptyState
@@ -101,13 +107,16 @@ function RulesTab({ car, rules }: { car: Car; rules: RuleWithState[] }) {
           </Link>
         )
       })}
-      <LinkButton href={`/autos/${car.id}/mantenimientos/nuevo`} variant="ghost" className="w-full gap-2 text-muted-foreground">
-        <Plus /> Agregar mantenimiento
-      </LinkButton>
+      {owner && (
+        <LinkButton href={`/autos/${car.id}/mantenimientos/nuevo`} variant="ghost" className="w-full gap-2 text-muted-foreground">
+          <Plus /> Agregar mantenimiento
+        </LinkButton>
+      )}
     </div>
   )
 }
 
+/** Trabajos del auto: la lista muestra todos (los sin aprobar, con su etiqueta) y los totales suman sólo los aprobados. */
 function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<string, Car> }) {
   const [exporting, setExporting] = useState(false)
   if (!jobs.length) {
@@ -129,7 +138,7 @@ function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<s
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          Total histórico: <span className="font-medium text-foreground">{formatMoney(jobs.reduce((s, j) => s + j.cost, 0))}</span>
+          Total histórico: <span className="font-medium text-foreground">{formatMoney(approvedJobs(jobs).reduce((s, j) => s + j.cost, 0))}</span>
         </p>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setExporting(true)}>
           <FileText /> Exportar PDF
@@ -142,7 +151,7 @@ function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<s
           <section key={y}>
             <div className="mb-2 flex items-baseline justify-between text-sm">
               <h3 className="font-semibold">{y}</h3>
-              <span className="tabular-nums text-muted-foreground">{formatMoney(ofYear.reduce((s, j) => s + j.cost, 0))}</span>
+              <span className="tabular-nums text-muted-foreground">{formatMoney(approvedJobs(ofYear).reduce((s, j) => s + j.cost, 0))}</span>
             </div>
             <ActivityList items={mergeActivity(ofYear, [])} carById={carById} />
           </section>
@@ -216,9 +225,11 @@ const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
   fuel: 'Desde una carga',
 }
 
+/** Km del auto. Un registro se puede borrar si lo puedo editar (`canEditEntry`); en un auto compartido dice quién lo cargó. */
 function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
-  const { actor, odometer } = useData()
+  const { actor, uid, odometer } = useData()
   const confirm = useConfirm()
+  const shared = isSharedCar(car, uid)
 
   async function remove(r: OdometerReading) {
     const confirmed = await confirm({
@@ -257,9 +268,10 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
               <p className="text-sm font-medium tabular-nums">{formatKm(r.km)}</p>
               <p className="text-xs text-muted-foreground">
                 {formatDate(toISODate(r.date))} · {SOURCE_LABELS[r.source]}
+                {shared && ` · Cargado por ${authorLabel(r, car, uid)}`}
               </p>
             </div>
-            {readings.length > 1 && (
+            {readings.length > 1 && canEditEntry(car, uid, r) && (
               <Button variant="ghost" size="icon-sm" aria-label={`Borrar el registro de ${formatKm(r.km)}`} className="text-muted-foreground hover:text-destructive" onClick={() => remove(r)}>
                 <Trash2 />
               </Button>
@@ -272,17 +284,77 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
   )
 }
 
-/** Cambia de pestaña con replaceState en vez de router.replace: es instantáneo y no le pide la página al servidor. */
+/**
+ * Con quién está compartido el auto: al miembro, "Compartido por <dueño>" y "Salir de este auto"; al dueño de un
+ * auto compartido, "Compartido con N personas". En un auto sin compartir no muestra nada.
+ */
+function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
+  const router = useRouter()
+  const confirm = useConfirm()
+  const { actor, email } = useData()
+  const members = car.members ?? []
+  const name = carName(car)
+
+  async function leave() {
+    if (!email) return
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: `¿Salir de ${name}?`,
+      description: `Dejás de ver el auto. Lo que cargaste queda en el historial. Para volver, ${car.ownerName ?? 'el dueño'} te tiene que agregar de nuevo.`,
+      confirmLabel: 'Sí, salir',
+      icon: LogOut,
+    })
+    if (!confirmed) return
+    router.replace('/')
+    runInBackground(leaveCar(actor, car.id, email), `No se pudo salir de ${name}`)
+    toast.success(`Saliste de ${name}`)
+  }
+
+  if (owner) {
+    if (!members.length) return null
+    return (
+      <Link href={`/autos/${car.id}/editar`} className="flex items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3 text-sm hover:bg-card">
+        <Users aria-hidden className="size-4 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1">
+          Compartido con {members.length} {members.length === 1 ? 'persona' : 'personas'}
+        </span>
+        <ChevronRight className="size-4 text-muted-foreground" />
+      </Link>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3">
+      <Users aria-hidden className="size-4 shrink-0 text-primary" />
+      <p className="min-w-0 flex-1 text-sm">
+        Compartido por <span className="font-medium">{car.ownerName ?? 'otra persona'}</span>
+      </p>
+      <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={leave}>
+        <LogOut /> Salir de este auto
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * Cambia de pestaña con replaceState en vez de router.replace: es instantáneo y no le pide la página al servidor.
+ * A un miembro no se le muestran "Editar auto" ni "Agregar mantenimiento": son del dueño.
+ */
 function CarDetail() {
   const { carId } = useParams<{ carId: string }>()
   const params = useSearchParams()
-  const { carById } = useData()
+  const { carById, uid } = useData()
   const { car, rules, jobs, fuel, readings } = useCar(carId)
   const [showKm, setShowKm] = useState(false)
   const tabParam = params.get('tab') as Tab | null
   const tab: Tab = tabParam && TABS.includes(tabParam) ? tabParam : 'estado'
 
   if (!car) return <NotFound what="el auto" />
+  const owner = isCarOwner(car, uid)
+  const quickActions = [
+    { href: `/autos/${car.id}/trabajos/nuevo`, icon: Wrench, label: 'Trabajo' },
+    { href: `/autos/${car.id}/combustible/nuevo`, icon: Fuel, label: 'Carga' },
+    ...(owner ? [{ href: `/autos/${car.id}/mantenimientos/nuevo`, icon: Plus, label: 'Mantenimiento' }] : []),
+  ]
 
   return (
     <>
@@ -291,12 +363,15 @@ function CarDetail() {
         title={carName(car)}
         subtitle={carDetail(car) || undefined}
         actions={
-          <LinkButton href={`/autos/${car.id}/editar`} variant="outline" size="icon" aria-label="Editar auto" className="size-9 border-white/10 bg-white/[0.03]">
-            <Pencil />
-          </LinkButton>
+          owner ? (
+            <LinkButton href={`/autos/${car.id}/editar`} variant="outline" size="icon" aria-label="Editar auto" className="size-9 border-white/10 bg-white/[0.03]">
+              <Pencil />
+            </LinkButton>
+          ) : undefined
         }
       />
       <PageBody className="space-y-6">
+        <SharingBanner car={car} owner={owner} />
         <div className="overflow-hidden rounded-2xl border border-white/8 bg-card/60">
           {car.photoUrl && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -317,12 +392,8 @@ function CarDetail() {
               <Gauge /> Cargar km
             </Button>
           </div>
-          <div className="grid grid-cols-3 border-t border-white/8">
-            {[
-              { href: `/autos/${car.id}/trabajos/nuevo`, icon: Wrench, label: 'Trabajo' },
-              { href: `/autos/${car.id}/combustible/nuevo`, icon: Fuel, label: 'Carga' },
-              { href: `/autos/${car.id}/mantenimientos/nuevo`, icon: Plus, label: 'Mantenimiento' },
-            ].map(({ href, icon: Icon, label }) => (
+          <div className={`grid border-t border-white/8 ${quickActions.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            {quickActions.map(({ href, icon: Icon, label }) => (
               <Link
                 key={href}
                 href={href}
@@ -342,7 +413,7 @@ function CarDetail() {
             <TabsTrigger value="km">Km</TabsTrigger>
           </TabsList>
           <TabsContent value="estado" className="pt-4">
-            <RulesTab car={car} rules={rules} />
+            <RulesTab car={car} rules={rules} owner={owner} />
           </TabsContent>
           <TabsContent value="trabajos" className="pt-4">
             <JobsTab car={car} jobs={jobs} carById={carById} />

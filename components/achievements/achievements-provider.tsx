@@ -11,6 +11,7 @@ import {
   type AchievementStatus,
 } from '@/lib/achievements'
 import { markAchievementsCelebrated, unlockAchievements } from '@/lib/db'
+import { mineForAchievements } from '@/lib/sharing'
 import type { AchievementRecord } from '@/lib/types'
 import { CelebrationDialog } from './celebration-dialog'
 
@@ -125,11 +126,15 @@ function CelebrationHost({ statuses }: { statuses: AchievementStatus[] }) {
   )
 }
 
+/**
+ * Los logros son de cada persona: se evalúan sólo con lo que cargó ella (y, en trabajos, sólo lo aprobado), y en
+ * los autos que le compartieron sin los mantenimientos (`mineForAchievements`).
+ */
 export function AchievementsProvider({ children }: { children: React.ReactNode }) {
   const { uid, cars, rules, jobs, fuel, odometer, achievements, today } = useData()
   const statuses = useMemo(
-    () => evaluateAchievements(carRecords({ cars, rules, jobs, fuel, odometer }, today), achievements, today),
-    [cars, rules, jobs, fuel, odometer, achievements, today],
+    () => evaluateAchievements(carRecords(mineForAchievements({ cars, rules, jobs, fuel, odometer }, uid), today), achievements, today),
+    [cars, rules, jobs, fuel, odometer, achievements, today, uid],
   )
   useAutoUnlock(uid, statuses)
 
