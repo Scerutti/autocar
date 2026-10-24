@@ -2,9 +2,9 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.2.0
 
-Compartir un auto con hasta 2 personas. **Antes del deploy hay que publicar las reglas de Firestore nuevas** (son compatibles con la 1.1.2). No hace falta migrar datos.
+Compartir un auto con hasta 2 personas, con aprobación de los trabajos que cargan. Las reglas de Firestore nuevas se publican antes del deploy (son compatibles con la 1.1.2). No hace falta migrar datos.
 
 ### Novedades
 
