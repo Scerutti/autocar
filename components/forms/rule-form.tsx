@@ -27,7 +27,7 @@ const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n)
 export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { uid, today } = useData()
+  const { actor, today } = useData()
   const { saving, error, setError, run } = useSaver()
 
   const presets = RULE_PRESETS.filter(p => !p.requires || car.fuelTypes.includes(p.requires))
@@ -116,7 +116,7 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveRule(uid, { carId: car.id, name: name.trim(), ...draft }, rule?.id))
+      status = await settle(saveRule(actor, { carId: car.id, name: name.trim(), ...draft }, rule?.id))
     })
     if (!ok) return
     toastSaved(rule ? 'Mantenimiento guardado' : 'Mantenimiento agregado', status, nextText ? `${name.trim()}: te toca ${nextText}` : undefined)
@@ -135,8 +135,8 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
     router.replace(`/autos/${car.id}`)
     removeWithUndo({
       message: `"${rule.name}" borrado`,
-      remove: () => deleteRule(uid, rule.id),
-      restore: () => restoreRule(uid, rule),
+      remove: () => deleteRule(actor, rule.carId, rule.id),
+      restore: () => restoreRule(actor, rule),
     })
   }
 

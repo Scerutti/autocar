@@ -118,7 +118,7 @@ En desarrollo local alcanza con la misma clave, porque `localhost` está entre s
 
 - **Acceso**: abierto a cualquier cuenta de Google con mail verificado. La primera vez, `app/api/access` la registra en `allowlist`; las reglas de Firestore y las API routes (`authorize()` en `lib/firebase/admin.ts`) exigen ese registro. Si algún día hay que cerrar la app (con invitación o aprobación), alcanza con cambiar esa ruta.
 - **Riesgo que queda por estar abierta**: alguien con un script podría gastar la cuota diaria gratis de Firestore escribiendo en su propia cuenta. Para eso está App Check con reCAPTCHA Enterprise (ver [Puesta en marcha → 5. App Check](#5-app-check)); si no alcanza, queda cerrar el acceso.
-- **Datos**: cada cuenta sólo lee y escribe `users/{su uid}`. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
+- **Datos**: cada cuenta sólo lee y escribe `users/{su uid}` (ajustes, push y logros) y los autos de los que es dueña (`cars/{carId}` con `ownerUid` igual a su uid, y sus subcolecciones). Por ahora los autos no se comparten: `members` queda vacío. La configuración `NEXT_PUBLIC_FIREBASE_*` es pública por diseño: lo que protege son las reglas.
 - **Reglas de Firestore**: sólo aceptan las colecciones y los campos que guarda la app, con largo máximo en los textos (funciones `valid*` en [`firestore.rules`](firestore.rules)). **Si agregás un campo o una colección, sumalo ahí y volvé a publicar las reglas**: si no, esa escritura falla con `permission-denied` en producción.
 - **API routes**: todas piden el ID token de Firebase (`Authorization: Bearer …`); el cron pide `CRON_SECRET` (comparado en tiempo constante) y sin esa variable no corre. Borrar fotos sólo funciona dentro de la carpeta propia.
 - **Fotos**: la firma de subida incluye un `public_id` único y `overwrite=false`, así cada firma sirve para una sola foto y el límite diario no se saltea.
@@ -149,17 +149,44 @@ En desarrollo local alcanza con la misma clave, porque `localhost` está entre s
 
 ## Modelo de datos (Firestore)
 
-Todo cuelga de `users/{uid}`; las colecciones hijas tienen `carId` para consultar entre autos.
+Cada auto es un documento de primer nivel, `cars/{carId}`, y sus mantenimientos, trabajos, cargas y lecturas de km son subcolecciones suyas. Los ajustes, las suscripciones push y los logros siguen colgando de `users/{uid}`. Los documentos hijos conservan el campo `carId` (aunque ya esté en la ruta): el cliente agrupa y filtra por ese campo, y las reglas exigen que coincida con el de la ruta. Los ids son los mismos que tenían antes de la migración.
 
 | Colección | Qué guarda |
 |---|---|
 | `users/{uid}` | ajustes: `reminder { enabled, weekday }`, `timezone` |
-| `cars` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto |
-| `rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, última vez (km/fecha), márgenes de aviso |
-| `jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple |
-| `fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
-| `odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |
-| `pushSubscriptions` | dispositivos suscriptos a notificaciones |
-| `achievements` | logros conseguidos: el id del documento es el del logro; `carId`, `unlockedAt`, `celebratedAt` (null = celebración pendiente) |
+| `cars/{carId}` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto, y el dueño: `ownerUid`, `ownerName` y `members` (hasta 2 mails en minúscula; siempre vacío por ahora) |
+| `cars/{carId}/rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, última vez (km/fecha), márgenes de aviso |
+| `cars/{carId}/jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple, `status` (`approved`, `pending` o `rejected`; hoy siempre `approved`, y un trabajo sin el campo cuenta como aprobado) |
+| `cars/{carId}/fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
+| `cars/{carId}/odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |
+| `users/{uid}/pushSubscriptions` | dispositivos suscriptos a notificaciones |
+| `users/{uid}/achievements` | logros conseguidos: el id del documento es el del logro; `carId`, `unlockedAt`, `celebratedAt` (null = celebración pendiente) |
 
-Fuera de `users`, y sólo accesibles desde el servidor: `allowlist/{mail}` (cuentas registradas, se completa sola) y `usage/{uid}` (fotos subidas en el día).
+- **Autoría**: los trabajos, las cargas y las lecturas guardan `createdBy` (uid) y `createdByName` (nombre de Google o null). Se graban al crear y no cambian al editar; "Deshacer" los conserva. Los mantenimientos no la llevan: el plan de mantenimiento es del dueño. En el cliente, las escrituras de `lib/db.ts` reciben un `actor { uid, name }` (lo da `useData()`).
+- **Lectura**: `subscribeUserData` escucha los autos con `where('ownerUid', '==', uid)` (la regla de lectura depende de ese campo) y abre 4 listeners por auto. No hacen falta índices compuestos.
+- **Reglas**: el permiso de un hijo se decide con el documento del auto: `get()` para leer y borrar, `getAfter()` para crear y editar (así `createCar` puede crear el auto y su primera lectura en el mismo batch).
+- **Borrar un auto**: `deleteCar` borra primero los hijos y el auto al final. Sin el auto, las reglas ya no dejan leer ni borrar sus hijos, y quedarían huérfanos.
+- **Estructura vieja**: `users/{uid}/cars|rules|jobs|fuel|odometer` y sus reglas siguen en pie, sin usarse, por si hay que volver atrás. Se borran en un cambio aparte, cuando todo esté confirmado en producción.
+
+Fuera de `users` y `cars`, y sólo accesibles desde el servidor: `allowlist/{mail}` (cuentas registradas, se completa sola) y `usage/{uid}` (fotos subidas en el día).
+
+## Migración a `cars/`
+
+El script [`scripts/migrate-cars.mjs`](scripts/migrate-cars.mjs) copia los datos de `users/{uid}/…` a `cars/…` con el Admin SDK. Usa las variables `FIREBASE_ADMIN_*` de `.env.local`.
+
+- **Sin `--apply` es un simulacro**: no escribe nada. Imprime, por cuenta, cuántos autos y cuántos hijos copia, saltea u omite.
+- **Solo crea**: si el documento destino ya existe, lo saltea. Se puede correr de nuevo sin pisar lo que se cargó con la app nueva.
+- **Agrega** `ownerUid`, `ownerName` y `members: []` a los autos; `createdBy` y `createdByName` (el dueño) a los trabajos, cargas y lecturas; y `status: 'approved'` a los trabajos.
+- **Informa y no copia**: los hijos cuyo `carId` no es de un auto de esa cuenta (huérfanos) y un `cars/{carId}` que ya existe con otro dueño (conflicto; el script sale con código 1).
+- **No borra nada** de `users/{uid}/…`.
+- La lógica está en `scripts/migrate-cars-plan.mjs`, con sus pruebas al lado.
+
+Procedimiento de salida (lo hace una persona, en este orden; publicar este cambio solo, sin mezclarlo con otros):
+
+1. Avisar a los otros usuarios que no usen la app unos minutos.
+2. Probar las reglas nuevas en el Simulador de reglas (Firebase → Firestore → Reglas → Zona de pruebas) y publicarlas: `npx firebase-tools deploy --only firestore:rules` o desde la consola.
+3. Correr el simulacro y revisar los números: `node --env-file=.env.local scripts/migrate-cars.mjs`. Si informa conflictos, parar.
+4. Migrar: `node --env-file=.env.local scripts/migrate-cars.mjs --apply`.
+5. Mergear y esperar que Vercel publique.
+6. Correr `--apply` otra vez, para levantar lo que se cargó con la app vieja mientras tanto.
+7. Verificar con la cuenta del dueño: mismos autos, fotos, km y mantenimientos; mismos registros de trabajos, combustible y km, y mismos gastos; cargar km, una carga (editarla y borrarla con "Deshacer") y un trabajo que marque un mantenimiento; crear un auto de prueba con una carga y borrarlo (no tiene que quedar nada en `cars/{id}` ni en sus subcolecciones); ningún logro nuevo. Al día siguiente, revisar los logs del cron en Vercel.

@@ -33,7 +33,7 @@ export function KmForm({
   inputRef?: React.RefObject<HTMLInputElement | null>
   autoFocus?: boolean
 }) {
-  const { uid, odometer, rules, today } = useData()
+  const { actor, odometer, rules, today } = useData()
   const [value, setValue] = useState('')
   const [step, setStep] = useState<'enter' | 'confirm'>('enter')
   const [warning, setWarning] = useState<string | null>(null)
@@ -63,7 +63,7 @@ export function KmForm({
     if (km == null) return
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(recordKm(uid, car, odometer, km))
+      status = await settle(recordKm(actor, car, odometer, km))
     })
     if (!ok) return setStep('enter')
     const next = rulesWithState(rules.filter(r => r.carId === car.id), { ...car, currentKm: km }, today)[0]

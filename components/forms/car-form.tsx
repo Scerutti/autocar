@@ -12,7 +12,7 @@ import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
-import { createCar, deleteCar, newId, updateCar, type CarInput } from '@/lib/db'
+import { createCar, deleteCar, newCarId, updateCar, type CarInput } from '@/lib/db'
 import { formatKm, parseNumberInput } from '@/lib/format'
 import type { Car, FuelType } from '@/lib/types'
 import { toast } from '@/lib/toast'
@@ -41,7 +41,7 @@ export function CarForm({ car }: { car?: Car }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { uid } = useData()
+  const { actor } = useData()
   const { saving, error, setError, run } = useSaver()
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -146,8 +146,8 @@ export function CarForm({ car }: { car?: Car }) {
         data.photoPublicId = null
       }
       setStatus('Guardando…')
-      const carId = car?.id ?? newId(uid, 'cars')
-      const write: Promise<unknown> = car ? updateCar(uid, car.id, data) : createCar(uid, data, kmNum!, carId)
+      const carId = car?.id ?? newCarId()
+      const write: Promise<unknown> = car ? updateCar(actor, car.id, data) : createCar(actor, data, kmNum!, carId)
       const newPublicId = uploadedId
       if (newPublicId) write.catch(() => dropImage(newPublicId))
       const saved: SaveStatus = await settle(write)
@@ -263,7 +263,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { uid } = useData()
+  const { actor } = useData()
   const { rules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
 
@@ -289,7 +289,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     router.replace('/')
     runInBackground(
       (async () => {
-        await deleteCar(uid, car.id, {
+        await deleteCar(actor, car.id, {
           rules: rules.map(r => r.rule.id),
           jobs: jobs.map(j => j.id),
           fuel: fuel.map(f => f.id),

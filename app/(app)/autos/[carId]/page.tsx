@@ -217,7 +217,7 @@ const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
 }
 
 function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
-  const { uid, odometer } = useData()
+  const { actor, odometer } = useData()
   const confirm = useConfirm()
 
   async function remove(r: OdometerReading) {
@@ -230,8 +230,8 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
     if (!confirmed) return
     removeWithUndo({
       message: `Registro de ${formatKm(r.km)} borrado`,
-      remove: () => deleteReading(uid, car, odometer, r.id),
-      restore: () => restoreReading(uid, car, odometer, r),
+      remove: () => deleteReading(actor, car, odometer, r.id),
+      restore: () => restoreReading(actor, car, odometer, r),
     })
   }
 
