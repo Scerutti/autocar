@@ -59,10 +59,16 @@ service cloud.firestore {
         && optTime(d, 'createdAt');
     }
 
+    // ownerUid, ownerName y members sólo los guarda cars/{carId}; members son hasta 2 mails en minúscula. Las
+    // reglas no tienen bucles: como en optIds, se acota la cantidad y el largo de la lista unida (join falla,
+    // y la regla deniega, si hay algo que no es texto).
     function validCar(d) {
       return d.keys().hasOnly([
           'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
-          'avgKmPerDay', 'photoUrl', 'photoPublicId', 'createdAt'])
+          'avgKmPerDay', 'photoUrl', 'photoPublicId', 'createdAt', 'ownerUid', 'ownerName', 'members'])
+        && optText(d, 'ownerUid', 128) && optText(d, 'ownerName', 200)
+        && (d.get('members', null) == null
+          || (d.members is list && d.members.size() <= 2 && d.members.join(',').size() <= 2 * 320))
         && optText(d, 'brand', 200) && optText(d, 'model', 200) && optText(d, 'version', 200)
         && optNum(d, 'year') && optText(d, 'plate', 50)
         && (d.get('fuelTypes', null) == null || (d.fuelTypes is list && d.fuelTypes.hasOnly(['nafta', 'gnc', 'gasoil'])))
@@ -85,9 +91,13 @@ service cloud.firestore {
         && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
     }
 
+    // createdBy, createdByName y status los guarda cars/{carId}/jobs; quién puede cambiarlos lo decide ese match.
     function validJob(d) {
       return d.keys().hasOnly([
-          'carId', 'date', 'km', 'title', 'category', 'cost', 'workshop', 'notes', 'ruleIds', 'createdAt'])
+          'carId', 'date', 'km', 'title', 'category', 'cost', 'workshop', 'notes', 'ruleIds', 'createdAt',
+          'createdBy', 'createdByName', 'status'])
+        && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
+        && d.get('status', 'approved') in ['approved', 'pending', 'rejected']
         && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
         && optText(d, 'title', 500) && optText(d, 'category', 50) && optNum(d, 'cost')
         && optText(d, 'workshop', 200) && optText(d, 'notes', 5000)
@@ -97,7 +107,8 @@ service cloud.firestore {
     function validFuel(d) {
       return d.keys().hasOnly([
           'carId', 'date', 'km', 'fuelType', 'grade', 'quantity', 'unitPrice', 'total', 'fullTank',
-          'station', 'createdAt'])
+          'station', 'createdAt', 'createdBy', 'createdByName'])
+        && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
         && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
         && optText(d, 'fuelType', 20) && optText(d, 'grade', 20)
         && optNum(d, 'quantity') && optNum(d, 'unitPrice') && optNum(d, 'total')
@@ -105,7 +116,8 @@ service cloud.firestore {
     }
 
     function validReading(d) {
-      return d.keys().hasOnly(['carId', 'km', 'date', 'source'])
+      return d.keys().hasOnly(['carId', 'km', 'date', 'source', 'createdBy', 'createdByName'])
+        && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
         && optText(d, 'carId', 100) && optNum(d, 'km') && optTime(d, 'date') && optText(d, 'source', 20);
     }
 
@@ -125,7 +137,59 @@ service cloud.firestore {
         && optText(d, 'carId', 100) && optTime(d, 'unlockedAt') && optTime(d, 'celebratedAt');
     }
 
+    // Dueño del auto según el documento antes del pedido: lo usan leer y borrar. En un borrado en lote, el
+    // auto se borra en el último paso, así que todavía existe cuando se evalúan los hijos.
+    function ownsCar(carId) {
+      return isOwner(get(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
+    }
+
+    // Dueño del auto según el documento después del pedido: lo usan crear y editar. createCar crea el auto y su
+    // primera lectura en el mismo batch, y con get() el auto todavía no existe para la regla de la lectura.
+    function ownsCarAfter(carId) {
+      return isOwner(getAfter(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
+    }
+
     // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
+    // Los autos son documentos de primer nivel con dueño. Por ahora sólo el dueño lee y escribe: la consulta del
+    // cliente filtra por ownerUid, que es lo que pide la regla de lectura. Los hijos guardan el carId de la ruta;
+    // createdBy se fija al crear (el que escribe) y no cambia al editar.
+    match /cars/{carId} {
+      allow read, delete: if isOwner(resource.data.ownerUid);
+      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
+      allow update: if isOwner(resource.data.ownerUid) && request.resource.data.ownerUid == resource.data.ownerUid
+        && validCar(request.resource.data);
+
+      match /rules/{ruleId} {
+        allow read, delete: if ownsCar(carId);
+        allow create, update: if ownsCarAfter(carId) && validRule(request.resource.data)
+          && request.resource.data.carId == carId;
+      }
+
+      match /jobs/{jobId} {
+        allow read, delete: if ownsCar(carId);
+        allow create: if ownsCarAfter(carId) && validJob(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
+        allow update: if ownsCarAfter(carId) && validJob(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+      }
+
+      match /fuel/{fuelId} {
+        allow read, delete: if ownsCar(carId);
+        allow create: if ownsCarAfter(carId) && validFuel(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
+        allow update: if ownsCarAfter(carId) && validFuel(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+      }
+
+      match /odometer/{readingId} {
+        allow read, delete: if ownsCar(carId);
+        allow create: if ownsCarAfter(carId) && validReading(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == request.auth.uid;
+        allow update: if ownsCarAfter(carId) && validReading(request.resource.data)
+          && request.resource.data.carId == carId && request.resource.data.createdBy == resource.data.createdBy;
+      }
+    }
+
     match /users/{uid} {
       allow read, delete: if isOwner(uid);
       allow create, update: if isOwner(uid) && validSettings(request.resource.data);

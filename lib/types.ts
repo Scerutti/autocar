@@ -26,6 +26,19 @@ export interface TimeInterval {
   unit: IntervalUnit
 }
 
+/** Quién escribe un dato: el uid de la cuenta y el nombre de Google (null si no lo tiene). */
+export interface Actor {
+  uid: string
+  name: string | null
+}
+
+/** Autoría de un registro de un auto. Opcional en el tipo porque los registros viejos no la tienen. */
+export interface Authorship {
+  /** Uid de quien lo cargó; se graba al crear y no cambia al editar. */
+  createdBy?: string | null
+  createdByName?: string | null
+}
+
 export interface Car {
   id: string
   brand: string
@@ -83,7 +96,9 @@ export const JOB_CATEGORY_LABELS: Record<JobCategory, string> = {
   otros: 'Otros',
 }
 
-export interface Job {
+export type JobStatus = 'approved' | 'pending' | 'rejected'
+
+export interface Job extends Authorship {
   id: string
   carId: string
   date: ISODate
@@ -94,10 +109,12 @@ export interface Job {
   workshop: string | null
   notes: string | null
   ruleIds: string[]
+  /** Un trabajo sin el campo (guardado antes de compartir autos) cuenta como aprobado. */
+  status?: JobStatus
   createdAt: Date
 }
 
-export interface FuelLoad {
+export interface FuelLoad extends Authorship {
   id: string
   carId: string
   date: ISODate
@@ -115,7 +132,7 @@ export interface FuelLoad {
 
 export type OdometerSource = 'initial' | 'manual' | 'job' | 'fuel'
 
-export interface OdometerReading {
+export interface OdometerReading extends Authorship {
   id: string
   carId: string
   km: number

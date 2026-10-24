@@ -18,7 +18,7 @@ const TIME_BUDGET_MS = 40_000
 /** Usuarios que se procesan a la vez: lo lento es esperar a Firestore y a los servicios de push. */
 const CONCURRENCY = 5
 
-/** Tope de autos y de mantenimientos que se leen por usuario: nadie con datos de más alarga el cron de todos. */
+/** Tope de autos, y de mantenimientos entre todos sus autos, que se leen por usuario: nadie con datos de más alarga el cron de todos. */
 const MAX_DOCS_PER_USER = 1000
 
 const toDate = (v: unknown) => (v instanceof Timestamp ? v.toDate() : null)
@@ -92,14 +92,19 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
     reminder: { ...DEFAULT_SETTINGS.reminder, ...(x.reminder ?? {}) },
     timezone: x.timezone ?? DEFAULT_SETTINGS.timezone,
   }
-  const [carsSnap, rulesSnap] = await Promise.all([
-    userDoc.ref.collection('cars').limit(MAX_DOCS_PER_USER).get(),
-    userDoc.ref.collection('rules').limit(MAX_DOCS_PER_USER).get(),
-  ])
+  const carsSnap = await db.collection('cars').where('ownerUid', '==', userDoc.id).limit(MAX_DOCS_PER_USER).get()
+  const rules: MaintenanceRule[] = []
+  for (const carDoc of carsSnap.docs) {
+    const remaining = MAX_DOCS_PER_USER - rules.length
+    if (remaining <= 0) break
+    const rulesSnap = await carDoc.ref.collection('rules').limit(remaining).get()
+    rules.push(...rulesSnap.docs.map(d => ruleFrom(d.id, d.data())))
+  }
+  const carIdByRule = new Map(rules.map(r => [r.id, r.carId]))
   const { messages, ruleUpdates } = planDailyNotifications({
     settings,
     cars: carsSnap.docs.map(d => carFrom(d.id, d.data())),
-    rules: rulesSnap.docs.map(d => ruleFrom(d.id, d.data())),
+    rules,
     today: todayInTimeZone(settings.timezone, now),
     now,
   })
@@ -111,7 +116,7 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
     writer.onWriteError(err => err.code !== 5 && err.failedAttempts < 3)
     for (const u of updates) {
       writer
-        .update(userDoc.ref.collection('rules').doc(u.ruleId), {
+        .update(db.collection('cars').doc(carIdByRule.get(u.ruleId)!).collection('rules').doc(u.ruleId), {
           lastNotifiedStatus: u.lastNotifiedStatus,
           lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
         })

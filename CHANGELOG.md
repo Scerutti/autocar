@@ -2,6 +2,17 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Mantenimiento
+
+- **Los autos pasan a `cars/{carId}`**: cada auto, con sus mantenimientos, trabajos, cargas y lecturas de km, deja `users/{uid}` y vive en su propio documento, con `ownerUid`, `ownerName` y `members` (vacío por ahora). Es la base para compartir un auto con otras personas. Para el usuario no cambia nada.
+- **Autoría**: los trabajos, las cargas y las lecturas de km guardan quién los cargó (`createdBy`, `createdByName`), y los trabajos un `status` (siempre `approved` por ahora).
+- **Reglas de Firestore** para `cars/**`: solo el dueño lee y escribe. Las reglas de `users/{uid}/cars|rules|jobs|fuel|odometer` quedan, sin usarse, para poder volver atrás.
+- **Borrar un auto** borra primero todo lo que cuelga de él y el auto al final, para no dejar documentos huérfanos.
+- **Cron diario**: lee los autos por `ownerUid` y los mantenimientos de cada auto.
+- **Migración**: `scripts/migrate-cars.mjs` copia los datos existentes a la estructura nueva (simulacro por defecto, `--apply` para escribir, no pisa ni borra nada). El procedimiento está en `INSTRUCTIONS.md`, sección "Migración a `cars/`".
+
 ## 1.1.1
 
 Arreglo del historial en PDF.

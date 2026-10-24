@@ -41,7 +41,7 @@ const PREMIUM_HINTS: Partial<Record<FuelType, string>> = {
 export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { uid, today, odometer } = useData()
+  const { actor, today, odometer } = useData()
   const { fuel: carFuel } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
@@ -131,7 +131,7 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveFuel(uid, { car, readings: odometer }, data, load?.id))
+      status = await settle(saveFuel(actor, { car, readings: odometer }, data, load?.id))
     })
     if (!ok) return
     toastSaved(
@@ -154,8 +154,8 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
     router.replace(`/autos/${car.id}?tab=combustible`)
     removeWithUndo({
       message: 'Carga borrada',
-      remove: () => deleteFuel(uid, load.id),
-      restore: () => restoreFuel(uid, load),
+      remove: () => deleteFuel(actor, load.carId, load.id),
+      restore: () => restoreFuel(actor, load),
     })
   }
 

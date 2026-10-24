@@ -5,11 +5,13 @@ import { subscribeUserData, syncCarKm, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
 import { rulesWithState, type RuleWithState } from '@/lib/maintenance'
 import { topReading } from '@/lib/odometer'
-import { DEFAULT_SETTINGS, type Car } from '@/lib/types'
+import { DEFAULT_SETTINGS, type Actor, type Car } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
   uid: string
+  /** Quién escribe: va como autor de lo que se crea. */
+  actor: Actor
   loading: boolean
   error: Error | null
   today: string
@@ -39,6 +41,8 @@ const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs:
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
   const uid = user!.uid
+  const displayName = user!.displayName
+  const actor = useMemo<Actor>(() => ({ uid, name: displayName || null }), [uid, displayName])
   const [data, setData] = useState<UserData>(EMPTY)
   const [loaded, setLoaded] = useState<Set<keyof UserData>>(new Set())
   const [synced, setSynced] = useState<Set<keyof UserData>>(new Set())
@@ -83,13 +87,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         const key = `${car.id}:${top.km}`
         if (fixing.current.has(key)) continue
         fixing.current.add(key)
-        syncCarKm(uid, car.id, readings)
+        syncCarKm(actor, car.id, readings)
           .then(() => fixing.current.delete(key))
           .catch(e => console.warn('No se pudo corregir el km del auto', car.id, e))
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, data.odometer, kmReady, uid])
+  }, [data.cars, data.odometer, kmReady, actor])
 
   const value = useMemo<DataState>(() => {
     const cars = data.cars
@@ -112,13 +116,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       fuel: [...data.fuel].sort(byDateDesc),
       odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
       uid,
+      actor,
       loading: PARTS.some(p => !loaded.has(p)),
       error,
       today,
       carById,
       rulesByCar,
     }
-  }, [data, loaded, error, today, uid])
+  }, [data, loaded, error, today, uid, actor])
 
   return <DataContext value={value}>{children}</DataContext>
 }
