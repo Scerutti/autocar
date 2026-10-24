@@ -2,6 +2,15 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.2.1
+
+Actualización de seguridad de dependencias. Para el usuario la app funciona igual.
+
+### Mantenimiento
+
+- **Next 16.4.3** (antes 16.3.8): cierra dos ejecuciones remotas de código (Image Optimization con SVG y funciones `use cache` que devuelven typed arrays) y un DoS en Server Actions. La app no usaba ninguna de esas tres funciones, pero la versión anterior quedaba expuesta si se activaban.
+- **`npm audit fix`** en las dependencias transitivas: `hono`, `ip-address`, `undici`, `body-parser`, `fast-uri`, `qs` y `zod` (vienen del CLI de `shadcn`, que pasa a 4.22.1; no llegan al bundle). `npm audit` queda en 0.
+
 ## 1.2.0
 
 Compartir un auto con hasta 2 personas, con aprobación de los trabajos que cargan. Las reglas de Firestore nuevas se publican antes del deploy (son compatibles con la 1.1.2). No hace falta migrar datos.
