@@ -2,7 +2,7 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.2.1
 
 Actualización de seguridad de dependencias. Para el usuario la app funciona igual.
 
