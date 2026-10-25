@@ -1,4 +1,13 @@
 @AGENTS.md
+@SYSTEM_MAP.md
+
+# Mapa del sistema
+
+`SYSTEM_MAP.md` (importado arriba) es el mapa de rutas, funciones de `lib/db.ts`, colecciones, contratos y servicios externos.
+
+- Antes de cada tarea, ubicar ahí qué rutas, funciones y colecciones toca. Leer código sólo para los detalles que el mapa no tiene.
+- Si el código no coincide con el mapa, manda el código: corregir el mapa en el mismo cambio.
+- Todo PR que agregue o cambie una API route, una función exportada de `lib/db.ts`, una pantalla, una colección, un campo, una regla de Firestore, una variable de entorno o un servicio externo actualiza `SYSTEM_MAP.md` en el mismo PR.
 
 # Comentarios
 
