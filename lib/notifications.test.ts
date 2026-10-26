@@ -33,9 +33,13 @@ const rule: MaintenanceRule = {
   intervalKm: 5000,
   intervalTime: { amount: 12, unit: 'month' },
   repeat: true,
+  baseKm: 10000,
+  baseDate: '2026-01-10',
   lastDoneKm: 10000,
   lastDoneKmEstimated: false,
   lastDoneDate: '2026-01-10',
+  lastDoneJobId: null,
+  completedByJobId: null,
   warnKm: 500,
   warnDays: 30,
   lastNotifiedAt: null,
@@ -82,6 +86,13 @@ describe('planDailyNotifications', () => {
       now: new Date('2026-09-21T12:00:00Z'),
     })
     expect(overdue.messages[0].title).toContain('Vencido')
+  })
+
+  it('no avisa un recordatorio cumplido', () => {
+    const done = { ...rule, repeat: false, completedByJobId: 'j1' }
+    const { messages, ruleUpdates } = planDailyNotifications({ settings, cars: [car], rules: [done], today: '2026-09-21', now })
+    expect(messages).toHaveLength(0)
+    expect(ruleUpdates).toEqual([])
   })
 
   it('limpia el estado cuando el mantenimiento vuelve a estar al día', () => {

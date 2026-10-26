@@ -142,7 +142,7 @@ Cada auto es un documento de primer nivel, `cars/{carId}`, y sus mantenimientos,
 |---|---|
 | `users/{uid}` | ajustes: `reminder { enabled, weekday }`, `timezone` |
 | `cars/{carId}` | marca, modelo, versión, año, patente, combustibles (`nafta`, `nafta + gnc` o `gasoil`), km actual, promedio km/día, foto, y el dueño: `ownerUid`, `ownerName` y `members` (hasta 2 mails en minúscula de las personas con las que se compartió; el dueño no figura) |
-| `cars/{carId}/rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, última vez (km/fecha), márgenes de aviso |
+| `cars/{carId}/rules` | mantenimientos: cada cuántos km y/o cada cuánto tiempo (`intervalTime { amount, unit }`), si se repite o es de una sola vez, la última vez cargada a mano (`baseKm`/`baseDate`), la proyección que sale de los trabajos aprobados (`lastDone*`, `lastDoneJobId`, `completedByJobId`: un recordatorio cumplido), márgenes de aviso |
 | `cars/{carId}/jobs` | trabajos: fecha, km, título, categoría, costo, taller, notas, mantenimientos que cumple, `status` (`approved`, `pending` o `rejected`; un trabajo sin el campo cuenta como aprobado) y `reviewedAt` (cuándo el dueño aprobó o rechazó el trabajo de un miembro) |
 | `cars/{carId}/fuel` | cargas: fecha, km, combustible (`nafta`, `gasoil`, `gnc`) y calidad (`super`/`premium`), cantidad (L o m³), precio por unidad, total, tanque lleno |
 | `cars/{carId}/odometer` | lecturas del odómetro (manual, desde trabajos o cargas) |

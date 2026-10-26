@@ -58,6 +58,15 @@ export function StatusBadge({ status, className }: { status: RuleStatus; classNa
   )
 }
 
+/** Etiqueta de un recordatorio de una vez que ya cumplió un trabajo (`completedByJobId`). */
+export function CompletedBadge({ className }: { className?: string }) {
+  return (
+    <Badge variant="outline" className={cn('border-primary/25 bg-primary/10 text-primary', className)}>
+      Cumplido
+    </Badge>
+  )
+}
+
 /** Barra de progreso del intervalo consumido, coloreada por estado. */
 export function RuleProgress({ progress, status, className }: { progress: number; status: RuleStatus; className?: string }) {
   return (

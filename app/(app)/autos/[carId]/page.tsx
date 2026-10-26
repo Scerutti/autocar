@@ -34,7 +34,7 @@ import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm
 import { readingOrigin } from '@/lib/odometer'
 import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
-import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type OdometerReading } from '@/lib/types'
+import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type MaintenanceRule, type OdometerReading } from '@/lib/types'
 import { removeWithUndo, runInBackground } from '@/lib/use-saver'
 
 const TABS = ['estado', 'trabajos', 'combustible', 'km'] as const
@@ -51,25 +51,81 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
 }
 
 /**
- * Mantenimientos del auto. Agregarlos es sólo del dueño: a un miembro no se le ofrece. Cada tarjeta lleva al
- * mantenimiento (al dueño, a editarlo): si es por km y le falta el km de la última vez, lo dice ahí.
+ * Recordatorios de una vez que ya cumplió un trabajo (`completedByJobId`), en una sección plegada. Cada uno lleva al
+ * trabajo que lo cumplió (si la app no lo tiene, al recordatorio). Si se borra el trabajo, vuelve a estar activo.
  */
-function RulesTab({ car, rules, owner }: { car: Car; rules: RuleWithState[]; owner: boolean }) {
+function CompletedRules({ car, completed, jobs }: { car: Car; completed: MaintenanceRule[]; jobs: Job[] }) {
+  if (!completed.length) return null
+  return (
+    <details className="rounded-xl border border-white/8 bg-card/40 p-4">
+      <summary className="cursor-pointer text-sm font-medium">Cumplidos ({completed.length})</summary>
+      <div className="mt-3 divide-y divide-white/8">
+        {completed.map(rule => {
+          const job = jobs.find(j => j.id === rule.completedByJobId)
+          return (
+            <Link
+              key={rule.id}
+              href={job ? `/autos/${car.id}/trabajos/${job.id}` : `/autos/${car.id}/mantenimientos/${rule.id}`}
+              className="flex items-center gap-3 py-2.5 text-sm transition hover:text-foreground"
+            >
+              <CalendarClock aria-hidden className="size-4 shrink-0 text-primary" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{rule.name}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {job ? `Con el trabajo «${job.title}» del ${formatDate(job.date)}` : 'Cumplido con un trabajo'}
+                </span>
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </Link>
+          )
+        })}
+      </div>
+    </details>
+  )
+}
+
+/**
+ * Mantenimientos del auto: los activos y, plegados, los recordatorios cumplidos (`CompletedRules`). Agregarlos es sólo
+ * del dueño: a un miembro no se le ofrece. Cada tarjeta lleva al mantenimiento (al dueño, a editarlo): si es por km y
+ * le falta el km de la última vez, lo dice ahí.
+ */
+function RulesTab({
+  car,
+  rules,
+  completed,
+  jobs,
+  owner,
+}: {
+  car: Car
+  rules: RuleWithState[]
+  completed: MaintenanceRule[]
+  jobs: Job[]
+  owner: boolean
+}) {
+  const done = <CompletedRules car={car} completed={completed} jobs={jobs} />
   if (!rules.length && !owner) {
-    return <EmptyState icon={Wrench} title="Sin mantenimientos" description="El dueño todavía no cargó mantenimientos para este auto." />
+    return (
+      <div className="space-y-3">
+        <EmptyState icon={Wrench} title="Sin mantenimientos" description="El dueño todavía no cargó mantenimientos para este auto." />
+        {done}
+      </div>
+    )
   }
   if (!rules.length) {
     return (
-      <EmptyState
-        icon={Wrench}
-        title="Sin mantenimientos"
-        description="Agregá el service, la VTV, el seguro… y te avisamos antes de que venzan."
-        action={
-          <LinkButton href={`/autos/${car.id}/mantenimientos/nuevo`} size="lg" className="gap-2">
-            <Plus /> Agregar mantenimiento
-          </LinkButton>
-        }
-      />
+      <div className="space-y-3">
+        <EmptyState
+          icon={Wrench}
+          title="Sin mantenimientos"
+          description="Agregá el service, la VTV, el seguro… y te avisamos antes de que venzan."
+          action={
+            <LinkButton href={`/autos/${car.id}/mantenimientos/nuevo`} size="lg" className="gap-2">
+              <Plus /> Agregar mantenimiento
+            </LinkButton>
+          }
+        />
+        {done}
+      </div>
     )
   }
   return (
@@ -116,6 +172,7 @@ function RulesTab({ car, rules, owner }: { car: Car; rules: RuleWithState[]; own
           </Link>
         )
       })}
+      {done}
       {owner && (
         <LinkButton href={`/autos/${car.id}/mantenimientos/nuevo`} variant="ghost" className="w-full gap-2 text-muted-foreground">
           <Plus /> Agregar mantenimiento
@@ -370,7 +427,7 @@ function CarDetail() {
   const { carId } = useParams<{ carId: string }>()
   const params = useSearchParams()
   const { carById, uid } = useData()
-  const { car, rules, jobs, fuel, readings } = useCar(carId)
+  const { car, rules, completed, jobs, fuel, readings } = useCar(carId)
   const [showKm, setShowKm] = useState(false)
   const tabParam = params.get('tab') as Tab | null
   const tab: Tab = tabParam && TABS.includes(tabParam) ? tabParam : 'estado'
@@ -440,7 +497,7 @@ function CarDetail() {
             <TabsTrigger value="km">Km</TabsTrigger>
           </TabsList>
           <TabsContent value="estado" className="pt-4">
-            <RulesTab car={car} rules={rules} owner={owner} />
+            <RulesTab car={car} rules={rules} completed={completed} jobs={jobs} owner={owner} />
           </TabsContent>
           <TabsContent value="trabajos" className="pt-4">
             <JobsTab car={car} jobs={jobs} carById={carById} />

@@ -406,12 +406,12 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const confirm = useConfirm()
   const { getToken } = useAuth()
   const { actor } = useData()
-  const { rules, jobs, fuel, readings } = useCar(car.id)
+  const { allRules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
 
   async function handleDelete() {
     const counts = [
-      [rules.length, 'mantenimiento', 'mantenimientos'],
+      [allRules.length, 'mantenimiento', 'mantenimientos'],
       [jobs.length, 'trabajo', 'trabajos'],
       [fuel.length, 'carga', 'cargas'],
       [readings.length, 'registro de km', 'registros de km'],
@@ -432,7 +432,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     runInBackground(
       (async () => {
         await deleteCar(actor, car.id, {
-          rules: rules.map(r => r.rule.id),
+          rules: allRules.map(r => r.id),
           jobs: jobs.map(j => j.id),
           fuel: fuel.map(f => f.id),
           odometer: readings.map(r => r.id),

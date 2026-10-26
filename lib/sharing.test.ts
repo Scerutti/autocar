@@ -92,9 +92,13 @@ const rule = (extra: Partial<MaintenanceRule> = {}): MaintenanceRule => ({
   intervalKm: 5000,
   intervalTime: null,
   repeat: true,
+  baseKm: 10000,
+  baseDate: '2026-09-01',
   lastDoneKm: 10000,
   lastDoneKmEstimated: false,
   lastDoneDate: '2026-09-01',
+  lastDoneJobId: null,
+  completedByJobId: null,
   warnKm: 500,
   warnDays: 30,
   lastNotifiedAt: null,
@@ -228,6 +232,11 @@ describe('mineForAchievements', () => {
     expect(mine.jobs.map(j => j.id)).toEqual(['j-mine', 'j-shared-ok', 'j-legacy'])
     expect(mine.fuel.map(f => f.id)).toEqual(['f-mine'])
     expect(mine.odometer.map(r => r.id)).toEqual(['o-mine'])
+  })
+
+  it('no cuenta los recordatorios cumplidos, como cuando un trabajo los borraba', () => {
+    const withDone = { ...data, rules: [...data.rules, rule({ id: 'r-done', carId: 'own', repeat: false, completedByJobId: 'j-mine' })] }
+    expect(mineForAchievements(withDone, OWNER).rules.map(r => r.id)).toEqual(['r-own'])
   })
 
   it('pone rules: [] en un auto compartido conmigo', () => {

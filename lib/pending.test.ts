@@ -32,9 +32,13 @@ const rule: MaintenanceRule = {
   intervalKm: 5000,
   intervalTime: null,
   repeat: true,
+  baseKm: 10000,
+  baseDate: null,
   lastDoneKm: 10000,
   lastDoneKmEstimated: false,
   lastDoneDate: null,
+  lastDoneJobId: null,
+  completedByJobId: null,
   warnKm: 500,
   warnDays: 30,
   lastNotifiedAt: null,
@@ -123,6 +127,12 @@ describe('pendingItems', () => {
   it('el número cuenta los vencidos y los km, no los por vencer', () => {
     expect(urgentCount(pendingItems({ ...base, cars: [car], rulesByCar, today: '2026-09-28' }))).toBe(2)
     expect(urgentCount(pendingItems({ ...base, cars: [car], rulesByCar, today: '2026-09-21' }))).toBe(1)
+  })
+
+  it('un recordatorio cumplido no está pendiente', () => {
+    const done: RuleWithState = { rule: { ...rule, id: 'done', repeat: false, completedByJobId: 'j1' }, state: state('overdue') }
+    const items = pendingItems({ ...base, cars: [car], rulesByCar: new Map([['c1', [done]]]), today: '2026-09-21' })
+    expect(items.map(key)).toEqual([])
   })
 
   it('sin autos no hay nada pendiente', () => {

@@ -1,6 +1,6 @@
 import { addDays, toISODate, weekdayOf } from './dates'
 import { WEEKDAYS } from './format'
-import type { RuleState, RuleWithState } from './maintenance'
+import { isCompleted, type RuleState, type RuleWithState } from './maintenance'
 import { authorOf, isCarOwner } from './sharing'
 import type { Car, ISODate, Job, MaintenanceRule, UserSettings } from './types'
 
@@ -51,7 +51,8 @@ export function kmDueDay(since: ISODate, today: ISODate) {
 /**
  * Lo pendiente de todos los autos, lo más urgente primero: mantenimientos vencidos, trabajos para revisar (de
  * los miembros, en mis autos), km que faltan cargar, mis trabajos rechazados (en autos de otros), autos que me
- * compartieron y todavía no vi (`seenShared`) y mantenimientos por vencer.
+ * compartieron y todavía no vi (`seenShared`) y mantenimientos por vencer. Los recordatorios cumplidos no cuentan
+ * (`rulesByCar` ya viene sin ellos; se filtran igual).
  */
 export function pendingItems(input: {
   settings: UserSettings
@@ -64,7 +65,9 @@ export function pendingItems(input: {
 }): PendingItem[] {
   const { settings, cars, rulesByCar, jobs, uid, seenShared, today } = input
   const carById = new Map(cars.map(c => [c.id, c]))
-  const rules = cars.flatMap(car => (rulesByCar.get(car.id) ?? []).map(r => ({ kind: 'rule' as const, car, ...r })))
+  const rules = cars.flatMap(car =>
+    (rulesByCar.get(car.id) ?? []).filter(r => !isCompleted(r.rule)).map(r => ({ kind: 'rule' as const, car, ...r })),
+  )
   const km = cars.flatMap(car => {
     const since = kmDueSince(settings, car, today)
     return since ? [{ kind: 'km' as const, car, since }] : []

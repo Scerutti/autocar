@@ -2,6 +2,37 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+El estado de cada mantenimiento sale de los trabajos aprobados, así que corregir o borrar un trabajo lo corrige. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
+
+### Arreglos
+
+- **Corregir un trabajo corrige sus mantenimientos**: si le sacás un mantenimiento a un trabajo, o le corregís la fecha (por ejemplo, de 2027 a 2026), el mantenimiento vuelve al trabajo anterior o a la "última vez" que cargaste a mano. Antes quedaba como lo había dejado el trabajo, y una fecha futura no se corregía nunca.
+- **Borrar un trabajo devuelve sus mantenimientos a como estaban antes de él**, y "Deshacer" los vuelve a dejar como estaban. Rechazar un trabajo que estaba aprobado hace lo mismo.
+- **Los recordatorios de una vez ya no se borran**: el trabajo que los cumple los deja en "Cumplidos", plegados al final de la pestaña Estado, con link al trabajo. No avisan ni aparecen en la campanita. Si borrás el trabajo, o lo editás y lo desmarcás, vuelven a estar activos.
+- **Si se corta la conexión mientras guardás un trabajo**, el mantenimiento se reinicia solo la próxima vez que abrís la app. Antes el trabajo quedaba guardado pero el mantenimiento no, y seguía llegando el aviso de vencido.
+- **Editar un mantenimiento ya no pisa un trabajo cargado desde otro celular.**
+- **Ficha del mantenimiento**: la "última vez" que cargás a mano es "Última vez (si no hay trabajos)". Si un trabajo manda, dice "Según el trabajo «Service» del 12/03", con link al trabajo; si a ese trabajo le falta el km, te lo pide ahí.
+- **Confirmaciones**: al editar o borrar un trabajo aprobado, la confirmación dice cómo queda cada mantenimiento que cambia ("Service vuelve a 12 de mar de 2026 · 40.000 km").
+
+### Mantenimiento
+
+- **Modelo** (`MaintenanceRule`): lo declarado por el dueño (`baseKm`, `baseDate`) se separa de la proyección que sale de los trabajos aprobados (`lastDoneKm`, `lastDoneDate`, `lastDoneKmEstimated`, `lastDoneJobId`, `completedByJobId`). La proyección se guarda como caché para el cron y la escriben sólo `lib/db.ts` y la reconciliación.
+- **Proyección pura** (`lib/maintenance.ts`, con pruebas): `projectRule(rule, jobs, readings)` (manda el trabajo aprobado más reciente que no sea anterior a la base; empate de fecha, `createdAt`; sin km, `jobDoneKm`), `projectionDiff(rules, jobs, readings)` y `jobChangeDiff(...)`. El patch pone `lastNotifiedAt/lastNotifiedStatus: null` si cambia la fecha, el cumplido o un km no estimado; un km estimado que se ajusta se guarda sin volver a avisar. Sale `jobRuleUpdates`.
+- **Escrituras** (`lib/db.ts`): `applyJobChange(actor, ctx, before, after, writeJob)` (interna) es el camino único de `saveJob`, `approveJob`, `rejectJob`, `deleteJob` y `restoreJob`; reemplaza a `addJobEffects` y `commitJob`. Cada mantenimiento sigue en su propio batch, y ahora sólo se escriben los que cambian. `rejectJob`, `deleteJob` y `restoreJob` reciben el contexto completo (`{ car, rules, jobs, readings }`) y `saveJob` el `Job` anterior completo. `saveRule(actor, { jobs, readings }, data, ruleId?)`: crear es `set`, editar es `update` de lo declarado más la proyección; nunca escribe `lastDone*` del formulario. Ningún trabajo borra un mantenimiento.
+- **Reconciliación** (`DataProvider`): en los autos propios, con autos, mantenimientos, trabajos y lecturas confirmados por el servidor, escribe la proyección que no coincide (`syncRuleProjection`), una vez por diferencia. La UI calcula el estado con la proyección en memoria. `useCar` suma `completed` y `allRules`.
+- **Cumplidos fuera de lo activo**: `rulesByCar`, la campanita, los logros (`mineForAchievements`), el PDF (ya sólo listaba los periódicos) y el cron (`planDailyNotifications`) no cuentan los recordatorios con `completedByJobId`.
+- **Lectura tolerante**: `ruleFrom` (app y cron) usa `lastDone*` como base sólo si el documento no tiene `baseKm`/`baseDate` (un mantenimiento creado o editado con la versión anterior de la PWA durante el rollout). Si los tiene en null, la base es null.
+- **Reglas de Firestore**: `validRule` acepta `baseKm` (número), `baseDate` (texto, 30), `lastDoneJobId` (texto, 100) y `completedByJobId` (texto, 100). Siguen aceptando lo que escribe la 1.4.1, que no los manda.
+- **Migración** `scripts/rebase-rules.mjs` (lógica en `scripts/rebase-rules-plan.mjs`, con pruebas): a cada mantenimiento sin `baseKm`/`baseDate` le escribe la base: null si su `lastDoneDate` es la de un trabajo aprobado que lo marca, y si no, su `lastDone*`. No escribe la proyección: la guarda la app cuando el dueño la abre. Informa por auto cuántos quedaron con base propia y cuántos con base null. Simulacro por defecto, `--apply` para escribir; se puede volver a correr.
+- **Pasos manuales, en orden**:
+  1. Publicar las reglas de Firestore.
+  2. Simulacro: `node --env-file=.env.local scripts/rebase-rules.mjs`.
+  3. `node --env-file=.env.local scripts/rebase-rules.mjs --apply`.
+  4. Deploy de la app.
+  5. `--apply` otra vez, para los mantenimientos que haya creado o editado la versión anterior de la PWA hasta actualizarse. Una tercera corrida tiene que dar 0 cambios.
+
 ## 1.4.1
 
 El km del auto sale siempre de sus registros de km, y las novedades de cada versión se anuncian al entrar. No cambian las reglas de Firestore y no hace falta migrar datos.
