@@ -1,6 +1,7 @@
 import { addDays, addInterval, daysBetween, intervalDays } from './dates'
 import { formatInterval, formatKm } from './format'
-import type { Car, ISODate, MaintenanceRule, TimeInterval } from './types'
+import { kmAtDate, linkedReadingId } from './odometer'
+import type { Car, ISODate, Job, MaintenanceRule, TimeInterval } from './types'
 
 export type RuleStatus = 'ok' | 'soon' | 'overdue' | 'unknown'
 
@@ -137,4 +138,88 @@ export function defaultWarnings(intervalKm: number | null, intervalTime: TimeInt
     warnKm: intervalKm ? Math.max(50, Math.min(500, Math.round(intervalKm / 5 / 50) * 50)) : 500,
     warnDays: intervalTime ? Math.max(2, Math.min(30, Math.round(intervalDays(intervalTime) / 4))) : 30,
   }
+}
+
+/** "48.300 km", o "≈ 48.300 km (estimado)" si el km de la última vez salió de las lecturas (`lastDoneKmEstimated`). */
+export function formatLastDoneKm(rule: Pick<MaintenanceRule, 'lastDoneKm' | 'lastDoneKmEstimated'>): string | null {
+  if (rule.lastDoneKm == null) return null
+  return rule.lastDoneKmEstimated ? `≈ ${formatKm(rule.lastDoneKm)} (estimado)` : formatKm(rule.lastDoneKm)
+}
+
+/**
+ * Un mantenimiento por km al que le falta el km de la última vez (lo deja así un trabajo sin km anterior a la
+ * primera lectura): sólo se calcula por fecha, y la UI lo pide con `MISSING_LAST_KM`.
+ */
+export const missingLastKm = (rule: Pick<MaintenanceRule, 'intervalKm' | 'lastDoneKm'>) =>
+  rule.intervalKm != null && rule.intervalKm > 0 && rule.lastDoneKm == null
+
+/** Lo que dice la UI de un mantenimiento por km sin el km de la última vez (`missingLastKm`). */
+export const MISSING_LAST_KM = 'Falta el km de la última vez'
+
+/**
+ * Los mantenimientos marcados en un trabajo que reinician su km: los periódicos con intervalo de km. Para ellos el
+ * trabajo necesita un km, el suyo o uno estimado (`jobDoneKm`).
+ */
+export function kmRulesOf<T extends Pick<MaintenanceRule, 'id' | 'intervalKm' | 'repeat'>>(
+  rules: readonly T[],
+  ruleIds: readonly string[],
+): T[] {
+  return rules.filter(r => ruleIds.includes(r.id) && r.repeat && r.intervalKm != null)
+}
+
+/**
+ * El km con que un trabajo da por hechos sus mantenimientos: el suyo o, si no tiene, el estimado a su fecha con las
+ * lecturas del auto (`kmAtDate`, `estimated: true`). No cuenta la lectura del propio trabajo (`job-{id}`; `id` falta
+ * en uno nuevo), que se borra en el mismo batch si se le sacó el km. Nunca el km actual del auto: un trabajo viejo
+ * cargado (o aprobado) hoy correría el próximo vencimiento. null si no tiene km y la fecha es anterior a la primera
+ * lectura.
+ */
+export function jobDoneKm(
+  job: { id?: string | null; carId: string; date: ISODate; km: number | null },
+  readings: readonly { id: string; carId: string; km: number; date: Date }[],
+): { km: number; estimated: boolean } | null {
+  if (job.km != null) return { km: job.km, estimated: false }
+  const own = job.id ? linkedReadingId('job', job.id) : null
+  const estimate = kmAtDate(readings.filter(r => r.carId === job.carId && r.id !== own), job.date)
+  return estimate ? { km: estimate.km, estimated: true } : null
+}
+
+/** Lo que un trabajo aprobado le hace a uno de sus mantenimientos: borrarlo (los de una sola vez) o reiniciarlo. */
+export type JobRuleUpdate =
+  | { ruleId: string; action: 'delete' }
+  | { ruleId: string; action: 'update'; lastDoneKm: number | null; lastDoneKmEstimated: boolean; lastDoneDate: ISODate }
+
+/**
+ * Los cambios que un trabajo aprobado hace en los mantenimientos que marcó, sólo si es más reciente que la última
+ * vez registrada (o el mantenimiento no tiene fecha): los de una sola vez se borran y los periódicos se reinician en
+ * la fecha del trabajo. Los que tienen intervalo de km toman el km de `jobDoneKm` (el del trabajo o el estimado, con
+ * `lastDoneKmEstimated: true`); sin estimación, `lastDoneKm: null` y el mantenimiento se calcula sólo por fecha hasta
+ * que se complete. Los que no tienen intervalo de km conservan su km.
+ */
+export function jobRuleUpdates(
+  rules: readonly Pick<MaintenanceRule, 'id' | 'intervalKm' | 'repeat' | 'lastDoneKm' | 'lastDoneKmEstimated' | 'lastDoneDate'>[],
+  job: Pick<Job, 'id' | 'carId' | 'date' | 'km' | 'ruleIds'>,
+  readings: readonly { id: string; carId: string; km: number; date: Date }[],
+): JobRuleUpdate[] {
+  const done = jobDoneKm(job, readings)
+  const doneKm = done?.km ?? null
+  const estimated = done?.estimated ?? false
+  const updates: JobRuleUpdate[] = []
+  for (const rule of rules.filter(r => job.ruleIds.includes(r.id))) {
+    const isNewer = !rule.lastDoneDate || job.date >= rule.lastDoneDate
+    if (!isNewer) continue
+    if (!rule.repeat) {
+      updates.push({ ruleId: rule.id, action: 'delete' })
+      continue
+    }
+    const byKm = rule.intervalKm != null
+    updates.push({
+      ruleId: rule.id,
+      action: 'update',
+      lastDoneKm: byKm ? doneKm : rule.lastDoneKm,
+      lastDoneKmEstimated: byKm ? estimated : rule.lastDoneKmEstimated,
+      lastDoneDate: job.date,
+    })
+  }
+  return updates
 }

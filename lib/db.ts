@@ -20,7 +20,8 @@ import {
   type WriteBatch,
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
-import { defaultWarnings } from './maintenance'
+import { toISODate } from './dates'
+import { defaultWarnings, jobRuleUpdates } from './maintenance'
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import { isApproved } from './sharing'
@@ -118,6 +119,7 @@ function ruleFrom(d: QueryDocumentSnapshot<DocumentData>): MaintenanceRule {
     intervalTime: intervalFromDoc(x),
     repeat: x.repeat !== false,
     lastDoneKm: num(x.lastDoneKm),
+    lastDoneKmEstimated: x.lastDoneKmEstimated === true,
     lastDoneDate: str(x.lastDoneDate),
     warnKm: num(x.warnKm) ?? 500,
     warnDays: num(x.warnDays) ?? 30,
@@ -179,6 +181,7 @@ function readingFrom(d: QueryDocumentSnapshot<DocumentData>): OdometerReading {
     sourceId: str(x.sourceId),
     createdBy: str(x.createdBy),
     createdByName: str(x.createdByName),
+    createdAt: toDate(x.createdAt),
   }
 }
 
@@ -398,6 +401,7 @@ function readingData(r: Omit<OdometerReading, 'id'>) {
     sourceId: r.sourceId,
     createdBy: r.createdBy ?? null,
     createdByName: r.createdByName ?? null,
+    createdAt: r.createdAt ? Timestamp.fromDate(r.createdAt) : null,
   }
 }
 
@@ -408,17 +412,11 @@ function carKmUpdate(readings: OdometerReading[]) {
 }
 
 /**
- * Registra una lectura manual del odómetro (id al azar, sin `sourceId`) y recalcula el km actual del auto y el
- * promedio diario con las lecturas del auto más la nueva.
+ * Registra una lectura manual del odómetro (id al azar, sin `sourceId`, `createdAt` = ahora) y recalcula el km
+ * actual del auto y el promedio diario con las lecturas del auto más la nueva (`carKmFrom`: una lectura con fecha
+ * pasada y menos km no lo baja).
  */
-function addManualReading(
-  batch: WriteBatch,
-  actor: Actor,
-  car: Car,
-  readings: OdometerReading[],
-  km: number,
-  date = new Date(),
-) {
+function addManualReading(batch: WriteBatch, actor: Actor, car: Car, readings: OdometerReading[], km: number, date: Date) {
   const id = newChildId(car.id, 'odometer')
   const reading: OdometerReading = {
     id,
@@ -429,14 +427,20 @@ function addManualReading(
     sourceId: null,
     createdBy: actor.uid,
     createdByName: actor.name,
+    createdAt: new Date(),
   }
   batch.set(doc(carCol(car.id, 'odometer'), id), readingData(reading))
   batch.update(carDoc(car.id), carKmUpdate(readings.filter(r => r.carId === car.id).concat(reading)))
 }
 
-export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number) {
+/**
+ * Carga los km del tablero en una fecha (validar antes con `validateKmReading`). Con la fecha de hoy la lectura
+ * lleva la hora actual; con una fecha pasada, el mediodía de ese día (`readingDateOf`), como las vinculadas.
+ */
+export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number, date: ISODate) {
+  const now = new Date()
   const batch = writeBatch(firestore())
-  addManualReading(batch, actor, car, readings, km)
+  addManualReading(batch, actor, car, readings, km, date === toISODate(now) ? now : readingDateOf(date))
   await batch.commit()
 }
 
@@ -454,7 +458,8 @@ type LinkedEntry = { date: ISODate; km: number | null; author: Author }
  * y recalcula el km del auto en el mismo batch.
  * - Con km: la escribe siempre, aunque sea menor al km actual (es un punto real de la serie y el km del auto lo
  *   define la lectura más alta), con la fecha del registro al mediodía y a nombre del autor del registro: así, si
- *   el dueño edita la carga de un miembro, `createdBy` no cambia y la regla de `update` lo acepta.
+ *   el dueño edita la carga de un miembro, `createdBy` no cambia y la regla de `update` lo acepta. `createdAt`
+ *   conserva el de la lectura que pisa, si la app la tiene, y si no es ahora.
  * - Sin km, o con `entry` null (se borra el registro): borra la lectura. Si no existía, el borrado no tiene efecto
  *   y las reglas lo aceptan.
  * El km del auto sale de las lecturas que quedan, así que puede bajar (corregir un error de tipeo). Si la lista no
@@ -475,6 +480,7 @@ function writeLinkedReading(batch: WriteBatch, ctx: KmContext, link: ReadingLink
           source: link.source,
           sourceId: link.sourceId,
           ...entry.author,
+          createdAt: carReadings.find(r => r.id === id)?.createdAt ?? new Date(),
         }
       : null
   if (next) batch.set(ref, readingData(next))
@@ -552,6 +558,7 @@ export async function createCar(actor: Actor, data: CarInput, initialKm: number,
       sourceId: null,
       createdBy: actor.uid,
       createdByName: actor.name,
+      createdAt: now,
     }),
   )
   await batch.commit()
@@ -614,10 +621,23 @@ export async function deleteCar(actor: Actor, carId: string, known: Partial<Reco
 
 export type RuleInput = Pick<
   MaintenanceRule,
-  'carId' | 'name' | 'intervalKm' | 'intervalTime' | 'repeat' | 'lastDoneKm' | 'lastDoneDate' | 'warnKm' | 'warnDays'
+  | 'carId'
+  | 'name'
+  | 'intervalKm'
+  | 'intervalTime'
+  | 'repeat'
+  | 'lastDoneKm'
+  | 'lastDoneKmEstimated'
+  | 'lastDoneDate'
+  | 'warnKm'
+  | 'warnDays'
 >
 
-/** Guarda un mantenimiento. Al editar se resetea el aviso para que vuelva a notificar con los datos nuevos. */
+/**
+ * Guarda un mantenimiento (reescribe el documento completo). Al editar se resetea el aviso para que vuelva a
+ * notificar con los datos nuevos. `lastDoneKmEstimated` va en true sólo si el km de la última vez sigue siendo el
+ * estimado que dejó un trabajo (rule-form lo conserva si no se tocó el km).
+ */
 export async function saveRule(actor: Actor, data: RuleInput, ruleId = newChildId(data.carId, 'rules')) {
   await setDoc(doc(carCol(data.carId, 'rules'), ruleId), { ...data, lastNotifiedAt: null, lastNotifiedStatus: null })
   return ruleId
@@ -649,10 +669,10 @@ export interface FollowUp {
 type JobContext = KmContext & { rules: MaintenanceRule[] }
 
 /**
- * Los efectos de un trabajo aprobado: los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
- * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una sola vez se
- * borran. La lectura de km del trabajo (`job-{id}`) va en `jobBatch` a nombre de `author`, el autor del trabajo:
- * se escribe si tiene km y se borra si no (`writeLinkedReading`).
+ * Los efectos de un trabajo aprobado: los mantenimientos marcados se dan por hechos en la fecha del trabajo, con su
+ * km o el estimado a esa fecha (`jobRuleUpdates` decide qué pasa con cada uno; acá sólo se arman los batches). La
+ * lectura de km del trabajo (`job-{id}`) va en `jobBatch` a nombre de `author`, el autor del trabajo: se escribe si
+ * tiene km y se borra si no (`writeLinkedReading`).
  * Cada mantenimiento marcado va en un batch aparte del trabajo y de los demás: si alguno ya no existe (borrado
  * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo. Devuelve esos
  * batches para commitearlos después del trabajo.
@@ -661,23 +681,22 @@ function addJobEffects(
   jobBatch: WriteBatch,
   author: Author,
   ctx: JobContext,
-  job: Pick<Job, 'id' | 'date' | 'km' | 'ruleIds'>,
+  job: Pick<Job, 'id' | 'carId' | 'date' | 'km' | 'ruleIds'>,
 ) {
   const carId = ctx.car.id
-  const doneKm = job.km ?? ctx.car.currentKm
   const ruleBatches: { ruleId: string; batch: WriteBatch }[] = []
-  for (const rule of ctx.rules.filter(r => job.ruleIds.includes(r.id))) {
-    const isNewer = !rule.lastDoneDate || job.date >= rule.lastDoneDate
-    if (!isNewer) continue
+  for (const u of jobRuleUpdates(ctx.rules, job, ctx.readings)) {
     const ruleBatch = writeBatch(firestore())
-    ruleBatches.push({ ruleId: rule.id, batch: ruleBatch })
-    if (!rule.repeat) {
-      ruleBatch.delete(doc(carCol(carId, 'rules'), rule.id))
+    ruleBatches.push({ ruleId: u.ruleId, batch: ruleBatch })
+    const ref = doc(carCol(carId, 'rules'), u.ruleId)
+    if (u.action === 'delete') {
+      ruleBatch.delete(ref)
       continue
     }
-    ruleBatch.update(doc(carCol(carId, 'rules'), rule.id), {
-      lastDoneKm: rule.intervalKm != null ? doneKm : rule.lastDoneKm,
-      lastDoneDate: job.date,
+    ruleBatch.update(ref, {
+      lastDoneKm: u.lastDoneKm,
+      lastDoneKmEstimated: u.lastDoneKmEstimated,
+      lastDoneDate: u.lastDoneDate,
       lastNotifiedAt: null,
       lastNotifiedStatus: null,
     })
@@ -735,7 +754,8 @@ export async function saveJob(
       intervalKm: null,
       intervalTime: followUp.intervalTime,
       repeat: false,
-      lastDoneKm: data.km ?? ctx.car.currentKm,
+      lastDoneKm: null,
+      lastDoneKmEstimated: false,
       lastDoneDate: data.date,
       ...defaultWarnings(null, followUp.intervalTime),
       lastNotifiedAt: null,
@@ -748,8 +768,8 @@ export async function saveJob(
 
 /**
  * El dueño aprueba el trabajo de un miembro: pasa a `approved` con `reviewedAt` y se aplican sus efectos con los
- * mantenimientos y el km que tiene la app del dueño en ese momento. La lectura de km queda a nombre de quien
- * cargó el trabajo.
+ * mantenimientos y las lecturas que tiene la app del dueño en ese momento: el km del trabajo o, si no tiene, el
+ * estimado a la fecha del trabajo (nunca el km de hoy). La lectura de km queda a nombre de quien cargó el trabajo.
  */
 export async function approveJob(actor: Actor, ctx: JobContext, job: Job) {
   const jobBatch = writeBatch(firestore())

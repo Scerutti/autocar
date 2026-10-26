@@ -34,6 +34,7 @@ const rule: MaintenanceRule = {
   intervalTime: { amount: 12, unit: 'month' },
   repeat: true,
   lastDoneKm: 10000,
+  lastDoneKmEstimated: false,
   lastDoneDate: '2026-01-10',
   warnKm: 500,
   warnDays: 30,

@@ -15,6 +15,24 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.4.0',
+    date: '2026-10-26',
+    items: [
+      {
+        title: 'Mantenimientos con el km de ese día',
+        text: 'Si cargás un trabajo sin km, el mantenimiento se da por hecho con los km que tenía el auto ese día según tus registros, no con los de hoy. Lo vas a ver como "≈ 43.000 km (estimado)".',
+      },
+      {
+        title: 'Km de otro día',
+        text: 'Al cargar km podés elegir la fecha. Tienen que encajar entre tus registros de antes y de después de ese día.',
+      },
+      {
+        title: 'Km que no cierran',
+        text: 'Si una carga o un trabajo tiene km que no encajan con tus otros registros, te avisamos antes de guardar.',
+      },
+    ],
+  },
+  {
     version: '1.3.0',
     date: '2026-10-26',
     items: [

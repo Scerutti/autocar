@@ -51,6 +51,7 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
     intervalTime: intervalFromDoc(x),
     repeat: x.repeat !== false,
     lastDoneKm: num(x.lastDoneKm),
+    lastDoneKmEstimated: x.lastDoneKmEstimated === true,
     lastDoneDate: x.lastDoneDate ?? null,
     warnKm: num(x.warnKm) ?? 500,
     warnDays: num(x.warnDays) ?? 30,

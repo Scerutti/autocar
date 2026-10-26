@@ -11,7 +11,15 @@ import { Field, FormError, Input } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { deleteRule, restoreRule, saveRule } from '@/lib/db'
 import { formatDate, formatKm, formatNumber, parseNumberInput } from '@/lib/format'
-import { defaultWarnings, describeRemaining, describeRuleInterval, getRuleState } from '@/lib/maintenance'
+import {
+  defaultWarnings,
+  describeRemaining,
+  describeRuleInterval,
+  formatLastDoneKm,
+  getRuleState,
+  MISSING_LAST_KM,
+  missingLastKm,
+} from '@/lib/maintenance'
 import { isCarOwner } from '@/lib/sharing'
 import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
@@ -31,6 +39,11 @@ function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
   return (
     <div className="mx-auto max-w-xl space-y-4">
       <p className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-sm text-muted-foreground">{OWNER_ONLY_PLAN}</p>
+      {missingLastKm(rule) && (
+        <p className="rounded-xl border border-warning/25 bg-warning/5 px-3.5 py-3 text-sm text-warning">
+          {MISSING_LAST_KM}: hasta que {car.ownerName ?? 'el dueño'} lo complete, se calcula sólo por fecha.
+        </p>
+      )}
       {state && state.status !== 'unknown' && (
         <div className="rounded-xl border border-white/8 bg-card/60 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -57,7 +70,7 @@ function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
           { label: 'Cada cuánto', value: describeRuleInterval(rule) },
           {
             label: rule.repeat ? 'Última vez' : 'Desde',
-            value: [rule.lastDoneDate ? formatDate(rule.lastDoneDate) : null, rule.repeat && rule.lastDoneKm != null ? formatKm(rule.lastDoneKm) : null]
+            value: [rule.lastDoneDate ? formatDate(rule.lastDoneDate) : null, rule.repeat ? formatLastDoneKm(rule) : null]
               .filter(Boolean)
               .join(' · ') || '—',
           },
@@ -82,7 +95,9 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 /**
  * Formulario del mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
  * vacíos = automáticos según el intervalo. Si no se repite, se cuenta desde los km actuales. `pickerKey` cambia al
- * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
+ * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo. Un km de la última vez estimado
+ * (`lastDoneKmEstimated`, lo dejó un trabajo sin km) se muestra como tal y sigue estimado mientras no se cambie; si
+ * falta, se pide.
  */
 function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
@@ -104,11 +119,13 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 
   const kmInterval = parseNumberInput(intervalKm) || null
   const auto = defaultWarnings(kmInterval, intervalTime)
+  const lastDoneKm = kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.lastDoneKm ?? car.currentKm)) : null
   const draft = {
     intervalKm: kmInterval,
     intervalTime,
     repeat,
-    lastDoneKm: kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.lastDoneKm ?? car.currentKm)) : null,
+    lastDoneKm,
+    lastDoneKmEstimated: Boolean(rule?.lastDoneKmEstimated) && lastDoneKm != null && lastDoneKm === rule?.lastDoneKm,
     lastDoneDate: lastDate || null,
     warnKm: parseNumberInput(warnKm) ?? auto.warnKm,
     warnDays: parseNumberInput(warnDays) ?? auto.warnDays,
@@ -158,7 +175,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
         { label: repeat ? 'Cada' : 'Dentro de', value: describeRuleInterval(draft).replace(/^(Cada|Una sola vez, dentro de) /, '') },
         {
           label: repeat ? 'Última vez' : 'Desde',
-          value: [formatDate(draft.lastDoneDate), repeat && draft.lastDoneKm != null ? formatKm(draft.lastDoneKm) : null].filter(Boolean).join(' · '),
+          value: [formatDate(draft.lastDoneDate), repeat ? formatLastDoneKm(draft) : null].filter(Boolean).join(' · '),
         },
         ...(nextText ? [{ label: 'Te toca', value: nextText }] : []),
         {
@@ -271,7 +288,10 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
         </p>
         <div className="grid grid-cols-2 gap-4">
           {repeat && draft.intervalKm ? (
-            <Field label={<span className="text-xs text-muted-foreground">A los km</span>}>
+            <Field
+              label={<span className="text-xs text-muted-foreground">A los km</span>}
+              hint={draft.lastDoneKmEstimated ? formatLastDoneKm(draft) : draft.lastDoneKm == null ? MISSING_LAST_KM : undefined}
+            >
               <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
             </Field>
           ) : null}

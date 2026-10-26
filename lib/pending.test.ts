@@ -33,6 +33,7 @@ const rule: MaintenanceRule = {
   intervalTime: null,
   repeat: true,
   lastDoneKm: 10000,
+  lastDoneKmEstimated: false,
   lastDoneDate: null,
   warnKm: 500,
   warnDays: 30,
