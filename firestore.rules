@@ -234,12 +234,12 @@ service cloud.firestore {
           && request.resource.data.get('revision', 0) == resource.data.get('revision', 0));
     }
 
-    // Revisión que deja el miembro al editar su trabajo: la anterior + 1 (sin revision cuenta como 0). Durante el rollout
-    // también acepta la misma, porque la versión 1.4.1 de la PWA no la manda y su update deja la guardada.
+    // Revisión que deja el miembro al editar su trabajo: la anterior + 1 (sin revision cuenta como 0). La versión 1.4.1
+    // de la PWA no la manda, así que un miembro con esa versión no puede editar sus trabajos hasta recargar la app.
     function memberJobRevision() {
       let before = resource.data.get('revision', 0);
       let after = request.resource.data.get('revision', 0);
-      return after == before + 1 || after == before;
+      return after == before + 1;
     }
 
     // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
@@ -266,9 +266,7 @@ service cloud.firestore {
       // El dueño crea con cualquier autor, estado y revisión (así "Deshacer" devuelve el trabajo de un miembro como
       // estaba), edita cualquier trabajo y lo revisa según ownerJobUpdate. El miembro crea a su nombre y nunca approved
       // (rejected es para "Deshacer"), y edita o borra sólo un trabajo suyo pendiente o rechazado: al editarlo vuelve
-      // a pending, no toca reviewedAt y sube revision en 1 (memberJobRevision). Rollout: hasta que todos usen la
-      // versión nueva de la PWA, la rama del miembro acepta también la misma revisión (la 1.4.1 no la manda); después
-      // del release se ajusta memberJobRevision para exigir + 1.
+      // a pending, no toca reviewedAt y sube revision en 1 (memberJobRevision).
       match /jobs/{jobId} {
         allow read: if ownsCar(carId) || memberOfCar(carId);
         allow delete: if ownsCar(carId)
