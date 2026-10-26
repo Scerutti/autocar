@@ -2,7 +2,7 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.4.0
 
 Los mantenimientos se dan por hechos con el km real del trabajo. Antes de publicar hay que subir las reglas de Firestore (ver "Mantenimiento"). No hace falta migrar datos.
 
