@@ -2,9 +2,9 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.3.0
 
-Borrador. Cada registro de km sabe de qué carga o trabajo salió. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
+Cada registro de km sabe de qué carga o trabajo salió. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
 
 ### Arreglos
 
