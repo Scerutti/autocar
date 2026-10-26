@@ -34,8 +34,9 @@ const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs:
  * corrige), se muestra esa.
  *
  * Corrección automática del km: si el km guardado en el auto es menor que su lectura más alta, lo sube (el cron
- * lee el guardado). Nunca lo baja: un auto viejo con más km que sus lecturas queda como está, y los km que bajan
- * a propósito ya los escribe deleteReading; así dos dispositivos no se pelean. Sólo corre con autos y lecturas
+ * lee el guardado). Nunca lo baja: los km que bajan a propósito ya los escribe quien borra un registro de km o
+ * corrige o borra una carga o un trabajo (lib/db.ts recalcula el km con las lecturas en el mismo batch); así dos
+ * dispositivos no se pelean. Sólo corre con autos y lecturas
  * confirmados por el servidor (`synced`), no con la caché local: ahí podría faltar una lectura de otro
  * dispositivo y bajaría el km. Espera un momento a que se asienten los datos; una corrección que falló no se
  * reintenta.

@@ -72,6 +72,7 @@ const reading = (date: string, extra: Partial<OdometerReading> = {}): OdometerRe
   km: 10000 + seq,
   date: new Date(`${date}T12:00:00`),
   source: 'manual',
+  sourceId: null,
   ...extra,
 })
 
@@ -320,6 +321,13 @@ describe('seguimiento a largo plazo', () => {
     const c = car({ createdAt: new Date('2026-06-01T12:00:00') })
     const old = reading('2025-10-01', { source: 'initial' })
     expect(find(evaluate({ cars: [c], odometer: [old] }), 'un-viejo-conocido').met).toBe(true)
+  })
+
+  it('una carga vieja cargada hoy cuenta desde que se cargó, no desde su fecha', () => {
+    const c = car({ createdAt: new Date('2026-06-01T12:00:00') })
+    const load = fuel({ date: '2025-10-01', km: 5000, createdAt: new Date('2026-10-09T09:00:00') })
+    const linked = reading('2025-10-01', { id: `fuel-${load.id}`, source: 'fuel', sourceId: load.id, km: 5000 })
+    expect(find(evaluate({ cars: [c], fuel: [load], odometer: [linked] }), 'un-viejo-conocido').met).toBe(false)
   })
 
   it('"Una historia sobre ruedas" necesita dos años y 20 registros', () => {

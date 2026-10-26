@@ -31,6 +31,7 @@ import { deleteReading, leaveCar, restoreReading } from '@/lib/db'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, type RuleWithState } from '@/lib/maintenance'
+import { readingOrigin } from '@/lib/odometer'
 import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
 import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type OdometerReading } from '@/lib/types'
@@ -225,8 +226,12 @@ const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
   fuel: 'Desde una carga',
 }
 
-/** Km del auto. Un registro se puede borrar si lo puedo editar (`canEditEntry`); en un auto compartido dice quién lo cargó. */
-function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
+/**
+ * Km del auto; en un auto compartido dice quién cargó cada registro. El de una carga o un trabajo dice de cuál
+ * salió y lleva a él, y no se borra desde acá: se corrige editando o borrando ese registro. Los demás se pueden
+ * borrar si los puedo editar (`canEditEntry`).
+ */
+function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerReading[]; fuel: FuelLoad[]; jobs: Job[] }) {
   const { actor, uid, odometer } = useData()
   const confirm = useConfirm()
   const shared = isSharedCar(car, uid)
@@ -262,22 +267,36 @@ function KmTab({ car, readings }: { car: Car; readings: OdometerReading[] }) {
       <section>
         <h2 className="mb-3 text-base font-semibold">Registros de km</h2>
       <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
-        {readings.map(r => (
-          <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+        {readings.map(r => {
+          const origin = readingOrigin(r, fuel, jobs)
+          const text = (
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium tabular-nums">{formatKm(r.km)}</p>
               <p className="text-xs text-muted-foreground">
-                {formatDate(toISODate(r.date))} · {SOURCE_LABELS[r.source]}
+                {formatDate(toISODate(r.date))} · {origin?.label ?? SOURCE_LABELS[r.source]}
                 {shared && ` · Cargado por ${authorLabel(r, car, uid)}`}
               </p>
             </div>
-            {readings.length > 1 && canEditEntry(car, uid, r) && (
-              <Button variant="ghost" size="icon-sm" aria-label={`Borrar el registro de ${formatKm(r.km)}`} className="text-muted-foreground hover:text-destructive" onClick={() => remove(r)}>
-                <Trash2 />
-              </Button>
-            )}
-          </div>
-        ))}
+          )
+          if (origin) {
+            return (
+              <Link key={r.id} href={origin.href} className="flex items-center gap-3 px-4 py-3 transition hover:bg-white/[0.03]">
+                {text}
+                <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+              </Link>
+            )
+          }
+          return (
+            <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+              {text}
+              {!r.sourceId && readings.length > 1 && canEditEntry(car, uid, r) && (
+                <Button variant="ghost" size="icon-sm" aria-label={`Borrar el registro de ${formatKm(r.km)}`} className="text-muted-foreground hover:text-destructive" onClick={() => remove(r)}>
+                  <Trash2 />
+                </Button>
+              )}
+            </div>
+          )
+        })}
       </div>
       </section>
     </div>
@@ -422,7 +441,7 @@ function CarDetail() {
             <FuelTab car={car} fuel={fuel} carById={carById} />
           </TabsContent>
           <TabsContent value="km" className="pt-4">
-            <KmTab car={car} readings={readings} />
+            <KmTab car={car} readings={readings} fuel={fuel} jobs={jobs} />
           </TabsContent>
         </Tabs>
 
