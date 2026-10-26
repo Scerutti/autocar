@@ -2,9 +2,9 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.5.0
 
-El estado de cada mantenimiento sale de los trabajos aprobados, así que corregir o borrar un trabajo lo corrige. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
+Cierra la epic de integridad de km y mantenimientos. El estado de cada mantenimiento sale de los trabajos aprobados, así que corregir o borrar un trabajo lo corrige; aprobar un trabajo aprueba la versión que viste, y editar guarda sólo lo que cambiaste. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
 
 ### Arreglos
 

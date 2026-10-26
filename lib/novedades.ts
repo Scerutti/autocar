@@ -13,6 +13,28 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.5.0',
+    date: '2026-10-26',
+    items: [
+      {
+        title: 'Corregir un trabajo corrige sus mantenimientos',
+        text: 'Si le sacás un mantenimiento a un trabajo, le cambiás la fecha o lo borrás, el mantenimiento vuelve a como estaba antes de ese trabajo. Al confirmar te decimos cómo queda cada uno.',
+      },
+      {
+        title: 'Recordatorios cumplidos',
+        text: 'Un "Volver al taller" que cumplió un trabajo ya no se borra: queda en "Cumplidos", al final de la pestaña Estado. Si borrás el trabajo, vuelve a estar activo.',
+      },
+      {
+        title: 'Aprobás lo que viste',
+        text: 'Si en un auto compartido la otra persona corrige un trabajo mientras lo estás revisando, te avisamos para que lo mires de nuevo antes de aprobarlo.',
+      },
+      {
+        title: 'Sin pisar cambios',
+        text: 'Al editar un trabajo, una carga o un mantenimiento se guarda sólo lo que cambiaste, así no se pisa lo que corrigió otra persona desde su celular.',
+      },
+    ],
+  },
+  {
     version: '1.4.0',
     date: '2026-10-26',
     items: [
