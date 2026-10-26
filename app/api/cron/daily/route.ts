@@ -3,6 +3,7 @@ import { Timestamp, type DocumentData, type QueryDocumentSnapshot } from 'fireba
 import { adminDb } from '@/lib/firebase/admin'
 import { todayInTimeZone } from '@/lib/dates'
 import { planDailyNotifications, updatesToPersist } from '@/lib/notifications'
+import { carKmForNotifications } from '@/lib/odometer'
 import { fuelTypesFromDoc, intervalFromDoc } from '@/lib/parse'
 import { sendToUser } from '@/lib/push-server'
 import { DEFAULT_SETTINGS, type Car, type MaintenanceRule, type UserSettings } from '@/lib/types'
@@ -18,7 +19,10 @@ const TIME_BUDGET_MS = 40_000
 /** Usuarios que se procesan a la vez: lo lento es esperar a Firestore y a los servicios de push. */
 const CONCURRENCY = 5
 
-/** Tope de autos, y de mantenimientos entre todos sus autos, que se leen por usuario: nadie con datos de más alarga el cron de todos. */
+/**
+ * Tope de autos, y de mantenimientos entre todos sus autos, que se leen por usuario: nadie con datos de más alarga el
+ * cron de todos. De las lecturas de km se lee una por auto, así que también quedan dentro del tope.
+ */
 const MAX_DOCS_PER_USER = 1000
 
 const toDate = (v: unknown) => (v instanceof Timestamp ? v.toDate() : null)
@@ -60,6 +64,29 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
   }
 }
 
+/**
+ * La lectura de más km de un auto: la primera ordenando por km de mayor a menor, que usa el índice simple
+ * automático. null si no tiene lecturas (las que no tienen km no entran en la consulta).
+ */
+async function topReadingOf(carDoc: QueryDocumentSnapshot) {
+  const snap = await carDoc.ref.collection('odometer').orderBy('km', 'desc').limit(1).get()
+  const x = snap.docs[0]?.data()
+  const km = num(x?.km)
+  return km == null ? null : { km, date: toDate(x?.date) }
+}
+
+/** Los mantenimientos de los autos, uno tras otro hasta llenar el tope de `MAX_DOCS_PER_USER`. */
+async function rulesOf(carDocs: QueryDocumentSnapshot[]) {
+  const rules: MaintenanceRule[] = []
+  for (const carDoc of carDocs) {
+    const remaining = MAX_DOCS_PER_USER - rules.length
+    if (remaining <= 0) break
+    const rulesSnap = await carDoc.ref.collection('rules').limit(remaining).get()
+    rules.push(...rulesSnap.docs.map(d => ruleFrom(d.id, d.data())))
+  }
+  return rules
+}
+
 const sha256 = (s: string) => createHash('sha256').update(s).digest()
 
 /** Compara el header con el secret en tiempo constante; los hashes igualan el largo para timingSafeEqual. */
@@ -82,8 +109,10 @@ function shuffled<T>(items: T[]) {
 type UserReport = { uid: string; messages: number; sent: number; error?: string }
 
 /**
- * Manda los avisos del día a un usuario y guarda cuáles se avisaron. Las escrituras son independientes (no un
- * batch): si se borró un mantenimiento, los demás se guardan igual. El código 5 (NOT_FOUND) es un mantenimiento
+ * Manda los avisos del día a un usuario y guarda cuáles se avisaron. El km de cada auto es el de su lectura más alta
+ * (`carKmForNotifications`), no el `currentKm` guardado, que sólo se corrige cuando alguien abre la app. Las lecturas
+ * de todos los autos se piden a la vez, mientras se leen los mantenimientos. Las escrituras son independientes (no
+ * un batch): si se borró un mantenimiento, los demás se guardan igual. El código 5 (NOT_FOUND) es un mantenimiento
  * que se borró mientras corría el cron: no hay nada que guardar.
  */
 async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<UserReport> {
@@ -94,17 +123,11 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
     timezone: x.timezone ?? DEFAULT_SETTINGS.timezone,
   }
   const carsSnap = await db.collection('cars').where('ownerUid', '==', userDoc.id).limit(MAX_DOCS_PER_USER).get()
-  const rules: MaintenanceRule[] = []
-  for (const carDoc of carsSnap.docs) {
-    const remaining = MAX_DOCS_PER_USER - rules.length
-    if (remaining <= 0) break
-    const rulesSnap = await carDoc.ref.collection('rules').limit(remaining).get()
-    rules.push(...rulesSnap.docs.map(d => ruleFrom(d.id, d.data())))
-  }
+  const [rules, tops] = await Promise.all([rulesOf(carsSnap.docs), Promise.all(carsSnap.docs.map(topReadingOf))])
   const carIdByRule = new Map(rules.map(r => [r.id, r.carId]))
   const { messages, ruleUpdates } = planDailyNotifications({
     settings,
-    cars: carsSnap.docs.map(d => carFrom(d.id, d.data())),
+    cars: carsSnap.docs.map((d, i) => carKmForNotifications(carFrom(d.id, d.data()), tops[i])),
     rules,
     today: todayInTimeZone(settings.timezone, now),
     now,

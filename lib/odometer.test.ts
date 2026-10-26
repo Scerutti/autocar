@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { toISODate } from './dates'
 import { formatDate } from './format'
 import {
+  carKmForNotifications,
   carKmFrom,
   entryKmWarning,
   kmAtDate,
+  kmCorrection,
   linkedReadingId,
   neighborsAt,
   readingDateOf,
@@ -277,5 +279,58 @@ describe('topReading', () => {
   })
   it('sin lecturas devuelve null', () => {
     expect(topReading([])).toBeNull()
+  })
+})
+
+describe('kmCorrection', () => {
+  const now = new Date('2026-04-01T12:00:00')
+  const readings = [point('initial', 10_000, '2026-01-01'), point('manual', 20_000, '2026-03-20')]
+
+  it('si el km guardado es menor que la lectura más alta, lo sube a esa lectura', () => {
+    const fix = kmCorrection({ currentKm: 15_000 }, readings, now)
+    expect(fix).toEqual(carKmFrom(readings, now))
+    expect(fix!.currentKm).toBe(20_000)
+    expect(toISODate(fix!.kmUpdatedAt!)).toBe('2026-03-20')
+  })
+  it('si el km guardado es mayor que la lectura más alta, lo baja a esa lectura', () => {
+    const fix = kmCorrection({ currentKm: 150_000 }, readings, now)
+    expect(fix).toEqual(carKmFrom(readings, now))
+    expect(fix!.currentKm).toBe(20_000)
+  })
+  it('si el km guardado ya es el de la lectura más alta, no hay nada que corregir', () => {
+    expect(kmCorrection({ currentKm: 20_000 }, readings, now)).toBeNull()
+  })
+  it('sin lecturas no corrige, aunque el km guardado no sea 0', () => {
+    expect(kmCorrection({ currentKm: 20_000 }, [], now)).toBeNull()
+    expect(kmCorrection({ currentKm: 0 }, [], now)).toBeNull()
+  })
+})
+
+describe('carKmForNotifications', () => {
+  const car = { id: 'c1', currentKm: 30_000, kmUpdatedAt: new Date('2026-03-01T12:00:00Z'), avgKmPerDay: 40 }
+
+  it('con lectura, el km y la fecha salen de la lectura más alta; el promedio, del auto', () => {
+    const top = reading(31_000, '2026-03-10')
+    expect(carKmForNotifications(car, top)).toEqual({ ...car, currentKm: 31_000, kmUpdatedAt: top.date })
+  })
+  it('un km guardado mayor que la lectura no cuenta: manda la lectura', () => {
+    const top = reading(25_000, '2026-02-20')
+    const out = carKmForNotifications({ ...car, currentKm: 250_000 }, top)
+    expect(out.currentKm).toBe(25_000)
+    expect(out.kmUpdatedAt).toBe(top.date)
+    expect(out.avgKmPerDay).toBe(40)
+  })
+  it('un km guardado menor que la lectura no cuenta: manda la lectura', () => {
+    const top = reading(31_000, '2026-03-10')
+    expect(carKmForNotifications({ ...car, currentKm: 10_000 }, top).currentKm).toBe(31_000)
+  })
+  it('con un empate entre el km guardado y la lectura, el km queda igual y la fecha es la de la lectura', () => {
+    const top = reading(30_000, '2026-03-05')
+    const out = carKmForNotifications(car, top)
+    expect(out.currentKm).toBe(30_000)
+    expect(out.kmUpdatedAt).toBe(top.date)
+  })
+  it('sin lecturas, el auto tal cual', () => {
+    expect(carKmForNotifications(car, null)).toBe(car)
   })
 })

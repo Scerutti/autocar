@@ -5,8 +5,6 @@ export interface Novedad {
   /** Día en que salió la versión. Las cuentas creadas después no la ven como nueva. */
   date: ISODate
   items: { title: string; text: string }[]
-  /** Se anuncia con una ventana al entrar. Sólo para cambios grandes: lo demás queda en la sección. */
-  destacado?: boolean
 }
 
 /**
@@ -49,7 +47,6 @@ export const NOVEDADES: Novedad[] = [
   {
     version: '1.2.0',
     date: '2026-10-24',
-    destacado: true,
     items: [
       {
         title: 'Compartí un auto',
@@ -72,7 +69,6 @@ export const NOVEDADES: Novedad[] = [
   {
     version: '1.1.0',
     date: '2026-10-17',
-    destacado: true,
     items: [
       {
         title: 'Pendientes',

@@ -2,6 +2,23 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.4.1
+
+El km del auto sale siempre de sus registros de km, y las novedades de cada versión se anuncian al entrar. No cambian las reglas de Firestore y no hace falta migrar datos.
+
+### Arreglos
+
+- **Las novedades se anuncian en cada versión**: antes sólo algunas versiones abrían la ventana de novedades al entrar; la 1.3.0 y la 1.4.0 sólo prendían el punto de la campanita. Ahora toda versión nueva que no viste se anuncia con la ventana. Si te perdiste varias, aparecen todas juntas, de la más nueva a la más vieja, y la lista se puede scrollear en el celular.
+- **El km del auto siempre es el de tu registro más alto**: si el km guardado en el auto quedó más alto que tus registros (por ejemplo, por dos celulares cruzados), al abrir la app baja solo; si quedó más bajo, sube. Hasta ahora sólo se corregía hacia arriba.
+- **Avisos de mantenimiento por km**: el aviso diario calcula los vencimientos con el km de tu registro más alto, aunque nadie haya abierto la app y el km guardado en el auto esté mal.
+
+### Mantenimiento
+
+- **Cron**: por cada auto lee su lectura de más km (`orderBy('km', 'desc').limit(1)`, índice simple automático), en paralelo con los mantenimientos. `carKmForNotifications(car, top)` (`lib/odometer.ts`, con pruebas) pone `currentKm` y `kmUpdatedAt` de esa lectura; sin lecturas, lo guardado. `avgKmPerDay` sigue saliendo del auto.
+- **Corrección del km en la app**: `kmCorrection(car, readings)` (`lib/odometer.ts`, con pruebas) decide si hay que escribir `carKmFrom(readings)`; `DataProvider` corrige en los dos sentidos con `syncCarKm`, siempre sólo con autos y lecturas confirmados por el servidor. El km que muestra la app es el de la lectura más alta aunque el guardado sea mayor.
+- **Novedades**: sale el campo `destacado` de `Novedad`. `NovedadesHost` abre la ventana si hay alguna versión sin ver.
+- **Sin cambios en las reglas de Firestore ni migración de datos.** Un miembro puede seguir escribiendo cualquier `currentKm`: la app lo corrige y el cron no lo usa.
+
 ## 1.4.0
 
 Los mantenimientos se dan por hechos con el km real del trabajo. Antes de publicar hay que subir las reglas de Firestore (ver "Mantenimiento"). No hace falta migrar datos.

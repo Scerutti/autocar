@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { subscribeUserData, syncCarKm, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
 import { rulesWithState, type RuleWithState } from '@/lib/maintenance'
-import { topReading } from '@/lib/odometer'
+import { kmCorrection, topReading } from '@/lib/odometer'
 import { DEFAULT_SETTINGS, type Actor, type Car } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
@@ -30,16 +30,17 @@ const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs:
 
 /**
  * Datos del usuario en vivo desde Firestore. Si la app queda abierta pasada la medianoche, recalcula los
- * vencimientos. Si una lectura supera al km guardado en el auto (que puede haber quedado viejo hasta que se
- * corrige), se muestra esa.
+ * vencimientos. El km de un auto con lecturas es el de su lectura más alta (`topReading`), aunque el guardado en el
+ * auto sea mayor o menor (puede haber quedado mal hasta que se corrige); sin lecturas, el guardado.
  *
- * Corrección automática del km: si el km guardado en el auto es menor que su lectura más alta, lo sube (el cron
- * lee el guardado). Nunca lo baja: los km que bajan a propósito ya los escribe quien borra un registro de km o
- * corrige o borra una carga o un trabajo (lib/db.ts recalcula el km con las lecturas en el mismo batch); así dos
- * dispositivos no se pelean. Sólo corre con autos y lecturas
- * confirmados por el servidor (`synced`), no con la caché local: ahí podría faltar una lectura de otro
- * dispositivo y bajaría el km. Espera un momento a que se asienten los datos; una corrección que falló no se
- * reintenta.
+ * Corrección automática del km: si el km guardado en el auto no es el de su lectura más alta, sea mayor o menor,
+ * escribe el de las lecturas (`kmCorrection`, `syncCarKm`). Las lecturas son la fuente de verdad: así se arregla un
+ * km que dejó mal un dispositivo viejo, un cruce entre dispositivos o un miembro. Sólo corre con autos y lecturas
+ * confirmados por el servidor (`synced`), no con la caché local: ahí podría faltar una lectura de otro dispositivo
+ * y bajaría el km. `subscribeUserData` publica las lecturas recién cuando todos los autos entregaron las suyas, y
+ * las marca como caché si alguna lo es; un auto nuevo que todavía no las entregó aparece sin lecturas y no se toca.
+ * Espera un momento a que se asienten los datos (el auto y su lectura llegan en fotos separadas); una corrección que
+ * falló no se reintenta.
  */
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
@@ -87,9 +88,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const id = setTimeout(() => {
       for (const car of data.cars) {
         const readings = data.odometer.filter(r => r.carId === car.id)
-        const top = topReading(readings)
-        if (!top || top.km <= car.currentKm) continue
-        const key = `${car.id}:${top.km}`
+        const fix = kmCorrection(car, readings)
+        if (!fix) continue
+        const key = `${car.id}:${fix.currentKm}`
         if (fixing.current.has(key)) continue
         fixing.current.add(key)
         syncCarKm(actor, car.id, readings)
@@ -104,7 +105,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const cars = data.cars
       .map(c => {
         const top = topReading(data.odometer.filter(r => r.carId === c.id))
-        return top && top.km > c.currentKm ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
+        return top ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))

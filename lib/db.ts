@@ -491,9 +491,11 @@ function writeLinkedReading(batch: WriteBatch, ctx: KmContext, link: ReadingLink
 }
 
 /**
- * Corrige el km guardado en el auto con sus lecturas. Hace falta porque se escribe desde el cliente
- * con lo que el dispositivo tenía en memoria (una carga offline o dos dispositivos cruzados pueden
- * dejarlo viejo), y el cron lo lee de ahí para los vencimientos por km.
+ * Corrige el km guardado en el auto con sus lecturas (`carKmFrom`): lo sube o lo baja a la más alta. Hace falta
+ * porque se escribe desde el cliente con lo que el dispositivo tenía en memoria (una carga offline, dos dispositivos
+ * cruzados o un miembro pueden dejarlo mal). La app y el cron toman el km de la lectura más alta, pero
+ * `avgKmPerDay` sale de lo guardado y las versiones anteriores de la PWA leen `currentKm`. Lo llama `DataProvider`
+ * cuando `kmCorrection` dice que hay algo que corregir.
  */
 export async function syncCarKm(actor: Actor, carId: string, readings: OdometerReading[]) {
   const carReadings = readings.filter(r => r.carId === carId)
