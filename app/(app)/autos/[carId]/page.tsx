@@ -30,7 +30,7 @@ import { toISODate } from '@/lib/dates'
 import { deleteReading, leaveCar, restoreReading } from '@/lib/db'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
-import { describeRemaining, describeRuleInterval, type RuleWithState } from '@/lib/maintenance'
+import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm, type RuleWithState } from '@/lib/maintenance'
 import { readingOrigin } from '@/lib/odometer'
 import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
@@ -50,7 +50,10 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
   )
 }
 
-/** Mantenimientos del auto. Agregarlos es sólo del dueño: a un miembro no se le ofrece. */
+/**
+ * Mantenimientos del auto. Agregarlos es sólo del dueño: a un miembro no se le ofrece. Cada tarjeta lleva al
+ * mantenimiento (al dueño, a editarlo): si es por km y le falta el km de la última vez, lo dice ahí.
+ */
 function RulesTab({ car, rules, owner }: { car: Car; rules: RuleWithState[]; owner: boolean }) {
   if (!rules.length && !owner) {
     return <EmptyState icon={Wrench} title="Sin mantenimientos" description="El dueño todavía no cargó mantenimientos para este auto." />
@@ -91,9 +94,14 @@ function RulesTab({ car, rules, owner }: { car: Car; rules: RuleWithState[]; own
             </div>
             <RuleProgress progress={state.progress} status={state.status} />
             <div className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+              {missingLastKm(rule) && (
+                <p className="text-warning sm:col-span-2">
+                  {MISSING_LAST_KM}{owner ? ': tocá para completarlo.' : '.'}
+                </p>
+              )}
               {state.nextKm != null && (
                 <p>
-                  <span className="text-foreground">{r.km}</span> · a los {formatKm(state.nextKm)}
+                  <span className="text-foreground">{r.km}</span> · a los {rule.lastDoneKmEstimated ? '≈ ' : ''}{formatKm(state.nextKm)}
                 </p>
               )}
               {state.nextDate && (

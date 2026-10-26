@@ -125,7 +125,7 @@ Leyenda Auth: **O** = dueño del auto (`car.ownerUid == uid`), **M** = miembro (
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
 | `newCarId()` | — | — | `string` (id antes de crear, para la foto) |
-| `createCar(actor, data: CarInput, initialKm, carId?)` | U (queda O) | `CarInput = { brand, model, version, year, plate, fuelTypes, photoUrl?, photoPublicId? }` | batch: `cars/{id}` (`ownerUid`, `ownerName`, `members: []`, `currentKm`, `kmUpdatedAt`, `avgKmPerDay: null`, `createdAt`) + `odometer` `source:'initial'`, `sourceId: null`. → `carId` |
+| `createCar(actor, data: CarInput, initialKm, carId?)` | U (queda O) | `CarInput = { brand, model, version, year, plate, fuelTypes, photoUrl?, photoPublicId? }` | batch: `cars/{id}` (`ownerUid`, `ownerName`, `members: []`, `currentKm`, `kmUpdatedAt`, `avgKmPerDay: null`, `createdAt`) + `odometer` `source:'initial'`, `sourceId: null`, `createdAt`. → `carId` |
 | `updateCar(actor, carId, Partial<CarInput>)` | O | — | `cars/{id}` |
 | `deleteCar(actor, carId, known?)` | O | `known: { rules?, jobs?, fuel?, odometer?: string[] }` | Borra hijos (tandas de 450) y al final el auto. Las reglas dejan al dueño borrar lecturas sin consultar su registro, por el tope de llamadas por pedido |
 | `addMember(actor, carId, email)` | O | email normalizado; validar antes con `memberError()` (`lib/sharing.ts`) | `members: arrayUnion` (máx. 2) |
@@ -135,12 +135,13 @@ Leyenda Auth: **O** = dueño del auto (`car.ownerUid == uid`), **M** = miembro (
 #### Km — `cars/{carId}/odometer/{id}`
 
 Dos tipos de lectura:
-- **Sin `sourceId`** (`initial`, `manual` y las viejas): id al azar. Se cargan con `recordKm` y se borran con `deleteReading`.
+- **Sin `sourceId`** (`initial`, `manual` y las viejas): id al azar. Se cargan con `recordKm` y se borran con `deleteReading`. Una manual de hoy lleva la hora en que se cargó; una con fecha pasada, el mediodía de ese día (`readingDateOf`).
 - **Vinculadas** (`source` `'fuel'` o `'job'` + `sourceId`): una por carga o trabajo aprobado con km, con id `fuel-{id}` / `job-{id}` (`linkedReadingId`), fecha = la del registro a las 12:00 (`readingDateOf`) y `createdBy` = autor del registro. Las escribe `writeLinkedReading` (interna de `lib/db.ts`) en el mismo batch que la carga o el trabajo: con km la pone o la pisa (aunque sea menor al km actual), sin km o al borrar el registro la borra, y actualiza `currentKm`, `kmUpdatedAt`, `avgKmPerDay` con `carKmFrom` sobre las lecturas resultantes (el km puede bajar). No se borran desde la pestaña Km.
+- Toda lectura nueva graba `createdAt` (cuándo se cargó en la app, para los logros). Al pisar una vinculada se conserva el `createdAt` que tenía en memoria. Las de la 1.3.0 o anteriores no lo tienen (`null`).
 
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
-| `recordKm(actor, car, readings, km)` | O, M | validar antes con `validateKmReading()` (`lib/odometer.ts`) | lectura `source:'manual'`, `sourceId: null`, id al azar (`addManualReading`) + km del auto recalculado con las lecturas |
+| `recordKm(actor, car, readings, km, date: ISODate)` | O, M | validar antes con `validateKmReading(km, date, lecturas del auto)` (`lib/odometer.ts`); `date` = hoy por defecto en `km-form`, nunca futura | lectura `source:'manual'`, `sourceId: null`, id al azar, `createdAt` (`addManualReading`); fecha = ahora si `date` es hoy, si no `readingDateOf(date)` + km del auto recalculado con `carKmFrom` (una lectura vieja con menos km no lo baja) |
 | `deleteReading(actor, car, readings, readingId)` | O; M sólo propias | sólo lecturas sin `sourceId` (con `sourceId` tira error) | Borra y recalcula km. Error si es la única lectura |
 | `restoreReading(actor, car, readings, reading)` | igual | `OdometerReading` sin `sourceId` | "Deshacer" |
 | `syncCarKm(actor, carId, readings)` | O, M | — | Sube `currentKm` del auto a la lectura más alta (lo hace `DataProvider` solo) |
@@ -149,23 +150,25 @@ Dos tipos de lectura:
 
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
-| `saveRule(actor, data: RuleInput, ruleId?)` | O | `{ carId, name, intervalKm, intervalTime, repeat, lastDoneKm, lastDoneDate, warnKm, warnDays }`; defaults de aviso: `defaultWarnings()` | `setDoc` completo, resetea `lastNotified*`. → `ruleId` |
+| `saveRule(actor, data: RuleInput, ruleId?)` | O | `{ carId, name, intervalKm, intervalTime, repeat, lastDoneKm, lastDoneKmEstimated, lastDoneDate, warnKm, warnDays }`; defaults de aviso: `defaultWarnings()`. `rule-form` manda `lastDoneKmEstimated: true` sólo si ya lo tenía y no se cambió el km | `setDoc` completo, resetea `lastNotified*`. → `ruleId` |
 | `deleteRule(actor, carId, ruleId)` | O | — | — |
 | `restoreRule(actor, rule)` | O | `MaintenanceRule` | "Deshacer" |
 
-Estado calculado (no se guarda): `getRuleState()` / `rulesWithState()` en `lib/maintenance.ts` → `RuleState { status: 'ok'|'soon'|'overdue'|'unknown', nextKm, nextDate, remainingKm, remainingDays, dueBy: 'km'|'date'|null, estimatedKmDate, daysUntilDue, progress: 0-100+ }`.
+Estado calculado (no se guarda): `getRuleState()` / `rulesWithState()` en `lib/maintenance.ts` → `RuleState { status: 'ok'|'soon'|'overdue'|'unknown', nextKm, nextDate, remainingKm, remainingDays, dueBy: 'km'|'date'|null, estimatedKmDate, daysUntilDue, progress: 0-100+ }`. Un mantenimiento por km con `lastDoneKm == null` (`missingLastKm`) se calcula sólo por fecha, y la tarjeta (pestaña Estado) y la ficha dicen "Falta el km de la última vez". Un `lastDoneKm` estimado se muestra "≈ 48.300 km (estimado)" (`formatLastDoneKm`).
 
 #### Trabajos — `cars/{carId}/jobs/{id}`
 
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
-| `saveJob(actor, ctx, data: JobInput, existing?, followUp?)` | O; M crea/edita propios no aprobados | `ctx = { car, rules, readings }`; `JobInput = { carId, date, km, title, category, cost, workshop, notes, ruleIds }`; `existing: Pick<Job, 'id' \| 'status' \| 'createdBy' \| 'createdByName'>`; `followUp = { name, intervalTime }` | O sobre uno nuevo o aprobado: `status:'approved'` + efectos (reinicia/borra `rules` de `ruleIds`, lectura vinculada `job-{id}` a nombre del autor del trabajo o, sin km, la borra; crea regla de una vez si `followUp`). M, o O sobre uno sin aprobar: sin efectos ni lectura (M lo deja `pending`). → `jobId` |
-| `approveJob(actor, ctx, job)` | O | `Job` pendiente | `status:'approved'`, `reviewedAt` + efectos (incluida la lectura `job-{id}`) a nombre del autor |
+| `saveJob(actor, ctx, data: JobInput, existing?, followUp?)` | O; M crea/edita propios no aprobados | `ctx = { car, rules, readings }`; `JobInput = { carId, date, km, title, category, cost, workshop, notes, ruleIds }`; `existing: Pick<Job, 'id' \| 'status' \| 'createdBy' \| 'createdByName'>`; `followUp = { name, intervalTime }` | O sobre uno nuevo o aprobado: `status:'approved'` + efectos (`addJobEffects`: reinicia/borra `rules` de `ruleIds` según `jobRuleUpdates`, con el km del trabajo o, sin km, el estimado a su fecha (`jobDoneKm`, `lastDoneKmEstimated: true`; nunca `car.currentKm`); lectura vinculada `job-{id}` a nombre del autor del trabajo o, sin km, la borra; crea regla de una vez si `followUp`, con `lastDoneKm: null`). M, o O sobre uno sin aprobar: sin efectos ni lectura (M lo deja `pending`). → `jobId` |
+| `approveJob(actor, ctx, job)` | O | `Job` pendiente | `status:'approved'`, `reviewedAt` + efectos (incluida la lectura `job-{id}`) a nombre del autor; sin km, el estimado a la fecha del trabajo, no el de hoy |
 | `rejectJob(actor, { car, readings }, job)` | O | `Job` | `status:'rejected'`, `reviewedAt`; si estaba aprobado, borra `job-{id}` y recalcula km |
 | `deleteJob(actor, { car, readings }, job)` | O; M propios no aprobados | `Job` | Borra el trabajo; si estaba aprobado, también `job-{id}` y recalcula km (no revierte los mantenimientos) |
 | `restoreJob(actor, { car, readings }, job)` | igual | `Job` | "Deshacer": el trabajo y, si estaba aprobado, su lectura |
 
 Permisos de UI: `canEditJob(car, uid, job)`; sólo cuentan en gastos/reportes `approvedJobs()` (`lib/sharing.ts`).
+
+`job-form`: el km arranca vacío. Si se marca un mantenimiento por km (`kmRulesOf`) y el km queda vacío, el campo muestra el estimado (`jobDoneKm`) como sugerencia y el trabajo se guarda con `km: null` (el efecto usa el estimado); sin estimación, el km es obligatorio. La confirmación dice "Km (estimado)".
 
 #### Combustible — `cars/{carId}/fuel/{id}`
 
@@ -198,7 +201,7 @@ Wrappers de cliente: `enablePush(uid)` / `disablePush(uid)` / `pushSupport()` en
 | `/autos/nuevo` | Alta de auto (`car-form`) | — |
 | `/autos/[carId]` | Detalle del auto; salir de un auto compartido (`leaveCar`) | `?tab=estado\|trabajos\|combustible\|km` |
 | `/autos/[carId]/editar` | Editar auto (`car-form`), compartir: `addMember`/`removeMember` | — |
-| `/autos/[carId]/km` | Cargar km | — |
+| `/autos/[carId]/km` | Cargar km (`km-form`, también como diálogo): fecha opcional, hoy por defecto | — |
 | `/autos/[carId]/mantenimientos/nuevo` · `/[ruleId]` | Alta / edición de mantenimiento | — |
 | `/autos/[carId]/trabajos/nuevo` · `/[jobId]` | Alta / edición de trabajo | `?regla=<ruleId>` (precarga) |
 | `/autos/[carId]/combustible/nuevo` · `/[fuelId]` | Alta / edición de carga | — |
@@ -250,10 +253,10 @@ Relaciones:
 | Entidad | Campos (tipo app; en Firestore `Date`→`Timestamp`) |
 |---|---|
 | `Car` | `id, brand, model, version?, year?, plate?, fuelTypes: ('nafta'\|'gasoil'\|'gnc')[], currentKm, kmUpdatedAt?, avgKmPerDay?, photoUrl?, photoPublicId?, createdAt, ownerUid, ownerName?, members: string[]` |
-| `MaintenanceRule` | `id, carId, name, intervalKm?, intervalTime?: { amount, unit: 'day'\|'week'\|'month'\|'year' }, repeat: bool, lastDoneKm?, lastDoneDate?: ISODate, warnKm (500), warnDays (30), lastNotifiedAt?, lastNotifiedStatus?: 'soon'\|'overdue'` |
+| `MaintenanceRule` | `id, carId, name, intervalKm?, intervalTime?: { amount, unit: 'day'\|'week'\|'month'\|'year' }, repeat: bool, lastDoneKm?, lastDoneKmEstimated: bool (lastDoneKm salió de las lecturas; falta = false), lastDoneDate?: ISODate, warnKm (500), warnDays (30), lastNotifiedAt?, lastNotifiedStatus?: 'soon'\|'overdue'` |
 | `Job` | `id, carId, date: ISODate, km?, title, category: JobCategory, cost, workshop?, notes?, ruleIds: string[], status: 'approved'\|'pending'\|'rejected' (falta = approved), reviewedAt?, createdBy?, createdByName?, createdAt` |
 | `FuelLoad` | `id, carId, date: ISODate, km?, fuelType, grade?: 'super'\|'premium' (null en GNC), quantity (L o m³), unitPrice, total, fullTank, station?, createdBy?, createdByName?, createdAt` |
-| `OdometerReading` | `id, carId, km, date: Date, source: 'initial'\|'manual'\|'job'\|'fuel', sourceId: string \| null (id de la carga o del trabajo; null en alta, manual y viejas), createdBy?, createdByName?` |
+| `OdometerReading` | `id, carId, km, date: Date, source: 'initial'\|'manual'\|'job'\|'fuel', sourceId: string \| null (id de la carga o del trabajo; null en alta, manual y viejas), createdBy?, createdByName?, createdAt: Date \| null (cuándo se cargó en la app; null en las viejas)` |
 | `AchievementRecord` | `id (= id del logro), carId?, unlockedAt, celebratedAt?` |
 | `UserSettings` | `reminder: { enabled (true), weekday (0 = domingo) }, timezone ('America/Argentina/Buenos_Aires')` |
 | `Actor` | `{ uid, name? }` — autor de una escritura |
@@ -265,18 +268,19 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 - Cada colección tiene una **allowlist de campos** (`validCar`, `validRule`, `validJob`, `validFuel`, `validReading`, `validSettings`, `validPushSubscription`, `validAchievement`) con tipos y topes de largo.
 - **Campo nuevo ⇒** agregarlo en `lib/types.ts`, en el mapper `xxxFrom` de `lib/db.ts` (y en `app/api/cron/daily` si el cron lo lee), en la función `validXxx` de `firestore.rules`, y **publicar las reglas a mano** (paso manual del usuario) antes de deployar la app.
 - Colección o ruta nueva ⇒ `match` nuevo; cualquier ruta no listada se deniega.
+- `validRule` acepta `lastDoneKmEstimated` (`optBool`) y `validReading` acepta `createdAt` (`optTime`); los dos pueden faltar (lo que escribe la 1.3.0).
 - **Lecturas vinculadas** (`odometer`): `linkedOk` exige, si viene `sourceId`, `source` en `fuel`\|`job`, id = `{source}-{sourceId}` y que el registro exista después del batch (`existsAfter(linkedParent)`; la ruta usa `jobs` si `source == 'job'`). `sourceId` no cambia al editar. Borrar: el dueño, cualquier lectura sin consultar el registro (`deleteCar`); el miembro, una que no existe (`resource == null`) o una suya sin `sourceId` o cuyo registro ya no existe o no tiene km (`linkedReleased`).
 
 ### Lógica de dominio pura (sin I/O)
 
 | Módulo | Funciones clave |
 |---|---|
-| `maintenance.ts` | `getRuleState`, `rulesWithState`, `describeRemaining`, `defaultWarnings` |
-| `odometer.ts` | `computeAvgKmPerDay`, `topReading`, `carKmFrom` (km del auto desde sus lecturas), `linkedReadingId`, `readingDateOf`, `withLinkedReading`, `readingOrigin` (texto y link de la pestaña Km), `validateKmReading`, `entryKmWarning` |
+| `maintenance.ts` | `getRuleState`, `rulesWithState`, `describeRemaining`, `defaultWarnings`, `jobRuleUpdates(rules, job, readings)` (qué hace un trabajo aprobado con cada mantenimiento: borrar o actualizar `lastDoneKm`/`lastDoneKmEstimated`/`lastDoneDate`), `jobDoneKm(job, readings)` (km del trabajo o estimado a su fecha, sin la lectura `job-{id}`), `kmRulesOf`, `formatLastDoneKm`, `missingLastKm` |
+| `odometer.ts` | `computeAvgKmPerDay`, `topReading`, `carKmFrom` (km del auto desde sus lecturas), `linkedReadingId`, `readingDateOf`, `withLinkedReading`, `readingOrigin` (texto y link de la pestaña Km), `kmAtDate(readings, date)` (km a una fecha: el del día, interpolado o el de la última; `estimated`), `neighborsAt(readings, date)` (lectura de más km de ese día o antes / de menos km después, por día local), `validateKmReading(km, date, readings)`, `entryKmWarning(entry, car, readings)` (salto, km del último registro en fecha anterior y coherencia con la serie, sin la lectura propia `entry.readingId`) |
 | `fuel.ts` | `resolveFuelAmounts`, `computeFuelStats`, `computeCostPerKm`, `lastPrices` |
 | `expenses.ts` | `summarizeExpenses(jobs, fuel, year, today)`, `expenseYears` |
 | `pending.ts` | `pendingItems()` → `PendingItem` (`km`\|`rule`\|`review`\|`rejected`\|`shared`), `urgentCount` |
-| `achievements.ts` | `ACHIEVEMENTS`, `evaluateAchievements`, `pendingUnlocks`, `pendingCelebrations` |
+| `achievements.ts` | `ACHIEVEMENTS`, `evaluateAchievements`, `pendingUnlocks`, `pendingCelebrations`. Rachas y seguimiento usan la fecha en que se cargó cada lectura: `createdAt` del registro en las vinculadas, el de la lectura en las demás, o `date` si falta |
 | `sharing.ts` | `isCarOwner`, `isSharedCar`, `canEditEntry`, `canEditJob`, `approvedJobs`, `memberError`, `authorLabel`, `MAX_MEMBERS = 2` |
 | `report.ts` | `buildServiceReport` (PDF de historial), `reportFileName` |
 | `notifications.ts` | `planDailyNotifications`, `updatesToPersist`, `isPushEndpoint` |

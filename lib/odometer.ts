@@ -1,5 +1,5 @@
-import { daysBetweenInstants, toISODate } from './dates'
-import { formatDate, formatDayMonth } from './format'
+import { daysBetween, daysBetweenInstants, toISODate } from './dates'
+import { formatDate, formatDayMonth, formatKm } from './format'
 import type { FuelLoad, ISODate, Job, OdometerReading, OdometerSource } from './types'
 
 const WINDOW_DAYS = 120
@@ -88,16 +88,71 @@ export function readingOrigin(
   return null
 }
 
+/** Una lectura de km con su fecha: lo único que miran los cálculos de la serie. */
+type DatedKm = { km: number; date: Date }
+
+/**
+ * Las lecturas que acotan el km de una fecha, comparando por día local (las manuales guardan la hora en que se
+ * cargaron y las vinculadas el mediodía):
+ * - `before`: la de más km entre las de ese día o anteriores (empate: la más reciente). El km de esa fecha no puede
+ *   ser menor.
+ * - `after`: la de menos km entre las de días posteriores (empate: la más vieja). El km de esa fecha no puede ser
+ *   mayor.
+ * En una serie que sube con las fechas son la lectura anterior y la posterior. No importa el orden de la lista.
+ */
+export function neighborsAt<T extends DatedKm>(readings: readonly T[], date: ISODate): { before: T | null; after: T | null } {
+  let before: T | null = null
+  let after: T | null = null
+  for (const r of readings) {
+    if (toISODate(r.date) <= date) {
+      if (!before || r.km > before.km || (r.km === before.km && r.date.getTime() > before.date.getTime())) before = r
+    } else if (!after || r.km < after.km || (r.km === after.km && r.date.getTime() < after.date.getTime())) {
+      after = r
+    }
+  }
+  return { before, after }
+}
+
+/**
+ * Km del auto en una fecha según sus lecturas (de un solo auto), comparando por día local:
+ * - si hay lecturas de ese día, la de más km (`estimated: false`);
+ * - entre dos lecturas (`neighborsAt`), la interpolación lineal por días, redondeada (`estimated: true`). Si la
+ *   posterior tiene menos km que la anterior (una serie que no cierra), el km de la anterior: es la cota baja y
+ *   avisa antes. Nunca da menos que la anterior;
+ * - después de la última, el km de la última (`estimated: true`): también es una cota baja;
+ * - antes de la primera, o sin lecturas, null.
+ */
+export function kmAtDate(readings: readonly DatedKm[], date: ISODate): { km: number; estimated: boolean } | null {
+  const sameDay = readings.filter(r => toISODate(r.date) === date)
+  if (sameDay.length) return { km: Math.max(...sameDay.map(r => r.km)), estimated: false }
+  const { before, after } = neighborsAt(readings, date)
+  if (!before) return null
+  if (!after || after.km <= before.km) return { km: before.km, estimated: true }
+  const from = toISODate(before.date)
+  const km = before.km + ((after.km - before.km) * daysBetween(from, date)) / daysBetween(from, toISODate(after.date))
+  return { km: Math.max(before.km, Math.round(km)), estimated: true }
+}
+
 export type KmValidation = { ok: true; warning?: string } | { ok: false; error: string }
 
-export function validateKmReading(newKm: number, currentKm: number): KmValidation {
+/**
+ * Valida un km cargado a mano para una fecha contra las lecturas del auto (de ese auto, `neighborsAt`): no puede
+ * ser menor que el más alto de ese día o de antes, ni mayor que el más bajo de los días posteriores. El mismo km
+ * que la vecina se acepta. Con la fecha de hoy es lo de siempre: no menos que el km actual. Avisa (sin bloquear)
+ * un salto muy grande sobre la lectura anterior.
+ */
+export function validateKmReading(newKm: number, date: ISODate, readings: readonly DatedKm[]): KmValidation {
   if (!Number.isFinite(newKm) || newKm < 0 || !Number.isInteger(newKm)) {
     return { ok: false, error: 'Ingresá un número entero de km.' }
   }
-  if (newKm < currentKm) {
-    return { ok: false, error: `No puede ser menor al último registro (${currentKm.toLocaleString('es-AR')} km).` }
+  const { before, after } = neighborsAt(readings, date)
+  if (before && newKm < before.km) {
+    return { ok: false, error: `El ${formatDate(toISODate(before.date))} ya tenía ${formatKm(before.km)}: no puede ser menos.` }
   }
-  const warning = jumpWarning(newKm, currentKm)
+  if (after && newKm > after.km) {
+    return { ok: false, error: `El ${formatDate(toISODate(after.date))} tenía ${formatKm(after.km)}: no puede ser más.` }
+  }
+  const warning = before ? jumpWarning(newKm, before.km) : null
   return warning ? { ok: true, warning } : { ok: true }
 }
 
@@ -112,11 +167,15 @@ function jumpWarning(newKm: number, currentKm: number) {
  * - muchos km más que el último registro: suele ser un cero de más;
  * - en uno nuevo con fecha anterior al último registro, justo los km de ese registro (los que el
  *   formulario completa solo): ese día seguramente tenía menos, y con esos km se calcula cuándo toca
- *   el próximo mantenimiento.
+ *   el próximo mantenimiento;
+ * - km que no entran en la serie de lecturas del auto (`readings`, de ese auto) por la fecha: menos que una
+ *   lectura de ese día o anterior, o más que una posterior (`neighborsAt`). Al editar, `readingId` es la lectura del
+ *   propio registro (`fuel-{id}` o `job-{id}`), que no cuenta.
  */
 export function entryKmWarning(
-  entry: { date: ISODate; km: number | null; isNew: boolean },
+  entry: { date: ISODate; km: number | null; isNew: boolean; readingId?: string | null },
   car: { currentKm: number; kmUpdatedAt: Date | null },
+  readings: readonly (DatedKm & { id: string })[],
 ): string | null {
   if (entry.km == null) return null
   const jump = jumpWarning(entry.km, car.currentKm)
@@ -126,6 +185,13 @@ export function entryKmWarning(
     if (entry.date < lastDate) {
       return `Son los km del último registro (${formatDate(lastDate)}) y la fecha es anterior. Si ese día el auto tenía menos km, corregilos.`
     }
+  }
+  const { before, after } = neighborsAt(readings.filter(r => r.id !== entry.readingId), entry.date)
+  if (before && entry.km < before.km) {
+    return `El ${formatDate(toISODate(before.date))} el auto ya tenía ${formatKm(before.km)}, más que estos km. Revisá la fecha y los km.`
+  }
+  if (after && entry.km > after.km) {
+    return `El ${formatDate(toISODate(after.date))} el auto tenía ${formatKm(after.km)}, menos que estos km. Revisá la fecha y los km.`
   }
   return null
 }

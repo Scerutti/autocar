@@ -4,10 +4,10 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Gauge, Pencil, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { FormError } from '@/components/ui/form'
+import { Field, FormError, Input } from '@/components/ui/form'
 import { useData } from '@/components/providers/data-provider'
 import { recordKm } from '@/lib/db'
-import { formatKm, formatNumber, parseNumberInput, timeAgo } from '@/lib/format'
+import { formatDate, formatKm, formatNumber, parseNumberInput, timeAgo } from '@/lib/format'
 import { rulesWithState, summarizeRule } from '@/lib/maintenance'
 import { validateKmReading } from '@/lib/odometer'
 import type { Car } from '@/lib/types'
@@ -18,7 +18,8 @@ import { carName } from './common'
  * Carga de km en dos pasos: escribir y confirmar. La confirmación muestra el número grande y la
  * diferencia con el último registro, para frenar errores de tipeo (un cero de más o de menos).
  * Va dentro del mismo formulario (no un diálogo encima de otro). Al guardar, el aviso muestra cuánto falta
- * para el próximo mantenimiento.
+ * para el próximo mantenimiento. La fecha es hoy salvo que se elija otra (nunca futura): unos km de un día pasado
+ * tienen que entrar entre las lecturas de antes y de después (`validateKmReading`) y no bajan el km del auto.
  */
 export function KmForm({
   car,
@@ -35,6 +36,7 @@ export function KmForm({
 }) {
   const { actor, odometer, rules, today } = useData()
   const [value, setValue] = useState('')
+  const [date, setDate] = useState(today)
   const [step, setStep] = useState<'enter' | 'confirm'>('enter')
   const [warning, setWarning] = useState<string | null>(null)
   const { saving, error, setError, run } = useSaver()
@@ -44,6 +46,8 @@ export function KmForm({
 
   const hintId = useId()
   const km = parseNumberInput(value)
+  const day = date || today
+  const past = day < today
 
   useEffect(() => {
     if (step === 'confirm') confirmButtonRef.current?.focus()
@@ -53,7 +57,8 @@ export function KmForm({
   function review(e: React.FormEvent) {
     e.preventDefault()
     if (km == null) return setError('Ingresá los km que marca el tablero.')
-    const v = validateKmReading(km, car.currentKm)
+    if (day > today) return setError('La fecha no puede ser futura.')
+    const v = validateKmReading(km, day, odometer.filter(r => r.carId === car.id))
     if (!v.ok) return setError(v.error)
     setWarning(v.warning ?? null)
     setStep('confirm')
@@ -63,10 +68,10 @@ export function KmForm({
     if (km == null) return
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(recordKm(actor, car, odometer, km))
+      status = await settle(recordKm(actor, car, odometer, km, day))
     })
     if (!ok) return setStep('enter')
-    const next = rulesWithState(rules.filter(r => r.carId === car.id), { ...car, currentKm: km }, today)[0]
+    const next = rulesWithState(rules.filter(r => r.carId === car.id), { ...car, currentKm: Math.max(km, car.currentKm) }, today)[0]
     toastSaved(`${formatKm(km)} guardados`, status, next ? summarizeRule(next.rule.name, next.state) : carName(car))
     onDone()
   }
@@ -75,13 +80,19 @@ export function KmForm({
     const diff = km - car.currentKm
     return (
       <div className="space-y-4" role="group" aria-label="Confirmar kilómetros">
-        <p className="text-sm font-medium">¿Estos son los km que marca el tablero?</p>
+        <p className="text-sm font-medium">
+          {past ? `¿Estos son los km que marcaba el tablero el ${formatDate(day)}?` : '¿Estos son los km que marca el tablero?'}
+        </p>
         <div className="rounded-2xl border border-primary/30 bg-primary/10 px-4 py-5 text-center">
           <p className="text-4xl font-bold tabular-nums tracking-tight">
             {formatNumber(km)} <span className="text-lg font-medium text-muted-foreground">km</span>
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {diff === 0 ? 'Igual que el último registro' : `+${formatKm(diff)} desde el último registro`}
+            {past
+              ? `Con fecha ${formatDate(day)}`
+              : diff === 0
+                ? 'Igual que el último registro'
+                : `+${formatKm(diff)} desde el último registro`}
           </p>
         </div>
         {warning && (
@@ -106,7 +117,7 @@ export function KmForm({
   return (
     <form onSubmit={review} className="space-y-4" noValidate>
       <label className="flex flex-col gap-2 text-sm font-medium">
-        Kilómetros actuales
+        {past ? 'Kilómetros de ese día' : 'Kilómetros actuales'}
         <input
           ref={input}
           autoFocus={autoFocus}
@@ -125,7 +136,7 @@ export function KmForm({
         />
       </label>
       <p id={hintId} className="text-sm text-muted-foreground">
-        {km != null && km > car.currentKm && !error ? (
+        {!past && km != null && km > car.currentKm && !error ? (
           <>+{formatKm(km - car.currentKm)} desde el último registro</>
         ) : (
           <>
@@ -134,6 +145,17 @@ export function KmForm({
           </>
         )}
       </p>
+      <Field label="Fecha" hint={past ? 'Tienen que entrar entre los registros de antes y de después de ese día.' : 'Hoy, salvo que sean los km de otro día.'}>
+        <Input
+          type="date"
+          value={date}
+          max={today}
+          onChange={e => {
+            setDate(e.target.value)
+            setError(null)
+          }}
+        />
+      </Field>
       <FormError>{error}</FormError>
       <div className="flex gap-3">
         {onCancel && (

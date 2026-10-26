@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
 import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
-import { computeAvgKmPerDay, entryKmWarning, validateKmReading } from './odometer'
+import { computeAvgKmPerDay, entryKmWarning, readingDateOf, validateKmReading } from './odometer'
 import { summarizeExpenses } from './expenses'
 import { everyWeekday, parseNumberInput, toNumberInput } from './format'
 import { niceMax } from './scale'
@@ -127,11 +127,12 @@ describe('computeAvgKmPerDay', () => {
 })
 
 describe('validateKmReading', () => {
+  const readings = [{ km: 1000, date: readingDateOf('2026-05-20') }]
   it('rechaza km menores al actual', () => {
-    expect(validateKmReading(900, 1000).ok).toBe(false)
+    expect(validateKmReading(900, '2026-06-01', readings).ok).toBe(false)
   })
   it('advierte saltos muy grandes', () => {
-    const r = validateKmReading(50000, 1000)
+    const r = validateKmReading(50000, '2026-06-01', readings)
     expect(r.ok && r.warning).toBeTruthy()
   })
 })
@@ -246,14 +247,14 @@ describe('combustibles: nafta, gasoil y GNC', () => {
 describe('entryKmWarning', () => {
   const car = { currentKm: 51000, kmUpdatedAt: new Date('2026-09-10T15:00:00Z') }
   it('avisa si los km de una carga o un trabajo parecen tener un cero de más', () => {
-    expect(entryKmWarning({ date: '2026-09-20', km: 510000, isNew: true }, car)).toMatch(/459\.000 km más.*cero/)
-    expect(entryKmWarning({ date: '2026-09-20', km: 52000, isNew: true }, car)).toBeNull()
-    expect(entryKmWarning({ date: '2026-09-20', km: null, isNew: true }, car)).toBeNull()
+    expect(entryKmWarning({ date: '2026-09-20', km: 510000, isNew: true }, car, [])).toMatch(/459\.000 km más.*cero/)
+    expect(entryKmWarning({ date: '2026-09-20', km: 52000, isNew: true }, car, [])).toBeNull()
+    expect(entryKmWarning({ date: '2026-09-20', km: null, isNew: true }, car, [])).toBeNull()
   })
   it('avisa si uno nuevo con fecha anterior al último registro lleva justo esos km', () => {
-    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: true }, car)).toMatch(/último registro.*anterior/)
-    expect(entryKmWarning({ date: '2026-06-01', km: 40000, isNew: true }, car)).toBeNull()
-    expect(entryKmWarning({ date: '2026-09-10', km: 51000, isNew: true }, car)).toBeNull()
-    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: false }, car)).toBeNull()
+    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: true }, car, [])).toMatch(/último registro.*anterior/)
+    expect(entryKmWarning({ date: '2026-06-01', km: 40000, isNew: true }, car, [])).toBeNull()
+    expect(entryKmWarning({ date: '2026-09-10', km: 51000, isNew: true }, car, [])).toBeNull()
+    expect(entryKmWarning({ date: '2026-06-01', km: 51000, isNew: false }, car, [])).toBeNull()
   })
 })

@@ -45,6 +45,7 @@ function rule(p: Partial<MaintenanceRule>): MaintenanceRule {
     intervalTime: { amount: 1, unit: 'year' },
     repeat: true,
     lastDoneKm: 190000,
+    lastDoneKmEstimated: false,
     lastDoneDate: '2026-01-10',
     warnKm: 500,
     warnDays: 30,
