@@ -285,7 +285,6 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | Firebase Auth | Login Google; ID token para las API routes. `/__/auth/*` reescrito al dominio de la app (Safari/iOS) | `NEXT_PUBLIC_FIREBASE_*` |
 | Firestore | Datos, caché offline multi-pestaña | ídem |
 | Firebase Admin | API routes y cron (no pasa por las reglas) | `FIREBASE_ADMIN_PROJECT_ID`, `_CLIENT_EMAIL`, `_PRIVATE_KEY` |
-| App Check | reCAPTCHA Enterprise; apagado sin clave | `NEXT_PUBLIC_RECAPTCHA_SITE_KEY` |
 | Cloudinary | Fotos de autos en `autocar/{uid}/{uuid}`, 1600 px, 10 fotos/día; URLs con `cloudinaryUrl(url, transform)` | `CLOUDINARY_CLOUD_NAME`, `_API_KEY`, `_API_SECRET` |
 | Web Push | VAPID; payload `{ title, body, url, tag }`; `public/sw.js` abre `url` al tocar | `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` |
 | Vercel Cron | `GET /api/cron/daily` 12:00 UTC | `CRON_SECRET` |
