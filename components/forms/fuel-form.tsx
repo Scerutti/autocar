@@ -67,6 +67,10 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
  * Formulario de la carga. Al editar una carga vieja se respeta su combustible aunque el
  * auto haya cambiado. Precio y estación se sugieren desde la carga más reciente de ese combustible (y de esa
  * calidad, si se indica), también al cambiar de combustible o de calidad.
+ * Al guardar, los cambios se miden contra la carga como estaba al abrir el formulario (`original`): lo que otro
+ * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios"). Si
+ * la cantidad y el total quedan iguales, se conserva el precio por unidad guardado: recalcularlo desde el total puede
+ * diferir en un centavo y contaría como un cambio.
  */
 function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
@@ -91,6 +95,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
   const [price, setPrice] = useState(load ? toNumberInput(load.total) : initialLast?.unitPrice ? toNumberInput(initialLast.unitPrice) : '')
   const [fullTank, setFullTank] = useState(load?.fullTank ?? true)
   const [station, setStation] = useState(load?.station ?? initialLast?.station ?? '')
+  const [original] = useState(load)
 
   const unit = FUEL_UNITS[fuelType]
   const liquidSelected = isLiquidFuel(fuelType)
@@ -130,6 +135,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
     if (kmNum != null && (kmNum < 0 || !Number.isInteger(kmNum))) return setError('Los km no son válidos.')
     if (date > today) return setError('La fecha no puede ser futura.')
 
+    const sameAmounts = original && amounts.quantity === original.quantity && amounts.total === original.total
     const data = {
       carId: car.id,
       date,
@@ -137,6 +143,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
       fuelType,
       grade: liquidSelected ? grade : null,
       ...amounts,
+      ...(sameAmounts ? { unitPrice: original.unitPrice } : {}),
       fullTank: liquidSelected ? fullTank : true,
       station: station.trim() || null,
     }
@@ -161,7 +168,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveFuel(actor, { car, readings: odometer }, data, load))
+      status = await settle(saveFuel(actor, { car, readings: odometer }, data, original))
     })
     if (!ok) return
     toastSaved(

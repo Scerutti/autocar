@@ -31,6 +31,7 @@ function job(p: Partial<Job>): Job {
     workshop: null,
     notes: null,
     ruleIds: [],
+    revision: 0,
     createdAt: new Date(0),
     ...p,
   }

@@ -46,6 +46,7 @@ const job = (extra: Partial<Job> = {}): Job => ({
   workshop: null,
   notes: null,
   ruleIds: [],
+  revision: 0,
   createdAt: new Date(`2026-09-01T12:00:${String(seq % 60).padStart(2, '0')}`),
   ...extra,
 })
