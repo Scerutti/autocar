@@ -16,13 +16,13 @@ const authFrames = [authDomain && `https://${authDomain}`, projectId && `https:/
 /**
  * CSP sin nonce (las páginas son estáticas): por eso script-src lleva 'unsafe-inline' para la hidratación de Next.
  * - script-src: 'wasm-unsafe-eval' porque yoga-layout (lo usa @react-pdf para el PDF) compila WebAssembly;
- *   apis.google.com para gapi (login con Google de Firebase Auth); reCAPTCHA Enterprise de App Check (sólo se
- *   carga con NEXT_PUBLIC_RECAPTCHA_SITE_KEY); 'unsafe-eval' sólo en desarrollo (trazas de error de React).
+ *   apis.google.com para gapi (login con Google de Firebase Auth); 'unsafe-eval' sólo en desarrollo (trazas de
+ *   error de React).
  * - style-src 'unsafe-inline': los style={...} de React son estilos inline.
  * - img-src: fotos de los autos (Cloudinary) y avatar de la cuenta de Google (googleusercontent).
- * - connect-src: googleapis (Firestore con sus streams, identitytoolkit/securetoken del login, App Check),
- *   reCAPTCHA, subida firmada de fotos a Cloudinary y, en desarrollo, ws/wss para el HMR de Next.
- * - frame-src: el iframe del login de Firebase (authFrames) y el de reCAPTCHA Enterprise (App Check).
+ * - connect-src: googleapis (Firestore con sus streams, identitytoolkit/securetoken del login), subida firmada
+ *   de fotos a Cloudinary y, en desarrollo, ws/wss para el HMR de Next.
+ * - frame-src: el iframe del login de Firebase (authFrames).
  * - worker-src: el service worker de los push (/sw.js).
  */
 const csp = [
@@ -31,8 +31,6 @@ const csp = [
     "script-src 'self' 'unsafe-inline'",
     "'wasm-unsafe-eval'",
     'https://apis.google.com',
-    'https://www.google.com/recaptcha/',
-    'https://www.gstatic.com/recaptcha/',
     isDev && "'unsafe-eval'",
   ],
   "style-src 'self' 'unsafe-inline'",
@@ -45,7 +43,6 @@ const csp = [
   [
     "connect-src 'self' data:",
     'https://*.googleapis.com',
-    'https://www.google.com/recaptcha/',
     'https://api.cloudinary.com',
     isDev && 'ws: wss:',
   ],
@@ -53,8 +50,6 @@ const csp = [
     'frame-src',
     "'self'",
     ...(authFrames.length ? authFrames : ['https://*.firebaseapp.com']),
-    'https://www.google.com/recaptcha/',
-    'https://recaptcha.google.com/recaptcha/',
   ],
   "worker-src 'self' blob:",
   "manifest-src 'self'",

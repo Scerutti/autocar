@@ -2,6 +2,14 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+Para el usuario la app funciona igual.
+
+### Mantenimiento
+
+- **Sin App Check**: se quita el código de App Check, que nunca se activó porque faltaba la clave de reCAPTCHA. Se decidió no usar reCAPTCHA para no pagarlo. Salen también de la CSP los dominios de reCAPTCHA y la variable `NEXT_PUBLIC_RECAPTCHA_SITE_KEY`.
+
 ## 1.2.1
 
 Actualización de seguridad de dependencias. Para el usuario la app funciona igual.
