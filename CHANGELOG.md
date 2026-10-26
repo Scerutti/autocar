@@ -2,7 +2,7 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.4.1
 
 El km del auto sale siempre de sus registros de km, y las novedades de cada versión se anuncian al entrar. No cambian las reglas de Firestore y no hace falta migrar datos.
 
