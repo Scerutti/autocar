@@ -81,13 +81,15 @@ service cloud.firestore {
     // intervalMonths es el formato viejo del intervalo (lib/parse.ts lo sigue leyendo).
     // El nombre y el título de un trabajo van y vienen (job-form precarga el título con el nombre, y
     // "Volver al taller: <título>" arma un nombre), así que tienen el mismo tope, holgado.
+    // lastDoneKmEstimated dice que lastDoneKm se estimó con las lecturas (un trabajo sin km); falta en los viejos.
     function validRule(d) {
       return d.keys().hasOnly([
           'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'lastDoneKm',
-          'lastDoneDate', 'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
+          'lastDoneKmEstimated', 'lastDoneDate', 'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
         && optText(d, 'carId', 100) && optText(d, 'name', 500)
         && optNum(d, 'intervalKm') && optInterval(d, 'intervalTime') && optNum(d, 'intervalMonths')
-        && optBool(d, 'repeat') && optNum(d, 'lastDoneKm') && optText(d, 'lastDoneDate', 30)
+        && optBool(d, 'repeat') && optNum(d, 'lastDoneKm') && optBool(d, 'lastDoneKmEstimated')
+        && optText(d, 'lastDoneDate', 30)
         && optNum(d, 'warnKm') && optNum(d, 'warnDays')
         && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
     }
@@ -117,12 +119,13 @@ service cloud.firestore {
         && optBool(d, 'fullTank') && optText(d, 'station', 200) && optTime(d, 'createdAt');
     }
 
-    // sourceId es el id de la carga o del trabajo del que salió la lectura (lo valida linkedOk).
+    // sourceId es el id de la carga o del trabajo del que salió la lectura (lo valida linkedOk). createdAt es cuándo
+    // se cargó en la app (lo usan los logros); falta en las viejas.
     function validReading(d) {
-      return d.keys().hasOnly(['carId', 'km', 'date', 'source', 'sourceId', 'createdBy', 'createdByName'])
+      return d.keys().hasOnly(['carId', 'km', 'date', 'source', 'sourceId', 'createdBy', 'createdByName', 'createdAt'])
         && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
         && optText(d, 'carId', 100) && optNum(d, 'km') && optTime(d, 'date') && optText(d, 'source', 20)
-        && optText(d, 'sourceId', 100);
+        && optText(d, 'sourceId', 100) && optTime(d, 'createdAt');
     }
 
     // Ruta del registro del que salió una lectura vinculada. source es 'fuel' o 'job', pero la colección de los

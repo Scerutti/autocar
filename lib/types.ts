@@ -73,6 +73,11 @@ export interface MaintenanceRule {
    */
   repeat: boolean
   lastDoneKm: number | null
+  /**
+   * true si `lastDoneKm` no es un dato sino una estimación con las lecturas de km (`kmAtDate`): lo dejó un trabajo
+   * sin km. Se muestra como "≈ 48.300 km (estimado)". false en los viejos sin el campo.
+   */
+  lastDoneKmEstimated: boolean
   lastDoneDate: ISODate | null
   warnKm: number
   warnDays: number
@@ -150,6 +155,11 @@ export interface OdometerReading extends Authorship {
    * `{source}-{sourceId}`. null en las de alta, las manuales y las viejas sin vincular.
    */
   sourceId: string | null
+  /**
+   * Cuándo se cargó la lectura en la app (para los logros: la fecha de una lectura manual puede ser de hace semanas).
+   * null en las viejas sin el dato.
+   */
+  createdAt: Date | null
 }
 
 /**

@@ -73,6 +73,7 @@ const reading = (date: string, extra: Partial<OdometerReading> = {}): OdometerRe
   date: new Date(`${date}T12:00:00`),
   source: 'manual',
   sourceId: null,
+  createdAt: null,
   ...extra,
 })
 
@@ -84,6 +85,7 @@ const rule = (name: string, extra: Partial<MaintenanceRule> = {}): MaintenanceRu
   intervalTime: { amount: 1, unit: 'year' },
   repeat: true,
   lastDoneKm: null,
+  lastDoneKmEstimated: false,
   lastDoneDate: '2026-01-01',
   warnKm: 500,
   warnDays: 30,
@@ -328,6 +330,22 @@ describe('seguimiento a largo plazo', () => {
     const load = fuel({ date: '2025-10-01', km: 5000, createdAt: new Date('2026-10-09T09:00:00') })
     const linked = reading('2025-10-01', { id: `fuel-${load.id}`, source: 'fuel', sourceId: load.id, km: 5000 })
     expect(find(evaluate({ cars: [c], fuel: [load], odometer: [linked] }), 'un-viejo-conocido').met).toBe(false)
+  })
+
+  it('un km manual con fecha de hace meses cargado hoy cuenta desde que se cargó', () => {
+    const c = car({ createdAt: new Date('2026-06-01T12:00:00') })
+    const backdated = reading('2025-10-01', { createdAt: new Date('2026-10-09T09:00:00') })
+    expect(find(evaluate({ cars: [c], odometer: [backdated] }), 'un-viejo-conocido').met).toBe(false)
+    const legacy = reading('2025-10-01')
+    expect(find(evaluate({ cars: [c], odometer: [legacy] }), 'un-viejo-conocido').met).toBe(true)
+  })
+
+  it('un km manual con fecha pasada cargado hoy no completa una racha vieja', () => {
+    const old = weeklyReadings(3, '2026-08-10')
+    const backfilled = reading('2026-08-17', { createdAt: new Date('2026-10-09T09:00:00') })
+    expect(find(evaluate({ odometer: [...old, backfilled] }), 'un-mes-sobre-ruedas').met).toBe(false)
+    const same = reading('2026-08-17')
+    expect(find(evaluate({ odometer: [...old, same] }), 'un-mes-sobre-ruedas').met).toBe(true)
   })
 
   it('"Una historia sobre ruedas" necesita dos años y 20 registros', () => {

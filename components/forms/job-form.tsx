@@ -12,8 +12,9 @@ import { Checkbox, Field, FormError, Input, Textarea } from '@/components/ui/for
 import { useCar, useData } from '@/components/providers/data-provider'
 import { addInterval, toISODate } from '@/lib/dates'
 import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp } from '@/lib/db'
-import { formatDate, formatInterval, formatKm, formatMoney, parseNumberInput, toNumberInput } from '@/lib/format'
-import { entryKmWarning } from '@/lib/odometer'
+import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
+import { formatLastDoneKm, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
+import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
 import { authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type TimeInterval } from '@/lib/types'
@@ -34,9 +35,16 @@ const CATEGORY_OPTIONS = (Object.keys(JOB_CATEGORY_LABELS) as JobCategory[]).map
   icon: CATEGORY_ICONS[value],
 }))
 
+/** «Service», «Service» y «Correa», «A», «B» y «C». */
+function quotedList(names: string[]) {
+  const quoted = names.map(n => `«${n}»`)
+  return quoted.length > 1 ? `${quoted.slice(0, -1).join(', ')} y ${quoted[quoted.length - 1]}` : (quoted[0] ?? '')
+}
+
 /**
  * Aprobar o rechazar el trabajo que cargó un miembro (lo hace el dueño), con su confirmación. Aprobar aplica los
- * efectos con los mantenimientos y el km que tiene la app en ese momento. Cada acción devuelve true si se hizo.
+ * efectos con los mantenimientos y las lecturas que tiene la app en ese momento: si el trabajo no tiene km y marca
+ * un mantenimiento por km, el km estimado a la fecha del trabajo. Cada acción devuelve true si se hizo.
  */
 export function useJobReview() {
   const confirm = useConfirm()
@@ -45,6 +53,8 @@ export function useJobReview() {
   async function approve(car: Car, job: Job) {
     const rules = rulesByCar.get(car.id) ?? []
     const done = rules.filter(r => job.ruleIds.includes(r.rule.id)).map(r => r.rule.name)
+    const estimate =
+      job.km == null && kmRulesOf(rules.map(r => r.rule), job.ruleIds).length ? jobDoneKm(job, odometer) : null
     const confirmed = await confirm({
       title: '¿Aprobar este trabajo?',
       description: 'Pasa a contar en gastos y reportes, y quien lo cargó ya no lo puede editar.',
@@ -52,7 +62,11 @@ export function useJobReview() {
         { label: 'Qué se hizo', value: job.title },
         { label: 'Cargado por', value: authorLabel(job, car, uid) },
         { label: 'Fecha', value: formatDate(job.date) },
-        ...(job.km != null ? [{ label: 'Km', value: formatKm(job.km) }] : []),
+        ...(job.km != null
+          ? [{ label: 'Km', value: formatKm(job.km) }]
+          : estimate
+            ? [{ label: 'Km (estimado)', value: `≈ ${formatKm(estimate.km)}` }]
+            : []),
         { label: 'Costo', value: formatMoney(job.cost) },
         ...(done.length ? [{ label: 'Marca como hecho', value: done.join(', ') }] : []),
       ],
@@ -152,19 +166,23 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
  * vez quedan cumplidos. "Volver al taller en…" sólo aparece al cargar un trabajo nuevo, y sólo al dueño: crea un
  * mantenimiento, y el plan es del dueño. Lo que carga o corrige un miembro queda pendiente hasta que el dueño lo
  * aprueba; al dueño, un trabajo pendiente le muestra Aprobar y Rechazar.
+ * El km arranca vacío (no se inventa el de hoy). Si se marca un mantenimiento por km y queda vacío, el campo muestra
+ * el km estimado a la fecha (`jobDoneKm`) como sugerencia: el trabajo se guarda sin km y, al aplicar los efectos, el
+ * mantenimiento toma ese estimado marcado como tal. Sin estimación (fecha anterior a la primera lectura), el km es
+ * obligatorio.
  */
 function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, uid, today, odometer } = useData()
-  const { rules } = useCar(car.id)
+  const { rules, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
   const owner = isCarOwner(car, uid)
   const ownerName = car.ownerName ?? 'el dueño'
 
   const preRule = rules.find(r => r.rule.id === preselectedRuleId)?.rule
   const [date, setDate] = useState(job?.date ?? toISODate(new Date()))
-  const [km, setKm] = useState(job ? (job.km != null ? String(job.km) : '') : String(car.currentKm))
+  const [km, setKm] = useState(job?.km != null ? String(job.km) : '')
   const [title, setTitle] = useState(job?.title ?? preRule?.name ?? '')
   const [category, setCategory] = useState<JobCategory>(
     job?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
@@ -175,6 +193,10 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
   const [comeBack, setComeBack] = useState(false)
   const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
+
+  const kmNum = parseNumberInput(km)
+  const kmRules = kmRulesOf(rules.map(r => r.rule), ruleIds)
+  const estimate = kmRules.length && kmNum == null ? jobDoneKm({ id: job?.id, carId: car.id, date, km: null }, readings) : null
 
   function toggleRule(id: string, name: string, checked: boolean) {
     setRuleIds(ids => (checked ? [...ids, id] : ids.filter(x => x !== id)))
@@ -187,12 +209,14 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
-    const kmNum = parseNumberInput(km)
     const costNum = parseNumberInput(cost)
     if (!title.trim()) return setError('Poné qué se hizo.')
     if (costNum == null || costNum < 0) return setError('Ingresá cuánto salió (0 si fue gratis).')
     if (kmNum != null && (kmNum < 0 || !Number.isInteger(kmNum))) return setError('Los km no son válidos.')
     if (date > today) return setError('La fecha no puede ser futura.')
+    if (kmRules.length && kmNum == null && !estimate) {
+      return setError(`Para reiniciar ${quotedList(kmRules.map(r => r.name))} necesitamos los km de ese día.`)
+    }
     if (owner && comeBack && !comeBackIn) return setError('Elegí en cuánto tiempo tenés que volver al taller.')
 
     const followUp: FollowUp | null =
@@ -216,7 +240,11 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         { label: 'Qué se hizo', value: title.trim() },
         { label: 'Categoría', value: JOB_CATEGORY_LABELS[category] },
         { label: 'Fecha', value: formatDate(date) },
-        ...(kmNum != null ? [{ label: 'Km', value: formatKm(kmNum) }] : []),
+        ...(kmNum != null
+          ? [{ label: 'Km', value: formatKm(kmNum) }]
+          : estimate
+            ? [{ label: 'Km (estimado)', value: `≈ ${formatKm(estimate.km)}` }]
+            : []),
         { label: 'Costo', value: formatMoney(costNum) },
         ...(workshop.trim() ? [{ label: 'Taller', value: workshop.trim() }] : []),
         ...(reset.length ? [{ label: applies ? 'Reinicia' : 'Al aprobarlo reinicia', value: reset.join(', ') }] : []),
@@ -225,7 +253,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
           ? [{ label: 'Volver al taller', value: `El ${formatDate(addInterval(date, followUp.intervalTime))} (en ${formatInterval(followUp.intervalTime)})` }]
           : []),
       ],
-      warning: entryKmWarning({ date, km: kmNum, isNew: !job }, car),
+      warning: entryKmWarning({ date, km: kmNum, isNew: !job, readingId: job ? linkedReadingId('job', job.id) : null }, car, readings),
       confirmLabel: owner ? 'Sí, guardar' : 'Sí, mandar',
       icon: Wrench,
     })
@@ -314,8 +342,22 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         <Field label="Fecha">
           <Input type="date" value={date} max={today} onChange={e => setDate(e.target.value)} required />
         </Field>
-        <Field label="Km" hint="Opcional">
-          <Input value={km} onChange={e => setKm(e.target.value)} inputMode="numeric" />
+        <Field
+          label="Km"
+          hint={
+            estimate
+              ? '≈ estimado con tus registros; corregilo si lo sabés'
+              : kmRules.length && kmNum == null
+                ? `Hace falta para reiniciar ${quotedList(kmRules.map(r => r.name))}`
+                : 'Opcional'
+          }
+        >
+          <Input
+            value={km}
+            onChange={e => setKm(e.target.value)}
+            inputMode="numeric"
+            placeholder={estimate ? `≈ ${formatNumber(estimate.km)}` : undefined}
+          />
         </Field>
         <Field label="Costo ($)" className="col-span-2 sm:col-span-1">
           <Input value={cost} onChange={e => setCost(e.target.value)} inputMode="decimal" placeholder="148500" required />
@@ -346,7 +388,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
                 }
                 description={[
                   rule.lastDoneDate ? `${rule.repeat ? 'Última vez' : 'Desde'}: ${formatDate(rule.lastDoneDate)}` : null,
-                  rule.repeat && rule.lastDoneKm != null ? formatKm(rule.lastDoneKm) : null,
+                  rule.repeat ? formatLastDoneKm(rule) : null,
                 ]
                   .filter(Boolean)
                   .join(' · ')}

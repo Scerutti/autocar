@@ -13,7 +13,7 @@ import { toISODate } from '@/lib/dates'
 import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
-import { entryKmWarning } from '@/lib/odometer'
+import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
 import { canEditEntry } from '@/lib/sharing'
 import {
   FUEL_GRADE_LABELS,
@@ -72,7 +72,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, today, odometer } = useData()
-  const { fuel: carFuel } = useCar(car.id)
+  const { fuel: carFuel, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
   const types = load && !car.fuelTypes.includes(load.fuelType) ? [...car.fuelTypes, load.fuelType] : car.fuelTypes
@@ -153,7 +153,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
         ...(liquidSelected ? [{ label: 'Tanque lleno', value: fullTank ? 'Sí' : 'No' }] : []),
         ...(data.station ? [{ label: 'Estación', value: data.station }] : []),
       ],
-      warning: entryKmWarning({ date, km: kmNum, isNew: !load }, car),
+      warning: entryKmWarning({ date, km: kmNum, isNew: !load, readingId: load ? linkedReadingId('fuel', load.id) : null }, car, readings),
       confirmLabel: 'Sí, guardar',
       icon: Fuel,
     })

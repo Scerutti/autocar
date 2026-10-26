@@ -2,6 +2,28 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+Los mantenimientos se dan por hechos con el km real del trabajo. Antes de publicar hay que subir las reglas de Firestore (ver "Mantenimiento"). No hace falta migrar datos.
+
+### Arreglos
+
+- **Un trabajo sin km ya no usa el km de hoy**: si cargabas hoy un service de hace 8 meses sin km, el service quedaba hecho con los km de hoy y el próximo aviso llegaba tarde. Ahora toma el km de esa fecha según tus registros de km (entre el anterior y el posterior, o el último si es más nuevo), y en el mantenimiento se ve como "≈ 48.300 km (estimado)". Al aprobar el trabajo de otra persona pasa lo mismo: cuenta el km de la fecha del trabajo, no el del día en que lo aprobás.
+- **Formulario de trabajo**: el km arranca vacío. Si marcás un mantenimiento por km y no ponés el km, te mostramos el estimado ("≈ estimado con tus registros; corregilo si lo sabés"), y si la fecha es anterior a tu primer registro de km, el km es obligatorio. La confirmación dice "Km (estimado)".
+- **Falta el km de la última vez**: si un mantenimiento por km se queda sin ese dato, se calcula sólo por fecha y lo dice en su tarjeta y en su ficha, para que lo completes.
+- **"Volver al taller"** ya no guarda un km (no se cuenta por km).
+- **Km con fecha pasada**: al cargar km podés elegir la fecha (por defecto, hoy). Tienen que entrar entre los registros de antes y de después; si no, el error dice la fecha y los km del registro con el que no cierra. No bajan el km del auto.
+- **Aviso de km que no cierran**: una carga o un trabajo con más km que un registro posterior (o menos que uno anterior) muestra un aviso al confirmar, sin bloquear.
+- **Logros**: un km cargado hoy con fecha pasada cuenta para las rachas y el tiempo de seguimiento el día en que lo cargaste, no el de su fecha.
+
+### Mantenimiento
+
+- **Km a una fecha**: `kmAtDate` y `neighborsAt` en `lib/odometer.ts` (por día local; el mismo día manda el km más alto, entre dos lecturas se interpola, después de la última da la última; si la serie no cierra da la anterior, que es la cota baja). `validateKmReading(km, date, readings)` y `entryKmWarning(entry, car, readings)` cambian de firma; al editar, `entryKmWarning` no cuenta la lectura del propio registro (`entry.readingId`). `recordKm(actor, car, readings, km, date)` suma la fecha.
+- **Efectos de un trabajo**: la parte de mantenimientos de `addJobEffects` pasa a `jobRuleUpdates` (`lib/maintenance.ts`, con pruebas), con el km de `jobDoneKm` (el del trabajo o `kmAtDate` a su fecha, sin la lectura `job-{id}` del propio trabajo). Nunca usa `car.currentKm`.
+- **Campos nuevos**: `MaintenanceRule.lastDoneKmEstimated` (falta = `false`; `saveRule` lo reescribe y rule-form lo conserva mientras no cambies el km) y `OdometerReading.createdAt` (lo graban todas las lecturas nuevas: manuales, de alta y vinculadas; al pisar una vinculada se conserva el original; falta = `null`).
+- **Reglas de Firestore**: `validRule` acepta `lastDoneKmEstimated` (bool) y `validReading` acepta `createdAt` (timestamp). Siguen aceptando lo que escribe la 1.3.0, que no los manda.
+- **Paso manual**: publicar las reglas antes del deploy de la app. Con las reglas de la 1.3.0, la app nueva no podría guardar mantenimientos, autos nuevos, registros de km ni cargas o trabajos con km (todos escriben uno de los campos nuevos).
+
 ## 1.3.0
 
 Cada registro de km sabe de qué carga o trabajo salió. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").

@@ -81,6 +81,7 @@ const reading = (extra: Partial<OdometerReading> = {}): OdometerReading => ({
   sourceId: null,
   createdBy: OWNER,
   createdByName: 'Ana',
+  createdAt: null,
   ...extra,
 })
 
@@ -92,6 +93,7 @@ const rule = (extra: Partial<MaintenanceRule> = {}): MaintenanceRule => ({
   intervalTime: null,
   repeat: true,
   lastDoneKm: 10000,
+  lastDoneKmEstimated: false,
   lastDoneDate: '2026-09-01',
   warnKm: 500,
   warnDays: 30,
