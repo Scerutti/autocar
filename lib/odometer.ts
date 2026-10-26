@@ -47,6 +47,31 @@ export function carKmFrom(readings: { km: number; date: Date }[], now = new Date
   }
 }
 
+/**
+ * Qué escribir en el auto para que su km sea el de sus lecturas (las de ese auto): `carKmFrom(readings)` si el
+ * `currentKm` guardado no es el de la lectura más alta, sea mayor o menor. null si ya coincide o si no hay lecturas
+ * (sin lecturas no hay con qué corregir).
+ */
+export function kmCorrection(car: { currentKm: number }, readings: { km: number; date: Date }[], now = new Date()) {
+  const top = topReading(readings)
+  if (!top || top.km === car.currentKm) return null
+  return carKmFrom(readings, now)
+}
+
+/**
+ * El auto con el km que usan los avisos del cron: el de su lectura más alta (`top`, la primera de las lecturas
+ * ordenadas por km de mayor a menor), aunque el `currentKm` guardado sea mayor o menor; `kmUpdatedAt` pasa a ser la
+ * fecha de esa lectura. Sin lecturas, el auto tal cual. `avgKmPerDay` sigue saliendo del auto: es un estimado y no
+ * amerita leer toda la serie. Con un empate de km Firestore devuelve cualquiera de las lecturas: el km es el mismo y
+ * los avisos no miran la fecha.
+ */
+export function carKmForNotifications<C extends { currentKm: number; kmUpdatedAt: Date | null }>(
+  car: C,
+  top: { km: number; date: Date | null } | null,
+): C {
+  return top ? { ...car, currentKm: top.km, kmUpdatedAt: top.date } : car
+}
+
 /** Registros que dejan una lectura de km vinculada: una carga o un trabajo. */
 export type LinkedSource = Extract<OdometerSource, 'fuel' | 'job'>
 
