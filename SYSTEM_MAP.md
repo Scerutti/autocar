@@ -102,7 +102,7 @@ Auth:
 - Auth: `Authorization: Bearer $CRON_SECRET` (comparación en tiempo constante). Si no → 401.
 - Schedule: `0 12 * * *` UTC (`vercel.json`). `maxDuration = 60`, presupuesto 40 s, 5 usuarios en paralelo, orden aleatorio.
 - 200: `{ ok: true, users: number, skipped: number, report: { uid, messages, sent, error? }[] }`
-- Interno: por cada `users/{uid}` → `cars where ownerUid == uid` → `cars/{id}/rules` (tope 1000 docs) → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes) → `sendToUser()` → `bulkWriter` actualiza `rules.lastNotifiedAt/lastNotifiedStatus` sólo de lo entregado (`updatesToPersist`). **Sólo avisa al dueño**, no a los miembros.
+- Interno: por cada `users/{uid}` → `cars where ownerUid == uid` → `cars/{id}/rules` (tope 1000 docs) y, en paralelo, la lectura de más km de cada auto (`cars/{id}/odometer` `orderBy('km', 'desc').limit(1)`, índice simple automático; una por auto, dentro del tope) → el km de cada auto para los avisos es esa lectura (`carKmForNotifications`: `currentKm` y `kmUpdatedAt` de la lectura, o lo guardado si no tiene; `avgKmPerDay` del auto), no el `currentKm` guardado → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes) → `sendToUser()` → `bulkWriter` actualiza `rules.lastNotifiedAt/lastNotifiedStatus` sólo de lo entregado (`updatesToPersist`). **Sólo avisa al dueño**, no a los miembros.
 
 ### 2.2 Data layer (Firestore desde el cliente, `lib/db.ts`)
 
@@ -115,7 +115,7 @@ Leyenda Auth: **O** = dueño del auto (`car.ownerUid == uid`), **M** = miembro (
 | Función | Input | Output / efecto |
 |---|---|---|
 | `subscribeUserData(uid, email, onChange, onError)` | `email` en minúscula o null | Listeners: `users/{uid}`, `users/{uid}/achievements`, `cars where ownerUid==uid` ∪ `cars where members array-contains email`, y por auto `rules`, `jobs`, `fuel`, `odometer`. Emite `Partial<UserData>` por parte. Crea `users/{uid}` con `DEFAULT_SETTINGS` si no existe. Auto revocado (`permission-denied`) → se quita sin error. |
-| `useData()` | — | `UserData` + `{ uid, email, actor, loading, error, today, carById: Map, rulesByCar: Map<carId, RuleWithState[]> }`. Jobs/fuel ordenados por fecha desc. Corrige `car.currentKm` con la lectura más alta. |
+| `useData()` | — | `UserData` + `{ uid, email, actor, loading, error, today, carById: Map, rulesByCar: Map<carId, RuleWithState[]> }`. Jobs/fuel ordenados por fecha desc. `car.currentKm`/`kmUpdatedAt` = los de la lectura más alta (`topReading`) aunque el guardado sea mayor o menor; sin lecturas, lo guardado. |
 | `useCar(carId)` | — | `{ car: Car \| null, rules: RuleWithState[], jobs, fuel, readings }` |
 
 `UserData = { settings: UserSettings, cars: Car[], rules: MaintenanceRule[], jobs: Job[], fuel: FuelLoad[], odometer: OdometerReading[], achievements: AchievementRecord[] }`
@@ -144,7 +144,7 @@ Dos tipos de lectura:
 | `recordKm(actor, car, readings, km, date: ISODate)` | O, M | validar antes con `validateKmReading(km, date, lecturas del auto)` (`lib/odometer.ts`); `date` = hoy por defecto en `km-form`, nunca futura | lectura `source:'manual'`, `sourceId: null`, id al azar, `createdAt` (`addManualReading`); fecha = ahora si `date` es hoy, si no `readingDateOf(date)` + km del auto recalculado con `carKmFrom` (una lectura vieja con menos km no lo baja) |
 | `deleteReading(actor, car, readings, readingId)` | O; M sólo propias | sólo lecturas sin `sourceId` (con `sourceId` tira error) | Borra y recalcula km. Error si es la única lectura |
 | `restoreReading(actor, car, readings, reading)` | igual | `OdometerReading` sin `sourceId` | "Deshacer" |
-| `syncCarKm(actor, carId, readings)` | O, M | — | Sube `currentKm` del auto a la lectura más alta (lo hace `DataProvider` solo) |
+| `syncCarKm(actor, carId, readings)` | O, M | — | Escribe `currentKm`, `kmUpdatedAt`, `avgKmPerDay` con `carKmFrom` (sube o baja a la lectura más alta). Lo llama `DataProvider` solo cuando `kmCorrection(car, readings)` no es null, sólo con `cars` y `odometer` confirmados por el servidor (no caché), 2 s después del último cambio; una corrección que falló no se reintenta |
 
 #### Mantenimientos — `cars/{carId}/rules/{id}` (plan del dueño; M sólo lee)
 
@@ -208,7 +208,7 @@ Wrappers de cliente: `enablePush(uid)` / `disablePush(uid)` / `pushSupport()` en
 | `/trabajos` | Historial de trabajos (todos los autos) | — |
 | `/gastos` | Resumen de gastos por año/mes | `?auto=<carId>` |
 | `/logros` | Logros | — |
-| `/novedades` | Changelog para usuarios (`lib/novedades.ts`) | — |
+| `/novedades` | Changelog para usuarios (`lib/novedades.ts`). Entrar marca todo como visto. Fuera de esta pantalla, `NovedadesHost` anuncia con una ventana todas las versiones sin ver (después de los logros por festejar) | — |
 | `/ajustes` | Recordatorio semanal, zona horaria, push, versión | — |
 
 ### 2.4 Receta: pantalla nueva
@@ -276,7 +276,7 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | Módulo | Funciones clave |
 |---|---|
 | `maintenance.ts` | `getRuleState`, `rulesWithState`, `describeRemaining`, `defaultWarnings`, `jobRuleUpdates(rules, job, readings)` (qué hace un trabajo aprobado con cada mantenimiento: borrar o actualizar `lastDoneKm`/`lastDoneKmEstimated`/`lastDoneDate`), `jobDoneKm(job, readings)` (km del trabajo o estimado a su fecha, sin la lectura `job-{id}`), `kmRulesOf`, `formatLastDoneKm`, `missingLastKm` |
-| `odometer.ts` | `computeAvgKmPerDay`, `topReading`, `carKmFrom` (km del auto desde sus lecturas), `linkedReadingId`, `readingDateOf`, `withLinkedReading`, `readingOrigin` (texto y link de la pestaña Km), `kmAtDate(readings, date)` (km a una fecha: el del día, interpolado o el de la última; `estimated`), `neighborsAt(readings, date)` (lectura de más km de ese día o antes / de menos km después, por día local), `validateKmReading(km, date, readings)`, `entryKmWarning(entry, car, readings)` (salto, km del último registro en fecha anterior y coherencia con la serie, sin la lectura propia `entry.readingId`) |
+| `odometer.ts` | `computeAvgKmPerDay`, `topReading`, `carKmFrom` (km del auto desde sus lecturas), `kmCorrection(car, readings)` (`carKmFrom` si el `currentKm` guardado no es el de la lectura más alta, en los dos sentidos; null si coincide o no hay lecturas), `carKmForNotifications(car, top)` (el auto con `currentKm`/`kmUpdatedAt` de la lectura más alta, para el cron), `linkedReadingId`, `readingDateOf`, `withLinkedReading`, `readingOrigin` (texto y link de la pestaña Km), `kmAtDate(readings, date)` (km a una fecha: el del día, interpolado o el de la última; `estimated`), `neighborsAt(readings, date)` (lectura de más km de ese día o antes / de menos km después, por día local), `validateKmReading(km, date, readings)`, `entryKmWarning(entry, car, readings)` (salto, km del último registro en fecha anterior y coherencia con la serie, sin la lectura propia `entry.readingId`) |
 | `fuel.ts` | `resolveFuelAmounts`, `computeFuelStats`, `computeCostPerKm`, `lastPrices` |
 | `expenses.ts` | `summarizeExpenses(jobs, fuel, year, today)`, `expenseYears` |
 | `pending.ts` | `pendingItems()` → `PendingItem` (`km`\|`rule`\|`review`\|`rejected`\|`shared`), `urgentCount` |
