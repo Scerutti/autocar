@@ -65,8 +65,24 @@ export function carRecords(
     rules: data.rules.filter(r => r.carId === car.id),
     jobs: data.jobs.filter(j => j.carId === car.id && isValidJob(j, today)),
     fuel: data.fuel.filter(f => f.carId === car.id && isValidFuel(f, today)),
-    readings: data.odometer.filter(r => r.carId === car.id && isValidReading(r, today)),
+    readings: data.odometer
+      .filter(r => r.carId === car.id)
+      .map(r => loggedReading(r, data.fuel, data.jobs))
+      .filter(r => isValidReading(r, today)),
   }))
+}
+
+/**
+ * La lectura con la fecha en que se cargó en la app. La de una carga o un trabajo (`sourceId`) tiene la fecha del
+ * registro, que puede ser de hace años, y las rachas y el tiempo de seguimiento miden el uso de la app: para los
+ * logros cuenta el `createdAt` de ese registro. Si el registro no está o no tiene `createdAt`, queda la fecha de la
+ * lectura.
+ */
+function loggedReading(r: OdometerReading, fuel: FuelLoad[], jobs: Job[]): OdometerReading {
+  if (!r.sourceId) return r
+  const records: { id: string; createdAt: Date }[] = r.source === 'job' ? jobs : fuel
+  const createdAt = records.find(x => x.id === r.sourceId)?.createdAt
+  return createdAt && createdAt.getTime() > 0 ? { ...r, date: createdAt } : r
 }
 
 /** Lunes de la semana de una fecha. */

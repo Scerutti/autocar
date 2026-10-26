@@ -117,10 +117,36 @@ service cloud.firestore {
         && optBool(d, 'fullTank') && optText(d, 'station', 200) && optTime(d, 'createdAt');
     }
 
+    // sourceId es el id de la carga o del trabajo del que salió la lectura (lo valida linkedOk).
     function validReading(d) {
-      return d.keys().hasOnly(['carId', 'km', 'date', 'source', 'createdBy', 'createdByName'])
+      return d.keys().hasOnly(['carId', 'km', 'date', 'source', 'sourceId', 'createdBy', 'createdByName'])
         && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
-        && optText(d, 'carId', 100) && optNum(d, 'km') && optTime(d, 'date') && optText(d, 'source', 20);
+        && optText(d, 'carId', 100) && optNum(d, 'km') && optTime(d, 'date') && optText(d, 'source', 20)
+        && optText(d, 'sourceId', 100);
+    }
+
+    // Ruta del registro del que salió una lectura vinculada. source es 'fuel' o 'job', pero la colección de los
+    // trabajos es 'jobs'.
+    function linkedParent(carId, d) {
+      return /databases/$(database)/documents/cars/$(carId)/$(d.source == 'job' ? 'jobs' : 'fuel')/$(d.sourceId);
+    }
+
+    // Una lectura con sourceId sale de una carga o un trabajo: su id es el determinístico ({source}-{sourceId}) y el
+    // registro existe después del pedido (se escriben en el mismo batch). Sin sourceId es manual, de alta o vieja
+    // (la versión anterior de la PWA las escribe así), y se acepta como siempre.
+    function linkedOk(carId, readingId, d) {
+      return d.get('sourceId', null) == null
+        || (d.get('source', null) in ['fuel', 'job']
+          && readingId == d.source + '-' + d.sourceId
+          && existsAfter(linkedParent(carId, d)));
+    }
+
+    // Si un miembro puede borrar una lectura suya: sin sourceId, siempre; vinculada, sólo junto con su registro o
+    // cuando el registro se queda sin km. El || corta antes del getAfter si el registro ya no existe.
+    function linkedReleased(carId, d) {
+      return d.get('sourceId', null) == null
+        || !existsAfter(linkedParent(carId, d))
+        || getAfter(linkedParent(carId, d)).data.get('km', null) == null;
     }
 
     // Lo que devuelve PushSubscription.toJSON(): sin endpoint https y claves, el cron no puede enviar.
@@ -236,15 +262,24 @@ service cloud.firestore {
           && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid));
       }
 
-      // Los mismos permisos que las cargas.
+      // Los mismos permisos que las cargas, más el vínculo con la carga o el trabajo (linkedOk), que no cambia al
+      // editar. Una lectura vinculada va a nombre de quien cargó el registro, así que el dueño puede escribir la de
+      // la carga de un miembro sin cambiar createdBy. El dueño borra cualquier lectura sin consultar el registro
+      // (deleteCar borra de a 450 y pasaría el tope de llamadas por pedido); el miembro, sólo las suyas y, si son
+      // vinculadas, cuando el registro ya no existe o no tiene km (linkedReleased). Borrar una lectura que no existe
+      // no tiene efecto y se acepta, para no tirar abajo el batch de la carga o el trabajo.
       match /odometer/{readingId} {
         allow read: if ownsCar(carId) || memberOfCar(carId);
         allow delete: if ownsCar(carId)
-          || (memberOfCar(carId) && resource.data.get('createdBy', null) == request.auth.uid);
+          || (memberOfCar(carId) && (resource == null
+            || (resource.data.get('createdBy', null) == request.auth.uid && linkedReleased(carId, resource.data))));
         allow create: if validReading(request.resource.data) && request.resource.data.carId == carId
+          && linkedOk(carId, readingId, request.resource.data)
           && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && request.resource.data.createdBy == request.auth.uid));
         allow update: if validReading(request.resource.data) && request.resource.data.carId == carId
           && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
+          && request.resource.data.get('sourceId', null) == resource.data.get('sourceId', null)
+          && linkedOk(carId, readingId, request.resource.data)
           && (ownsCarAfter(carId) || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid));
       }
     }

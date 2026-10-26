@@ -161,7 +161,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveFuel(actor, { car, readings: odometer }, data, load?.id))
+      status = await settle(saveFuel(actor, { car, readings: odometer }, data, load))
     })
     if (!ok) return
     toastSaved(
@@ -184,8 +184,8 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
     router.replace(`/autos/${car.id}?tab=combustible`)
     removeWithUndo({
       message: 'Carga borrada',
-      remove: () => deleteFuel(actor, load.carId, load.id),
-      restore: () => restoreFuel(actor, load),
+      remove: () => deleteFuel(actor, { car, readings: odometer }, load),
+      restore: () => restoreFuel(actor, { car, readings: odometer }, load),
     })
   }
 

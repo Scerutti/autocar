@@ -2,6 +2,25 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+Borrador. Cada registro de km sabe de qué carga o trabajo salió. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
+
+### Arreglos
+
+- **Corregir el km de una carga o un trabajo corrige el km del auto**: si cargabas 150.000 en vez de 15.000 y después lo corregías, el auto seguía en 150.000, y los mantenimientos por km aparecían vencidos. Ahora cada carga y cada trabajo aprobado tiene un solo registro de km: al corregirlo se corrige, al sacarle el km o borrarlo se borra, y el km del auto se vuelve a calcular (puede bajar). "Deshacer" lo devuelve.
+- **Las cargas y los trabajos con menos km que el actual** (por ejemplo, una carga vieja que cargás tarde) también quedan en el gráfico de km, sin bajar el km del auto.
+- **Pestaña Km**: el registro de una carga dice "Carga del 12/03" y el de un trabajo "Trabajo: <título>", y tocarlo abre ese registro. Ya no se puede borrar desde ahí: se corrige editando o borrando la carga o el trabajo.
+- **Trabajos**: el registro de km aparece cuando el trabajo queda aprobado. Uno pendiente o rechazado no deja registro, y borrar uno aprobado borra también el suyo.
+
+### Mantenimiento
+
+- **Lecturas vinculadas**: `OdometerReading.sourceId` guarda el id de la carga o del trabajo, y el id de la lectura es `fuel-{id}` o `job-{id}` (`linkedReadingId`), así reintentar o editar la pisa en vez de duplicarla. La fecha es la del registro al mediodía (`readingDateOf`) y el autor es el del registro, aunque edite el dueño. `saveFuel`, `deleteFuel`, `restoreFuel`, `rejectJob`, `deleteJob` y `restoreJob` cambian de firma: reciben `{ car, readings }` y el registro. Los km manuales y de alta siguen con id al azar y sin `sourceId`.
+- **Logros**: las rachas y el tiempo de seguimiento cuentan la lectura de una carga o un trabajo con la fecha en que se cargó en la app (`createdAt` del registro), no con la del registro. Así cargar historia vieja (o la migración) no desbloquea logros de golpe.
+- **Reglas de Firestore** (`cars/{carId}/odometer`): aceptan `sourceId`; si viene, el id tiene que ser el determinístico, `source` tiene que ser `fuel` o `job`, y la carga o el trabajo tiene que existir después del batch. El miembro borra una lectura suya vinculada sólo junto con su registro o si el registro se quedó sin km; el dueño borra cualquiera (así `deleteCar` no pasa el tope de llamadas por pedido). Borrar una lectura que no existe ya no tira abajo el batch. Las lecturas sin `sourceId` que sigue escribiendo la versión anterior de la PWA se aceptan como siempre.
+- **Migración** `scripts/link-readings.mjs` (lógica en `scripts/link-readings-plan.mjs`, con pruebas): crea la lectura `baseline-{carId}` en los autos con más km que sus lecturas, vincula las lecturas viejas de cargas y trabajos (si hay un solo registro con ese km), completa las que faltan e informa las ambiguas y las sin candidato. Simulacro por defecto, `--apply` para escribir; se puede volver a correr.
+- **Pasos manuales, en este orden**: 1) publicar las reglas; 2) simulacro: `node --env-file=.env.local scripts/link-readings.mjs`; 3) `node --env-file=.env.local scripts/link-readings.mjs --apply`; 4) deploy de la app; 5) `--apply` otra vez, para vincular lo que haya escrito la PWA vieja (una tercera corrida tiene que dar 0 cambios). La migración va antes del deploy porque la app nueva recalcula el km del auto desde sus lecturas: sin la lectura baseline, un auto viejo con más km que sus lecturas bajaría.
+
 ## 1.2.2
 
 Para el usuario la app funciona igual.

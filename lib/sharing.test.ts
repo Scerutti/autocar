@@ -78,6 +78,7 @@ const reading = (extra: Partial<OdometerReading> = {}): OdometerReading => ({
   km: 10000,
   date: new Date('2026-09-01T12:00:00'),
   source: 'manual',
+  sourceId: null,
   createdBy: OWNER,
   createdByName: 'Ana',
   ...extra,

@@ -54,6 +54,11 @@ export function formatDate(date: ISODate) {
   return dateFmt.format(parseISODate(date)).replace('.', '')
 }
 
+/** Día y mes de una fecha como 'dd/mm' (12/03). */
+export function formatDayMonth(date: ISODate) {
+  return `${date.slice(8, 10)}/${date.slice(5, 7)}`
+}
+
 export function formatShortDate(date: ISODate) {
   return shortDateFmt.format(parseISODate(date)).replace('.', '').toUpperCase()
 }
