@@ -80,7 +80,7 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(rejectJob(actor, car.id, job.id))
+      const status = await settle(rejectJob(actor, { car, readings: odometer }, job))
       toastSaved('Trabajo rechazado', status, job.title)
       return true
     } catch (e) {
@@ -282,8 +282,8 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     router.replace(`/autos/${car.id}?tab=trabajos`)
     removeWithUndo({
       message: 'Trabajo borrado',
-      remove: () => deleteJob(actor, job.carId, job.id),
-      restore: () => restoreJob(actor, job),
+      remove: () => deleteJob(actor, { car, readings: odometer }, job),
+      restore: () => restoreJob(actor, { car, readings: odometer }, job),
     })
   }
 

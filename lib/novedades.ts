@@ -15,6 +15,20 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.3.0',
+    date: '2026-10-26',
+    items: [
+      {
+        title: 'Corregir una carga corrige los km',
+        text: 'Si te equivocás en los km de una carga o un trabajo y después los corregís, el auto vuelve a los km reales. Lo mismo si le sacás los km o lo borrás.',
+      },
+      {
+        title: 'De dónde sale cada registro de km',
+        text: 'En la pestaña Km, el registro de una carga dice "Carga del 12/03" y el de un trabajo dice su nombre. Tocalo para abrirlo y corregirlo desde ahí.',
+      },
+    ],
+  },
+  {
     version: '1.2.0',
     date: '2026-10-24',
     destacado: true,

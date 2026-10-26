@@ -145,6 +145,11 @@ export interface OdometerReading extends Authorship {
   km: number
   date: Date
   source: OdometerSource
+  /**
+   * Id de la carga o del trabajo del que salió la lectura (`source` 'fuel' o 'job'); el id de la lectura es
+   * `{source}-{sourceId}`. null en las de alta, las manuales y las viejas sin vincular.
+   */
+  sourceId: string | null
 }
 
 /**

@@ -21,8 +21,9 @@ import {
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
 import { defaultWarnings } from './maintenance'
-import { computeAvgKmPerDay, topReading } from './odometer'
+import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
+import { isApproved } from './sharing'
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
@@ -30,11 +31,11 @@ import {
   type AchievementRecord,
   type Car,
   type FuelLoad,
+  type ISODate,
   type Job,
   type JobStatus,
   type MaintenanceRule,
   type OdometerReading,
-  type OdometerSource,
   type TimeInterval,
   type UserSettings,
 } from './types'
@@ -60,8 +61,14 @@ export const newCarId = () => doc(carsCol()).id
 
 const newChildId = (carId: string, name: RelatedName) => doc(carCol(carId, name)).id
 
-/** Autoría de un registro que se vuelve a crear ("Deshacer"): conserva la original y, si falta, usa la de quien lo restaura. */
-function authorOf(item: { createdBy?: string | null; createdByName?: string | null }, actor: Actor) {
+/** Quién figura como autor de un registro: `createdBy` y `createdByName` tal como se guardan. */
+type Author = { createdBy: string; createdByName: string | null }
+
+/**
+ * Autoría de un registro que se vuelve a escribir ("Deshacer", o la lectura de km de una carga o un trabajo):
+ * conserva la original y, si falta (un registro nuevo o uno viejo sin autoría), usa la de `actor`.
+ */
+function authorOf(item: { createdBy?: string | null; createdByName?: string | null }, actor: Actor): Author {
   return item.createdBy
     ? { createdBy: item.createdBy, createdByName: item.createdByName ?? null }
     : { createdBy: actor.uid, createdByName: actor.name }
@@ -169,6 +176,7 @@ function readingFrom(d: QueryDocumentSnapshot<DocumentData>): OdometerReading {
     km: num(x.km) ?? 0,
     date: toDate(x.date) ?? new Date(0),
     source: x.source ?? 'manual',
+    sourceId: str(x.sourceId),
     createdBy: str(x.createdBy),
     createdByName: str(x.createdByName),
   }
@@ -380,52 +388,100 @@ export function subscribeUserData(
   }
 }
 
+/** Los campos de una lectura como se guardan en Firestore (el id es el del documento). */
+function readingData(r: Omit<OdometerReading, 'id'>) {
+  return {
+    carId: r.carId,
+    km: r.km,
+    date: Timestamp.fromDate(r.date),
+    source: r.source,
+    sourceId: r.sourceId,
+    createdBy: r.createdBy ?? null,
+    createdByName: r.createdByName ?? null,
+  }
+}
+
+/** Km del auto como se guarda en su documento (`kmUpdatedAt` como Timestamp), a partir de las lecturas de ese auto. */
+function carKmUpdate(readings: OdometerReading[]) {
+  const km = carKmFrom(readings)
+  return { ...km, kmUpdatedAt: km.kmUpdatedAt ? Timestamp.fromDate(km.kmUpdatedAt) : null }
+}
+
 /**
- * Registra una lectura del odómetro y, si es la más alta, actualiza el km actual del auto
- * y recalcula el promedio diario.
+ * Registra una lectura manual del odómetro (id al azar, sin `sourceId`) y recalcula el km actual del auto y el
+ * promedio diario con las lecturas del auto más la nueva.
  */
-function addReadingToBatch(
+function addManualReading(
   batch: WriteBatch,
   actor: Actor,
   car: Car,
   readings: OdometerReading[],
   km: number,
-  source: OdometerSource,
   date = new Date(),
 ) {
   const id = newChildId(car.id, 'odometer')
-  batch.set(doc(carCol(car.id, 'odometer'), id), {
+  const reading: OdometerReading = {
+    id,
     carId: car.id,
     km,
-    date: Timestamp.fromDate(date),
-    source,
+    date,
+    source: 'manual',
+    sourceId: null,
     createdBy: actor.uid,
     createdByName: actor.name,
-  })
-  if (km >= car.currentKm) {
-    const carReadings = readings.filter(r => r.carId === car.id).concat({ id, carId: car.id, km, date, source })
-    batch.update(carDoc(car.id), {
-      currentKm: km,
-      kmUpdatedAt: Timestamp.fromDate(date),
-      avgKmPerDay: computeAvgKmPerDay(carReadings),
-    })
   }
+  batch.set(doc(carCol(car.id, 'odometer'), id), readingData(reading))
+  batch.update(carDoc(car.id), carKmUpdate(readings.filter(r => r.carId === car.id).concat(reading)))
 }
 
 export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number) {
   const batch = writeBatch(firestore())
-  addReadingToBatch(batch, actor, car, readings, km, 'manual')
+  addManualReading(batch, actor, car, readings, km)
   await batch.commit()
 }
 
-/** Km actual del auto a partir de sus lecturas (de un solo auto): la más alta manda. */
-export function carKmFrom(readings: OdometerReading[]) {
-  const top = topReading(readings)
-  return {
-    currentKm: top?.km ?? 0,
-    kmUpdatedAt: top ? Timestamp.fromDate(top.date) : null,
-    avgKmPerDay: computeAvgKmPerDay(readings),
-  }
+/** El auto y las lecturas que tiene la app (de todos los autos o sólo de ése): lo que hace falta para recalcular su km. */
+type KmContext = { car: Car; readings: OdometerReading[] }
+
+/** La carga o el trabajo del que sale una lectura vinculada. */
+type ReadingLink = { source: LinkedSource; sourceId: string }
+
+/** Lo que la lectura vinculada toma de su registro: la fecha, el km (null = sin lectura) y el autor del registro. */
+type LinkedEntry = { date: ISODate; km: number | null; author: Author }
+
+/**
+ * Pone, cambia o saca la lectura de km de una carga o un trabajo (id `fuel-{id}` o `job-{id}`, `linkedReadingId`)
+ * y recalcula el km del auto en el mismo batch.
+ * - Con km: la escribe siempre, aunque sea menor al km actual (es un punto real de la serie y el km del auto lo
+ *   define la lectura más alta), con la fecha del registro al mediodía y a nombre del autor del registro: así, si
+ *   el dueño edita la carga de un miembro, `createdBy` no cambia y la regla de `update` lo acepta.
+ * - Sin km, o con `entry` null (se borra el registro): borra la lectura. Si no existía, el borrado no tiene efecto
+ *   y las reglas lo aceptan.
+ * El km del auto sale de las lecturas que quedan, así que puede bajar (corregir un error de tipeo). Si la lista no
+ * cambia (no había lectura y no se escribe una) o queda vacía, no toca el auto.
+ */
+function writeLinkedReading(batch: WriteBatch, ctx: KmContext, link: ReadingLink, entry: LinkedEntry | null) {
+  const carId = ctx.car.id
+  const id = linkedReadingId(link.source, link.sourceId)
+  const ref = doc(carCol(carId, 'odometer'), id)
+  const carReadings = ctx.readings.filter(r => r.carId === carId)
+  const next: OdometerReading | null =
+    entry && entry.km != null
+      ? {
+          id,
+          carId,
+          km: entry.km,
+          date: readingDateOf(entry.date),
+          source: link.source,
+          sourceId: link.sourceId,
+          ...entry.author,
+        }
+      : null
+  if (next) batch.set(ref, readingData(next))
+  else batch.delete(ref)
+  if (!next && !carReadings.some(r => r.id === id)) return
+  const after = withLinkedReading(carReadings, id, next)
+  if (after.length) batch.update(carDoc(carId), carKmUpdate(after))
 }
 
 /**
@@ -437,32 +493,33 @@ export async function syncCarKm(actor: Actor, carId: string, readings: OdometerR
   const carReadings = readings.filter(r => r.carId === carId)
   if (!carReadings.length) return
   const batch = writeBatch(firestore())
-  batch.update(carDoc(carId), carKmFrom(carReadings))
+  batch.update(carDoc(carId), carKmUpdate(carReadings))
   await batch.commit()
 }
 
-/** Borra una lectura (para corregir un error de tipeo) y recalcula el km actual con las que quedan. */
+/**
+ * Borra una lectura sin `sourceId` (para corregir un error de tipeo) y recalcula el km actual con las que quedan.
+ * La de una carga o un trabajo no se borra acá: se corrige editando o borrando ese registro.
+ */
 export async function deleteReading(actor: Actor, car: Car, readings: OdometerReading[], readingId: string) {
-  const remaining = readings.filter(r => r.carId === car.id && r.id !== readingId)
+  const carReadings = readings.filter(r => r.carId === car.id)
+  if (carReadings.find(r => r.id === readingId)?.sourceId) {
+    throw new Error('Este registro sale de una carga o un trabajo: corregilo desde ahí.')
+  }
+  const remaining = carReadings.filter(r => r.id !== readingId)
   if (!remaining.length) throw new Error('No podés borrar el único registro de km del auto.')
   const batch = writeBatch(firestore())
   batch.delete(doc(carCol(car.id, 'odometer'), readingId))
-  batch.update(carDoc(car.id), carKmFrom(remaining))
+  batch.update(carDoc(car.id), carKmUpdate(remaining))
   await batch.commit()
 }
 
-/** Vuelve a poner una lectura borrada ("Deshacer") con su autoría original y recalcula el km actual. */
+/** Vuelve a poner una lectura sin `sourceId` borrada ("Deshacer") con su autoría original y recalcula el km actual. */
 export async function restoreReading(actor: Actor, car: Car, readings: OdometerReading[], reading: OdometerReading) {
-  const all = readings.filter(r => r.carId === car.id && r.id !== reading.id).concat(reading)
+  const all = withLinkedReading(readings.filter(r => r.carId === car.id), reading.id, reading)
   const batch = writeBatch(firestore())
-  batch.set(doc(carCol(car.id, 'odometer'), reading.id), {
-    carId: reading.carId,
-    km: reading.km,
-    date: Timestamp.fromDate(reading.date),
-    source: reading.source,
-    ...authorOf(reading, actor),
-  })
-  batch.update(carDoc(car.id), carKmFrom(all))
+  batch.set(doc(carCol(car.id, 'odometer'), reading.id), readingData({ ...reading, ...authorOf(reading, actor) }))
+  batch.update(carDoc(car.id), carKmUpdate(all))
   await batch.commit()
 }
 
@@ -485,14 +542,18 @@ export async function createCar(actor: Actor, data: CarInput, initialKm: number,
     avgKmPerDay: null,
     createdAt: Timestamp.fromDate(now),
   })
-  batch.set(doc(carCol(carId, 'odometer')), {
-    carId,
-    km: initialKm,
-    date: Timestamp.fromDate(now),
-    source: 'initial',
-    createdBy: actor.uid,
-    createdByName: actor.name,
-  })
+  batch.set(
+    doc(carCol(carId, 'odometer')),
+    readingData({
+      carId,
+      km: initialKm,
+      date: now,
+      source: 'initial',
+      sourceId: null,
+      createdBy: actor.uid,
+      createdByName: actor.name,
+    }),
+  )
   await batch.commit()
   return carId
 }
@@ -585,21 +646,22 @@ export interface FollowUp {
   intervalTime: TimeInterval
 }
 
-type JobContext = { car: Car; rules: MaintenanceRule[]; readings: OdometerReading[] }
+type JobContext = KmContext & { rules: MaintenanceRule[] }
 
 /**
  * Los efectos de un trabajo aprobado: los mantenimientos marcados se dan por hechos en la fecha/km del trabajo
  * (sólo si es más reciente que la última vez registrada): los periódicos se reinician y los de una sola vez se
- * borran. Si el km es mayor al actual, la lectura va en `jobBatch` a nombre de `author`.
+ * borran. La lectura de km del trabajo (`job-{id}`) va en `jobBatch` a nombre de `author`, el autor del trabajo:
+ * se escribe si tiene km y se borra si no (`writeLinkedReading`).
  * Cada mantenimiento marcado va en un batch aparte del trabajo y de los demás: si alguno ya no existe (borrado
  * en otro dispositivo) su update falla, y en un solo batch eso tiraba abajo también el trabajo. Devuelve esos
  * batches para commitearlos después del trabajo.
  */
 function addJobEffects(
   jobBatch: WriteBatch,
-  author: Actor,
+  author: Author,
   ctx: JobContext,
-  job: Pick<Job, 'date' | 'km' | 'ruleIds'>,
+  job: Pick<Job, 'id' | 'date' | 'km' | 'ruleIds'>,
 ) {
   const carId = ctx.car.id
   const doneKm = job.km ?? ctx.car.currentKm
@@ -620,9 +682,7 @@ function addJobEffects(
       lastNotifiedStatus: null,
     })
   }
-  if (job.km != null && job.km > ctx.car.currentKm) {
-    addReadingToBatch(jobBatch, author, ctx.car, ctx.readings, job.km, 'job')
-  }
+  writeLinkedReading(jobBatch, ctx, { source: 'job', sourceId: job.id }, { date: job.date, km: job.km, author })
   return ruleBatches
 }
 
@@ -639,8 +699,8 @@ async function commitJob(jobId: string, jobBatch: WriteBatch, ruleBatches: { rul
 }
 
 /**
- * Guarda un trabajo. Si lo guarda el dueño y queda aprobado, aplica sus efectos (`addJobEffects`) y,
- * opcionalmente, agenda la vuelta al taller.
+ * Guarda un trabajo. Si lo guarda el dueño y queda aprobado, aplica sus efectos (`addJobEffects`, con la lectura
+ * de km a nombre de quien cargó el trabajo) y, opcionalmente, agenda la vuelta al taller.
  * Si lo guarda un miembro, queda `pending` sin efectos, aunque el km sea mayor al actual: los mantenimientos y
  * el km quedan guardados en el trabajo y se aplican al aprobarlo (`approveJob`), así un trabajo rechazado no
  * deja nada mal cargado. Un miembro que edita su trabajo (pendiente o rechazado) lo vuelve a `pending`.
@@ -651,7 +711,7 @@ export async function saveJob(
   actor: Actor,
   ctx: JobContext,
   data: JobInput,
-  existing?: Pick<Job, 'id' | 'status'>,
+  existing?: Pick<Job, 'id' | 'status' | 'createdBy' | 'createdByName'>,
   followUp?: FollowUp | null,
 ) {
   const carId = ctx.car.id
@@ -667,7 +727,7 @@ export async function saveJob(
     await jobBatch.commit()
     return id
   }
-  const ruleBatches = addJobEffects(jobBatch, actor, ctx, data)
+  const ruleBatches = addJobEffects(jobBatch, authorOf(existing ?? {}, actor), ctx, { ...data, id })
   if (followUp) {
     jobBatch.set(doc(carCol(carId, 'rules')), {
       carId,
@@ -694,72 +754,95 @@ export async function saveJob(
 export async function approveJob(actor: Actor, ctx: JobContext, job: Job) {
   const jobBatch = writeBatch(firestore())
   jobBatch.update(doc(carCol(ctx.car.id, 'jobs'), job.id), { status: 'approved' satisfies JobStatus, reviewedAt: Timestamp.now() })
-  const author: Actor = { uid: job.createdBy ?? actor.uid, name: job.createdBy ? (job.createdByName ?? null) : actor.name }
-  await commitJob(job.id, jobBatch, addJobEffects(jobBatch, author, ctx, job))
+  await commitJob(job.id, jobBatch, addJobEffects(jobBatch, authorOf(job, actor), ctx, job))
 }
 
-/** El dueño rechaza el trabajo de un miembro: queda `rejected` sin efectos, y el miembro lo puede corregir o borrar. */
-export async function rejectJob(actor: Actor, carId: string, jobId: string) {
+/**
+ * El dueño rechaza el trabajo de un miembro: queda `rejected` sin efectos, y el miembro lo puede corregir o borrar.
+ * Si el trabajo estaba aprobado, se borra también su lectura de km y se recalcula el km del auto.
+ */
+export async function rejectJob(actor: Actor, ctx: KmContext, job: Job) {
   const batch = writeBatch(firestore())
-  batch.update(doc(carCol(carId, 'jobs'), jobId), { status: 'rejected' satisfies JobStatus, reviewedAt: Timestamp.now() })
-  await batch.commit()
-}
-
-export async function deleteJob(actor: Actor, carId: string, jobId: string) {
-  const batch = writeBatch(firestore())
-  batch.delete(doc(carCol(carId, 'jobs'), jobId))
+  batch.update(doc(carCol(job.carId, 'jobs'), job.id), { status: 'rejected' satisfies JobStatus, reviewedAt: Timestamp.now() })
+  if (isApproved(job)) writeLinkedReading(batch, ctx, { source: 'job', sourceId: job.id }, null)
   await batch.commit()
 }
 
 /**
- * Vuelve a crear un trabajo borrado ("Deshacer") con su autoría y estado originales. Borrarlo no había
- * tocado mantenimientos ni km.
+ * Borra un trabajo. Si estaba aprobado, se lleva su lectura de km y se recalcula el km del auto. Los mantenimientos
+ * que reinició quedan como están.
  */
-export async function restoreJob(actor: Actor, job: Job) {
+export async function deleteJob(actor: Actor, ctx: KmContext, job: Job) {
+  const batch = writeBatch(firestore())
+  batch.delete(doc(carCol(job.carId, 'jobs'), job.id))
+  if (isApproved(job)) writeLinkedReading(batch, ctx, { source: 'job', sourceId: job.id }, null)
+  await batch.commit()
+}
+
+/**
+ * Vuelve a crear un trabajo borrado ("Deshacer") con su autoría y estado originales y, si estaba aprobado, su
+ * lectura de km. Borrarlo no había tocado los mantenimientos.
+ */
+export async function restoreJob(actor: Actor, ctx: KmContext, job: Job) {
   const { id, createdAt, createdBy, createdByName, status, reviewedAt, ...data } = job
-  await setDoc(doc(carCol(job.carId, 'jobs'), id), {
+  const author = authorOf(job, actor)
+  const batch = writeBatch(firestore())
+  batch.set(doc(carCol(job.carId, 'jobs'), id), {
     ...data,
-    ...authorOf(job, actor),
+    ...author,
     status: status ?? 'approved',
     ...(reviewedAt ? { reviewedAt: Timestamp.fromDate(reviewedAt) } : {}),
     createdAt: Timestamp.fromDate(createdAt),
   })
+  if (isApproved(job)) {
+    writeLinkedReading(batch, ctx, { source: 'job', sourceId: id }, { date: job.date, km: job.km, author })
+  }
+  await batch.commit()
 }
 
 export type FuelInput = Omit<FuelLoad, 'id' | 'createdAt' | 'createdBy' | 'createdByName'>
 
+/**
+ * Guarda una carga y, en el mismo batch, su lectura de km (`fuel-{id}`, `writeLinkedReading`): si tiene km la pone
+ * o la corrige, y si se le sacó el km la borra. Al crearla se graba quién la cargó; al editarla (`existing`) no se
+ * toca, y la lectura sigue a nombre de quien cargó la carga.
+ */
 export async function saveFuel(
   actor: Actor,
-  ctx: { car: Car; readings: OdometerReading[] },
+  ctx: KmContext,
   data: FuelInput,
-  fuelId?: string,
+  existing?: Pick<FuelLoad, 'id' | 'createdBy' | 'createdByName'>,
 ) {
   const carId = ctx.car.id
   const batch = writeBatch(firestore())
-  const id = fuelId ?? newChildId(carId, 'fuel')
-  const existing = fuelId ? {} : { createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name }
-  batch.set(doc(carCol(carId, 'fuel'), id), { ...data, ...existing }, { merge: true })
-  if (data.km != null && data.km > ctx.car.currentKm) {
-    addReadingToBatch(batch, actor, ctx.car, ctx.readings, data.km, 'fuel')
-  }
+  const id = existing?.id ?? newChildId(carId, 'fuel')
+  const created = existing ? {} : { createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name }
+  batch.set(doc(carCol(carId, 'fuel'), id), { ...data, ...created }, { merge: true })
+  writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, { date: data.date, km: data.km, author: authorOf(existing ?? {}, actor) })
   await batch.commit()
   return id
 }
 
-export async function deleteFuel(actor: Actor, carId: string, fuelId: string) {
+/** Borra una carga con su lectura de km y recalcula el km del auto. */
+export async function deleteFuel(actor: Actor, ctx: KmContext, load: FuelLoad) {
   const batch = writeBatch(firestore())
-  batch.delete(doc(carCol(carId, 'fuel'), fuelId))
+  batch.delete(doc(carCol(load.carId, 'fuel'), load.id))
+  writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: load.id }, null)
   await batch.commit()
 }
 
-/** Vuelve a crear una carga borrada ("Deshacer") con su autoría original. */
-export async function restoreFuel(actor: Actor, load: FuelLoad) {
+/** Vuelve a crear una carga borrada ("Deshacer") con su autoría original y su lectura de km. */
+export async function restoreFuel(actor: Actor, ctx: KmContext, load: FuelLoad) {
   const { id, createdAt, createdBy, createdByName, ...data } = load
-  await setDoc(doc(carCol(load.carId, 'fuel'), id), {
+  const author = authorOf(load, actor)
+  const batch = writeBatch(firestore())
+  batch.set(doc(carCol(load.carId, 'fuel'), id), {
     ...data,
-    ...authorOf(load, actor),
+    ...author,
     createdAt: Timestamp.fromDate(createdAt),
   })
+  writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, { date: load.date, km: load.km, author })
+  await batch.commit()
 }
 
 export async function saveSettings(uid: string, settings: Partial<UserSettings>) {
