@@ -61,10 +61,11 @@ export const toast = {
   dismiss: (id?: string) => toastManager.close(id),
 }
 
-/** Mensaje legible de un error desconocido. */
+/** Mensaje legible de un error desconocido. `not-found` es el `update` de un registro que otro dispositivo borró. */
 export function errorMessage(e: unknown) {
   const code = (e as { code?: string })?.code
   if (code === 'permission-denied') return 'No tenés permiso para hacer esto. Probá cerrar sesión y volver a entrar.'
   if (code === 'unavailable') return 'No hay conexión con el servidor.'
+  if (code === 'not-found') return 'Ese registro se borró en otro dispositivo.'
   return (e as Error)?.message || 'Ocurrió un error inesperado.'
 }

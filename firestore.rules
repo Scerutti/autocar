@@ -82,26 +82,33 @@ service cloud.firestore {
     // El nombre y el título de un trabajo van y vienen (job-form precarga el título con el nombre, y
     // "Volver al taller: <título>" arma un nombre), así que tienen el mismo tope, holgado.
     // lastDoneKmEstimated dice que lastDoneKm se estimó con las lecturas (un trabajo sin km); falta en los viejos.
+    // baseKm y baseDate son la "última vez" que carga el dueño; lastDone*, lastDoneJobId y completedByJobId son la
+    // proyección que sale de los trabajos aprobados (lastDoneJobId: el trabajo que manda; completedByJobId: el que
+    // cumplió un recordatorio de una vez). Todos faltan en lo que escribe la versión anterior de la PWA.
     function validRule(d) {
       return d.keys().hasOnly([
-          'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'lastDoneKm',
-          'lastDoneKmEstimated', 'lastDoneDate', 'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
+          'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'baseKm', 'baseDate',
+          'lastDoneKm', 'lastDoneKmEstimated', 'lastDoneDate', 'lastDoneJobId', 'completedByJobId',
+          'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
         && optText(d, 'carId', 100) && optText(d, 'name', 500)
         && optNum(d, 'intervalKm') && optInterval(d, 'intervalTime') && optNum(d, 'intervalMonths')
-        && optBool(d, 'repeat') && optNum(d, 'lastDoneKm') && optBool(d, 'lastDoneKmEstimated')
-        && optText(d, 'lastDoneDate', 30)
+        && optBool(d, 'repeat') && optNum(d, 'baseKm') && optText(d, 'baseDate', 30)
+        && optNum(d, 'lastDoneKm') && optBool(d, 'lastDoneKmEstimated') && optText(d, 'lastDoneDate', 30)
+        && optText(d, 'lastDoneJobId', 100) && optText(d, 'completedByJobId', 100)
         && optNum(d, 'warnKm') && optNum(d, 'warnDays')
         && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
     }
 
-    // createdBy, createdByName, status y reviewedAt los guarda cars/{carId}/jobs; quién puede cambiarlos lo decide
-    // ese match. reviewedAt es cuándo el dueño aprobó o rechazó el trabajo de un miembro.
+    // createdBy, createdByName, status, reviewedAt y revision los guarda cars/{carId}/jobs; quién puede cambiarlos lo
+    // decide ese match. reviewedAt es cuándo el dueño aprobó o rechazó el trabajo de un miembro; revision, la versión
+    // del trabajo (falta en lo que escribe la versión 1.4.1 de la PWA, y se lee como 0).
     function validJob(d) {
       return d.keys().hasOnly([
           'carId', 'date', 'km', 'title', 'category', 'cost', 'workshop', 'notes', 'ruleIds', 'createdAt',
-          'createdBy', 'createdByName', 'status', 'reviewedAt'])
+          'createdBy', 'createdByName', 'status', 'reviewedAt', 'revision'])
         && optText(d, 'createdBy', 128) && optText(d, 'createdByName', 200)
         && d.get('status', 'approved') in ['approved', 'pending', 'rejected'] && optTime(d, 'reviewedAt')
+        && optNum(d, 'revision')
         && optText(d, 'carId', 100) && optText(d, 'date', 30) && optNum(d, 'km')
         && optText(d, 'title', 500) && optText(d, 'category', 50) && optNum(d, 'cost')
         && optText(d, 'workshop', 200) && optText(d, 'notes', 5000)
@@ -210,6 +217,31 @@ service cloud.firestore {
           && request.resource.data.members.toSet() == resource.data.members.toSet().difference([myEmail()].toSet()));
     }
 
+    // Lo que el dueño cambia de un trabajo. Editar sin revisarlo (mismo estado y mismo reviewedAt) no tiene condiciones
+    // extra. Revisarlo (aprobar o rechazar: cambia el estado o reviewedAt) sólo vale para pasar un trabajo pendiente a
+    // approved o rejected, o uno aprobado a rejected, y con la revisión que vio el dueño: si el miembro lo editó
+    // mientras tanto, su revision subió y se deniega. Así no se aprueba una versión vieja, ni algo ya aprobado o
+    // rechazado (dos veces o desde dos dispositivos), ni un rechazado que el miembro no volvió a mandar. Sin status
+    // cuenta como approved y sin revision como 0: la versión 1.4.1 de la PWA no la manda, así que su update deja la
+    // guardada y su aprobación pasa.
+    function ownerJobUpdate() {
+      let before = resource.data.get('status', 'approved');
+      let after = request.resource.data.get('status', 'approved');
+      let reviewing = after != before
+        || request.resource.data.get('reviewedAt', null) != resource.data.get('reviewedAt', null);
+      return !reviewing
+        || (((before == 'pending' && after in ['approved', 'rejected']) || (before == 'approved' && after == 'rejected'))
+          && request.resource.data.get('revision', 0) == resource.data.get('revision', 0));
+    }
+
+    // Revisión que deja el miembro al editar su trabajo: la anterior + 1 (sin revision cuenta como 0). La versión 1.4.1
+    // de la PWA no la manda, así que un miembro con esa versión no puede editar sus trabajos hasta recargar la app.
+    function memberJobRevision() {
+      let before = resource.data.get('revision', 0);
+      let after = request.resource.data.get('revision', 0);
+      return after == before + 1;
+    }
+
     // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
     // Los autos son documentos de primer nivel con dueño y hasta 2 miembros. Leen el dueño y los miembros: el
     // cliente pide los suyos por ownerUid y los compartidos por members, que es lo que piden estas reglas. El
@@ -231,9 +263,10 @@ service cloud.firestore {
           && request.resource.data.carId == carId;
       }
 
-      // El dueño crea con cualquier autor y estado (así "Deshacer" devuelve el trabajo de un miembro) y edita
-      // cualquier estado. El miembro crea a su nombre y nunca approved (rejected es para "Deshacer"), y edita o
-      // borra sólo un trabajo suyo pendiente o rechazado: al editarlo vuelve a pending y no toca reviewedAt.
+      // El dueño crea con cualquier autor, estado y revisión (así "Deshacer" devuelve el trabajo de un miembro como
+      // estaba), edita cualquier trabajo y lo revisa según ownerJobUpdate. El miembro crea a su nombre y nunca approved
+      // (rejected es para "Deshacer"), y edita o borra sólo un trabajo suyo pendiente o rechazado: al editarlo vuelve
+      // a pending, no toca reviewedAt y sube revision en 1 (memberJobRevision).
       match /jobs/{jobId} {
         allow read: if ownsCar(carId) || memberOfCar(carId);
         allow delete: if ownsCar(carId)
@@ -245,11 +278,12 @@ service cloud.firestore {
               && request.resource.data.get('status', 'approved') in ['pending', 'rejected']));
         allow update: if validJob(request.resource.data) && request.resource.data.carId == carId
           && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
-          && (ownsCarAfter(carId)
+          && ((ownsCarAfter(carId) && ownerJobUpdate())
             || (memberOfCarAfter(carId) && resource.data.get('createdBy', null) == request.auth.uid
               && resource.data.get('status', 'approved') in ['pending', 'rejected']
               && request.resource.data.get('status', 'approved') == 'pending'
-              && request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null)));
+              && request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null)
+              && memberJobRevision()));
       }
 
       // El dueño crea con cualquier autor ("Deshacer" de algo de un miembro), edita y borra todo. El miembro crea a

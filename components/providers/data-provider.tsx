@@ -1,11 +1,12 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { subscribeUserData, syncCarKm, type UserData } from '@/lib/db'
+import { subscribeUserData, syncCarKm, syncRuleProjection, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
-import { rulesWithState, type RuleWithState } from '@/lib/maintenance'
+import { activeRules, isCompleted, projectionDiff, projectionKey, projectRules, rulesWithState, type RuleWithState } from '@/lib/maintenance'
 import { kmCorrection, topReading } from '@/lib/odometer'
-import { DEFAULT_SETTINGS, type Actor, type Car } from '@/lib/types'
+import { isCarOwner } from '@/lib/sharing'
+import { DEFAULT_SETTINGS, type Actor, type Car, type MaintenanceRule } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
@@ -18,7 +19,9 @@ interface DataState extends UserData {
   error: Error | null
   today: string
   carById: Map<string, Car>
-  /** Mantenimientos de cada auto con su estado, ordenados por urgencia. */
+  /** Todos los mantenimientos, también los cumplidos, con la proyección calculada en memoria (`projectRules`). */
+  rules: MaintenanceRule[]
+  /** Mantenimientos activos de cada auto (sin los recordatorios cumplidos) con su estado, ordenados por urgencia. */
   rulesByCar: Map<string, RuleWithState[]>
 }
 
@@ -41,6 +44,14 @@ const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs:
  * las marca como caché si alguna lo es; un auto nuevo que todavía no las entregó aparece sin lecturas y no se toca.
  * Espera un momento a que se asienten los datos (el auto y su lectura llegan en fotos separadas); una corrección que
  * falló no se reintenta.
+ *
+ * Mantenimientos: `rules` (y `rulesByCar`) llevan la proyección calculada en memoria con los trabajos aprobados y las
+ * lecturas (`projectRules`), así la pantalla está bien antes de que la proyección llegue al servidor. Reconciliación:
+ * en los autos propios (el plan es del dueño), si la proyección guardada no es la calculada (`projectionDiff`), la
+ * escribe (`syncRuleProjection`). Arregla un batch de un trabajo que falló, un cambio hecho con la versión anterior de
+ * la PWA o un estimado que se movió. Igual que el km: sólo con autos, mantenimientos, trabajos y lecturas confirmados
+ * por el servidor, un momento después de que se asientan, y una clave `ruleId:patch` evita repetir la misma escritura
+ * (una que falló no se reintenta). Es determinística: dos dispositivos escriben lo mismo y no compiten.
  */
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
@@ -101,6 +112,24 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(id)
   }, [data.cars, data.odometer, kmReady, actor])
 
+  const projecting = useRef(new Set<string>())
+  const projectionReady = kmReady && synced.has('rules') && synced.has('jobs')
+  useEffect(() => {
+    if (!projectionReady) return
+    const id = setTimeout(() => {
+      const own = new Set(data.cars.filter(c => isCarOwner(c, uid)).map(c => c.id))
+      for (const change of projectionDiff(data.rules.filter(r => own.has(r.carId)), data.jobs, data.odometer)) {
+        const key = projectionKey(change)
+        if (projecting.current.has(key)) continue
+        projecting.current.add(key)
+        syncRuleProjection(actor, change)
+          .then(() => projecting.current.delete(key))
+          .catch(e => console.warn('No se pudo actualizar el mantenimiento', change.ruleId, e))
+      }
+    }, 2000)
+    return () => clearTimeout(id)
+  }, [data.cars, data.rules, data.jobs, data.odometer, projectionReady, actor, uid])
+
   const value = useMemo<DataState>(() => {
     const cars = data.cars
       .map(c => {
@@ -109,15 +138,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))
+    const rules = projectRules(data.rules, data.jobs, data.odometer)
     const rulesByCar = new Map<string, RuleWithState[]>()
     for (const car of cars) {
-      rulesByCar.set(car.id, rulesWithState(data.rules.filter(r => r.carId === car.id), car, today))
+      rulesByCar.set(car.id, rulesWithState(activeRules(rules.filter(r => r.carId === car.id)), car, today))
     }
     const byDateDesc = <T extends { date: string; createdAt: Date }>(a: T, b: T) =>
       b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime()
     return {
       ...data,
       cars,
+      rules,
       jobs: [...data.jobs].sort(byDateDesc),
       fuel: [...data.fuel].sort(byDateDesc),
       odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
@@ -141,18 +172,23 @@ export function useData() {
   return ctx
 }
 
-/** Datos de un auto puntual; null si no existe (o todavía está cargando). */
+/**
+ * Datos de un auto puntual; null si no existe (o todavía está cargando). `rules` son los mantenimientos activos con su
+ * estado; `completed`, los recordatorios cumplidos, y `allRules`, todos (con la proyección en memoria).
+ */
 export function useCar(carId: string) {
   const d = useData()
   const car = d.carById.get(carId) ?? null
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const allRules = d.rules.filter(r => r.carId === carId)
+    return {
       car,
       rules: d.rulesByCar.get(carId) ?? [],
+      completed: allRules.filter(isCompleted),
+      allRules,
       jobs: d.jobs.filter(j => j.carId === carId),
       fuel: d.fuel.filter(f => f.carId === carId),
       readings: d.odometer.filter(r => r.carId === carId),
-    }),
-    [car, carId, d.rulesByCar, d.jobs, d.fuel, d.odometer],
-  )
+    }
+  }, [car, carId, d.rules, d.rulesByCar, d.jobs, d.fuel, d.odometer])
 }

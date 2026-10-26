@@ -60,6 +60,12 @@ export interface Car {
   members?: string[]
 }
 
+/**
+ * Un mantenimiento. Separa lo que declara el dueño (la "última vez" cargada a mano: `baseKm`, `baseDate`) de lo que
+ * sale de los trabajos aprobados (la proyección: `lastDone*`, `lastDoneJobId`, `completedByJobId`). La proyección se
+ * calcula con `projectRule` (lib/maintenance.ts) y se guarda sólo como caché para el cron: la escriben lib/db.ts y
+ * la reconciliación de `DataProvider`, nunca el formulario.
+ */
 export interface MaintenanceRule {
   id: string
   carId: string
@@ -68,17 +74,27 @@ export interface MaintenanceRule {
   /** Cada cuánto tiempo; si no se repite, dentro de cuánto. */
   intervalTime: TimeInterval | null
   /**
-   * false = recordatorio de una sola vez (p. ej. "volver al taller en 3 semanas"):
-   * cuando se hace, se borra en vez de reiniciarse.
+   * false = recordatorio de una sola vez (p. ej. "volver al taller en 3 semanas"): cuando un trabajo lo marca, queda
+   * cumplido (`completedByJobId`) en vez de reiniciarse.
    */
   repeat: boolean
+  /** Km de la "última vez" que cargó el dueño (si no hay trabajos que lo marquen). null = sin dato. */
+  baseKm: number | null
+  /** Fecha de la "última vez" que cargó el dueño; en uno de una sola vez, desde cuándo se cuenta. null = sin dato. */
+  baseDate: ISODate | null
+  /** Km de la última vez según la proyección: el del trabajo que manda o el de la base. */
   lastDoneKm: number | null
   /**
    * true si `lastDoneKm` no es un dato sino una estimación con las lecturas de km (`kmAtDate`): lo dejó un trabajo
    * sin km. Se muestra como "≈ 48.300 km (estimado)". false en los viejos sin el campo.
    */
   lastDoneKmEstimated: boolean
+  /** Fecha de la última vez según la proyección: la del trabajo que manda o la de la base. */
   lastDoneDate: ISODate | null
+  /** El trabajo aprobado que explica `lastDone*` ("Según el trabajo «Service» del 12/03"); null si manda la base. */
+  lastDoneJobId: string | null
+  /** Sólo en los de una sola vez: el trabajo aprobado que lo cumplió. Si no es null, el recordatorio está cumplido. */
+  completedByJobId: string | null
   warnKm: number
   warnDays: number
   lastNotifiedAt: Date | null
@@ -123,6 +139,12 @@ export interface Job extends Authorship {
   status?: JobStatus
   /** Cuándo el dueño aprobó o rechazó el trabajo de un miembro; null si nadie lo revisó. */
   reviewedAt?: Date | null
+  /**
+   * Versión del trabajo: arranca en 0 y sube en 1 cada vez que se edita uno que no está aprobado (`jobEdit`). El dueño
+   * aprueba o rechaza con la que vio y las reglas de Firestore lo deniegan si ya no es la guardada: así no aprueba una
+   * versión vieja. Un trabajo sin el campo (guardado por la versión 1.4.1 de la PWA o anterior) cuenta como 0.
+   */
+  revision: number
   createdAt: Date
 }
 

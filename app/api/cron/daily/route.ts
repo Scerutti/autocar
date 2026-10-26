@@ -46,7 +46,13 @@ function carFrom(id: string, x: DocumentData): Car {
   }
 }
 
+/**
+ * Un mantenimiento como lo usa el cron: la proyección guardada (`lastDone*`, `completedByJobId`), sin leer trabajos.
+ * La base, como en `ruleFrom` de lib/db.ts: si el documento no tiene los campos (versión anterior de la PWA), es la
+ * "última vez" guardada.
+ */
 function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
+  const legacy = !('baseDate' in x)
   return {
     id,
     carId: x.carId,
@@ -54,9 +60,13 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
     intervalKm: num(x.intervalKm),
     intervalTime: intervalFromDoc(x),
     repeat: x.repeat !== false,
+    baseKm: num(legacy ? x.lastDoneKm : x.baseKm),
+    baseDate: (legacy ? x.lastDoneDate : x.baseDate) ?? null,
     lastDoneKm: num(x.lastDoneKm),
     lastDoneKmEstimated: x.lastDoneKmEstimated === true,
     lastDoneDate: x.lastDoneDate ?? null,
+    lastDoneJobId: x.lastDoneJobId ?? null,
+    completedByJobId: x.completedByJobId ?? null,
     warnKm: num(x.warnKm) ?? 500,
     warnDays: num(x.warnDays) ?? 30,
     lastNotifiedAt: toDate(x.lastNotifiedAt),
@@ -109,7 +119,8 @@ function shuffled<T>(items: T[]) {
 type UserReport = { uid: string; messages: number; sent: number; error?: string }
 
 /**
- * Manda los avisos del día a un usuario y guarda cuáles se avisaron. El km de cada auto es el de su lectura más alta
+ * Manda los avisos del día a un usuario y guarda cuáles se avisaron. Los recordatorios cumplidos (`completedByJobId`)
+ * no se avisan (`planDailyNotifications` los saltea). El km de cada auto es el de su lectura más alta
  * (`carKmForNotifications`), no el `currentKm` guardado, que sólo se corrige cuando alguien abre la app. Las lecturas
  * de todos los autos se piden a la vez, mientras se leen los mantenimientos. Las escrituras son independientes (no
  * un batch): si se borró un mantenimiento, los demás se guardan igual. El código 5 (NOT_FOUND) es un mantenimiento

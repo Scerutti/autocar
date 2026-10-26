@@ -11,15 +11,15 @@ import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
 import { Checkbox, Field, FormError, Input, Textarea } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { addInterval, toISODate } from '@/lib/dates'
-import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp } from '@/lib/db'
+import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp, type JobInput } from '@/lib/db'
 import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
-import { formatLastDoneKm, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
+import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
 import { authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
-import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type TimeInterval } from '@/lib/types'
+import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type MaintenanceRule, type OdometerReading, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
-import { StatusBadge } from '../common'
+import { CompletedBadge, StatusBadge } from '../common'
 
 const CATEGORY_FOR_RULE: [RegExp, JobCategory][] = [
   [/service|aceite|filtro/i, 'service'],
@@ -42,19 +42,39 @@ function quotedList(names: string[]) {
 }
 
 /**
- * Aprobar o rechazar el trabajo que cargó un miembro (lo hace el dueño), con su confirmación. Aprobar aplica los
- * efectos con los mantenimientos y las lecturas que tiene la app en ese momento: si el trabajo no tiene km y marca
- * un mantenimiento por km, el km estimado a la fecha del trabajo. Cada acción devuelve true si se hizo.
+ * Lo que necesitan las escrituras de un trabajo (`saveJob`, `approveJob`, `deleteJob`…): el auto, todos sus
+ * mantenimientos (también los cumplidos), sus trabajos y las lecturas de km que tiene la app.
+ */
+function jobContext(car: Car, rules: MaintenanceRule[], jobs: Job[], readings: OdometerReading[]) {
+  return { car, rules: rules.filter(r => r.carId === car.id), jobs: jobs.filter(j => j.carId === car.id), readings }
+}
+
+/** «Service pasa a…», una por línea: cómo quedan los mantenimientos después de cambiar o borrar un trabajo aprobado. */
+function ruleChangeLines(rules: MaintenanceRule[], changes: ReturnType<typeof jobChangeDiff>) {
+  const lines = changes.flatMap(c => {
+    const rule = rules.find(r => r.id === c.ruleId)
+    return rule ? [describeProjectionChange(rule, c.patch)] : []
+  })
+  return lines.length ? lines.map((line, i) => <span key={i} className="block">{line}</span>) : null
+}
+
+/**
+ * Aprobar o rechazar el trabajo que cargó un miembro (lo hace el dueño), con su confirmación. Aprobar recalcula los
+ * mantenimientos con las lecturas que tiene la app en ese momento: si el trabajo no tiene km y marca un mantenimiento
+ * por km, el km estimado a la fecha del trabajo. Cada acción devuelve true si se hizo.
+ * Se aprueba o se rechaza la versión que se mostró en la confirmación (`approveJob`, `rejectJob`): si el miembro la
+ * editó mientras tanto, falla con "El trabajo cambió mientras lo revisabas". Si ya estaba aprobado (o rechazado) desde
+ * otro dispositivo, cuenta como hecho. Si el rechazo de las reglas llega después de `settle` (sin conexión), el aviso
+ * sale en un toast "No se pudo aprobar" o "No se pudo rechazar".
  */
 export function useJobReview() {
   const confirm = useConfirm()
-  const { actor, uid, rulesByCar, odometer } = useData()
+  const { actor, uid, rules: allRules, jobs, odometer } = useData()
 
   async function approve(car: Car, job: Job) {
-    const rules = rulesByCar.get(car.id) ?? []
-    const done = rules.filter(r => job.ruleIds.includes(r.rule.id)).map(r => r.rule.name)
-    const estimate =
-      job.km == null && kmRulesOf(rules.map(r => r.rule), job.ruleIds).length ? jobDoneKm(job, odometer) : null
+    const ctx = jobContext(car, allRules, jobs, odometer)
+    const done = ctx.rules.filter(r => job.ruleIds.includes(r.id) && !isCompleted(r)).map(r => r.name)
+    const estimate = job.km == null && kmRulesOf(ctx.rules, job.ruleIds).length ? jobDoneKm(job, odometer) : null
     const confirmed = await confirm({
       title: '¿Aprobar este trabajo?',
       description: 'Pasa a contar en gastos y reportes, y quien lo cargó ya no lo puede editar.',
@@ -75,7 +95,7 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(approveJob(actor, { car, rules: rules.map(r => r.rule), readings: odometer }, job))
+      const status = await settle(approveJob(actor, ctx, job), 'No se pudo aprobar')
       toastSaved('Trabajo aprobado', status, job.title)
       return true
     } catch (e) {
@@ -94,7 +114,7 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(rejectJob(actor, { car, readings: odometer }, job))
+      const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job), 'No se pudo rechazar')
       toastSaved('Trabajo rechazado', status, job.title)
       return true
     } catch (e) {
@@ -130,8 +150,8 @@ function ReviewCard({ car, job }: { car: Car; job: Job }) {
 /** Un trabajo que no puedo editar: de otra persona, o mío ya aprobado en un auto que me compartieron. */
 function JobDetails({ car, job }: { car: Car; job: Job }) {
   const { uid } = useData()
-  const { rules } = useCar(car.id)
-  const done = rules.filter(r => job.ruleIds.includes(r.rule.id)).map(r => r.rule.name)
+  const { allRules } = useCar(car.id)
+  const done = allRules.filter(r => job.ruleIds.includes(r.id)).map(r => r.name)
   return (
     <ReadOnlyDetails
       car={car}
@@ -163,22 +183,30 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
 
 /**
  * Formulario del trabajo. Los mantenimientos que se repiten vuelven a contar desde este trabajo; los de una sola
- * vez quedan cumplidos. "Volver al taller en…" sólo aparece al cargar un trabajo nuevo, y sólo al dueño: crea un
+ * vez quedan cumplidos. Para marcar se ofrecen los activos y, al editar, los que cumplió este mismo trabajo (marcados:
+ * desmarcarlo los vuelve a activar); los que cumplió otro trabajo no aparecen. Al editar o borrar un trabajo aprobado,
+ * la confirmación dice cómo quedan los mantenimientos que cambian (`jobChangeDiff`).
+ * "Volver al taller en…" sólo aparece al cargar un trabajo nuevo, y sólo al dueño: crea un
  * mantenimiento, y el plan es del dueño. Lo que carga o corrige un miembro queda pendiente hasta que el dueño lo
  * aprueba; al dueño, un trabajo pendiente le muestra Aprobar y Rechazar.
  * El km arranca vacío (no se inventa el de hoy). Si se marca un mantenimiento por km y queda vacío, el campo muestra
- * el km estimado a la fecha (`jobDoneKm`) como sugerencia: el trabajo se guarda sin km y, al aplicar los efectos, el
- * mantenimiento toma ese estimado marcado como tal. Sin estimación (fecha anterior a la primera lectura), el km es
+ * el km estimado a la fecha (`jobDoneKm`) como sugerencia: el trabajo se guarda sin km y el mantenimiento toma ese
+ * estimado marcado como tal. Sin estimación (fecha anterior a la primera lectura), el km es
  * obligatorio.
+ * Al guardar, los cambios se miden contra el trabajo como estaba al abrir el formulario (`original`): lo que otro
+ * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
  */
 function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, uid, today, odometer } = useData()
-  const { rules, readings } = useCar(car.id)
+  const { rules, allRules, jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
   const owner = isCarOwner(car, uid)
   const ownerName = car.ownerName ?? 'el dueño'
+  const ctx = { car, rules: allRules, jobs, readings: odometer }
+  const completedHere = job ? allRules.filter(r => r.completedByJobId === job.id) : []
+  const selectable = [...rules.map(r => r.rule), ...completedHere]
 
   const preRule = rules.find(r => r.rule.id === preselectedRuleId)?.rule
   const [date, setDate] = useState(job?.date ?? toISODate(new Date()))
@@ -193,9 +221,10 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
   const [comeBack, setComeBack] = useState(false)
   const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
+  const [original] = useState(job)
 
   const kmNum = parseNumberInput(km)
-  const kmRules = kmRulesOf(rules.map(r => r.rule), ruleIds)
+  const kmRules = kmRulesOf(selectable, ruleIds)
   const estimate = kmRules.length && kmNum == null ? jobDoneKm({ id: job?.id, carId: car.id, date, km: null }, readings) : null
 
   function toggleRule(id: string, name: string, checked: boolean) {
@@ -221,10 +250,25 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
 
     const followUp: FollowUp | null =
       owner && comeBack && comeBackIn ? { name: `Volver al taller: ${title.trim()}`, intervalTime: comeBackIn } : null
-    const done = rules.filter(r => ruleIds.includes(r.rule.id)).map(r => r.rule)
+    const input: JobInput = {
+      carId: car.id,
+      date,
+      km: kmNum,
+      title: title.trim(),
+      category,
+      cost: costNum,
+      workshop: workshop.trim() || null,
+      notes: notes.trim() || null,
+      ruleIds,
+    }
+    const done = selectable.filter(r => ruleIds.includes(r.id))
     const reset = done.filter(r => r.repeat).map(r => r.name)
     const completed = done.filter(r => !r.repeat).map(r => r.name)
     const applies = owner && (!job || isApproved(job))
+    const changes =
+      owner && job && isApproved(job)
+        ? ruleChangeLines(allRules, jobChangeDiff({ rules: allRules, jobs, readings: odometer, before: job, after: { ...job, ...input } }))
+        : null
     const confirmed = await confirm({
       title: owner
         ? job
@@ -247,8 +291,14 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
             : []),
         { label: 'Costo', value: formatMoney(costNum) },
         ...(workshop.trim() ? [{ label: 'Taller', value: workshop.trim() }] : []),
-        ...(reset.length ? [{ label: applies ? 'Reinicia' : 'Al aprobarlo reinicia', value: reset.join(', ') }] : []),
-        ...(completed.length ? [{ label: applies ? 'Da por cumplido' : 'Al aprobarlo cumple', value: completed.join(', ') }] : []),
+        ...(job && applies
+          ? changes
+            ? [{ label: 'Mantenimientos', value: changes }]
+            : []
+          : [
+              ...(reset.length ? [{ label: applies ? 'Reinicia' : 'Al aprobarlo reinicia', value: reset.join(', ') }] : []),
+              ...(completed.length ? [{ label: applies ? 'Da por cumplido' : 'Al aprobarlo cumple', value: completed.join(', ') }] : []),
+            ]),
         ...(followUp
           ? [{ label: 'Volver al taller', value: `El ${formatDate(addInterval(date, followUp.intervalTime))} (en ${formatInterval(followUp.intervalTime)})` }]
           : []),
@@ -261,25 +311,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(
-        saveJob(
-          actor,
-          { car, rules: rules.map(r => r.rule), readings: odometer },
-          {
-            carId: car.id,
-            date,
-            km: kmNum,
-            title: title.trim(),
-            category,
-            cost: costNum,
-            workshop: workshop.trim() || null,
-            notes: notes.trim() || null,
-            ruleIds,
-          },
-          job,
-          followUp,
-        ),
-      )
+      status = await settle(saveJob(actor, ctx, input, original, followUp))
     })
     if (!ok) return
     const note = applies
@@ -300,18 +332,22 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
 
   async function handleDelete() {
     if (!job) return
+    const changes = isApproved(job)
+      ? ruleChangeLines(allRules, jobChangeDiff({ rules: allRules, jobs, readings: odometer, before: job, after: null }))
+      : null
     const confirmed = await confirm({
       tone: 'danger',
       title: '¿Borrar este trabajo?',
-      description: `${job.title} · ${formatDate(job.date)} · ${formatMoney(job.cost)}. Los mantenimientos que reinició quedan como están.`,
+      description: `${job.title} · ${formatDate(job.date)} · ${formatMoney(job.cost)}.${changes ? ' Los mantenimientos vuelven a como estaban antes de este trabajo.' : ''}`,
+      details: changes ? [{ label: 'Mantenimientos', value: changes }] : undefined,
       confirmLabel: 'Sí, borrar',
     })
     if (!confirmed) return
     router.replace(`/autos/${car.id}?tab=trabajos`)
     removeWithUndo({
       message: 'Trabajo borrado',
-      remove: () => deleteJob(actor, { car, readings: odometer }, job),
-      restore: () => restoreJob(actor, { car, readings: odometer }, job),
+      remove: () => deleteJob(actor, ctx, job),
+      restore: () => restoreJob(actor, ctx, job),
     })
   }
 
@@ -367,7 +403,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         </Field>
       </div>
 
-      {rules.length > 0 && (
+      {selectable.length > 0 && (
         <div>
           <p className="text-sm font-medium">¿Este trabajo incluye algún mantenimiento?</p>
           <p className="mb-3 text-xs text-muted-foreground">
@@ -392,6 +428,19 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
                 ]
                   .filter(Boolean)
                   .join(' · ')}
+              />
+            ))}
+            {completedHere.map(rule => (
+              <Checkbox
+                key={rule.id}
+                checked={ruleIds.includes(rule.id)}
+                onChange={e => toggleRule(rule.id, rule.name, e.target.checked)}
+                label={
+                  <span className="flex items-center gap-2">
+                    {rule.name} <CompletedBadge />
+                  </span>
+                }
+                description="Lo cumplió este trabajo. Si lo desmarcás, vuelve a estar activo."
               />
             ))}
           </div>

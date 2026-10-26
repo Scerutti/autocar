@@ -2,6 +2,47 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.5.0
+
+Cierra la epic de integridad de km y mantenimientos. El estado de cada mantenimiento sale de los trabajos aprobados, así que corregir o borrar un trabajo lo corrige; aprobar un trabajo aprueba la versión que viste, y editar guarda sólo lo que cambiaste. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
+
+### Arreglos
+
+- **Corregir un trabajo corrige sus mantenimientos**: si le sacás un mantenimiento a un trabajo, o le corregís la fecha (por ejemplo, de 2027 a 2026), el mantenimiento vuelve al trabajo anterior o a la "última vez" que cargaste a mano. Antes quedaba como lo había dejado el trabajo, y una fecha futura no se corregía nunca.
+- **Borrar un trabajo devuelve sus mantenimientos a como estaban antes de él**, y "Deshacer" los vuelve a dejar como estaban. Rechazar un trabajo que estaba aprobado hace lo mismo.
+- **Los recordatorios de una vez ya no se borran**: el trabajo que los cumple los deja en "Cumplidos", plegados al final de la pestaña Estado, con link al trabajo. No avisan ni aparecen en la campanita. Si borrás el trabajo, o lo editás y lo desmarcás, vuelven a estar activos.
+- **Si se corta la conexión mientras guardás un trabajo**, el mantenimiento se reinicia solo la próxima vez que abrís la app. Antes el trabajo quedaba guardado pero el mantenimiento no, y seguía llegando el aviso de vencido.
+- **Editar un mantenimiento ya no pisa un trabajo cargado desde otro celular.**
+- **Ficha del mantenimiento**: la "última vez" que cargás a mano es "Última vez (si no hay trabajos)". Si un trabajo manda, dice "Según el trabajo «Service» del 12/03", con link al trabajo; si a ese trabajo le falta el km, te lo pide ahí.
+- **Confirmaciones**: al editar o borrar un trabajo aprobado, la confirmación dice cómo queda cada mantenimiento que cambia ("Service vuelve a 12 de mar de 2026 · 40.000 km").
+- **Justo en el km del vencimiento** el mantenimiento dice "llegó al km", en vez de "pasado -0 km".
+- **Aprobar un trabajo aprueba lo que viste**: si la otra persona lo corrigió mientras lo revisabas, la aprobación no se hace y te avisa "El trabajo cambió mientras lo revisabas. Miralo de nuevo." Antes quedaba aprobada la versión nueva, pero el km y los mantenimientos salían de la vieja. Rechazar funciona igual.
+- **Aprobar dos veces, o desde dos celulares, no repite nada ni muestra un error.** Un trabajo rechazado no se puede aprobar hasta que quien lo cargó lo vuelva a mandar.
+- **Editar ya no pisa lo que cambiaron en otro celular**: al guardar un trabajo, una carga o un mantenimiento se guarda sólo lo que cambiaste. Si dos personas corrigen campos distintos de la misma carga, quedan los dos cambios.
+- **Guardar sin cambiar nada** no escribe y avisa "Sin cambios".
+- **Si el registro se borró en otro celular** mientras lo editabas, avisa "Ese registro se borró en otro dispositivo" y no lo vuelve a crear.
+
+### Mantenimiento
+
+- **Modelo** (`MaintenanceRule`): lo declarado por el dueño (`baseKm`, `baseDate`) se separa de la proyección que sale de los trabajos aprobados (`lastDoneKm`, `lastDoneDate`, `lastDoneKmEstimated`, `lastDoneJobId`, `completedByJobId`). La proyección se guarda como caché para el cron y la escriben sólo `lib/db.ts` y la reconciliación.
+- **Proyección pura** (`lib/maintenance.ts`, con pruebas): `projectRule(rule, jobs, readings)` (manda el trabajo aprobado más reciente que no sea anterior a la base; empate de fecha, `createdAt`; sin km, `jobDoneKm`), `projectionDiff(rules, jobs, readings)` y `jobChangeDiff(...)`. El patch pone `lastNotifiedAt/lastNotifiedStatus: null` si cambia la fecha, el cumplido o un km no estimado; un km estimado que se ajusta se guarda sin volver a avisar. Sale `jobRuleUpdates`.
+- **Escrituras** (`lib/db.ts`): `applyJobChange(actor, ctx, before, after, writeJob)` (interna) es el camino único de `saveJob`, `approveJob`, `rejectJob`, `deleteJob` y `restoreJob`; reemplaza a `addJobEffects` y `commitJob`. Cada mantenimiento sigue en su propio batch, y ahora sólo se escriben los que cambian. `rejectJob`, `deleteJob` y `restoreJob` reciben el contexto completo (`{ car, rules, jobs, readings }`) y `saveJob` el `Job` anterior completo. `saveRule(actor, { jobs, readings }, data, ruleId?)`: crear es `set`, editar es `update` de lo declarado más la proyección; nunca escribe `lastDone*` del formulario. Ningún trabajo borra un mantenimiento.
+- **Reconciliación** (`DataProvider`): en los autos propios, con autos, mantenimientos, trabajos y lecturas confirmados por el servidor, escribe la proyección que no coincide (`syncRuleProjection`), una vez por diferencia. La UI calcula el estado con la proyección en memoria. `useCar` suma `completed` y `allRules`.
+- **Cumplidos fuera de lo activo**: `rulesByCar`, la campanita, los logros (`mineForAchievements`), el PDF (ya sólo listaba los periódicos) y el cron (`planDailyNotifications`) no cuentan los recordatorios con `completedByJobId`.
+- **Lectura tolerante**: `ruleFrom` (app y cron) usa `lastDone*` como base sólo si el documento no tiene `baseKm`/`baseDate` (un mantenimiento creado o editado con la versión anterior de la PWA durante el rollout). Si los tiene en null, la base es null.
+- **Reglas de Firestore**: `validRule` acepta `baseKm` (número), `baseDate` (texto, 30), `lastDoneJobId` (texto, 100) y `completedByJobId` (texto, 100). Siguen aceptando lo que escribe la 1.4.1, que no los manda.
+- **Migración** `scripts/rebase-rules.mjs` (lógica en `scripts/rebase-rules-plan.mjs`, con pruebas): a cada mantenimiento sin `baseKm`/`baseDate` le escribe la base: null si su `lastDoneDate` es la de un trabajo aprobado que lo marca, y si no, su `lastDone*`. No escribe la proyección: la guarda la app cuando el dueño la abre. Informa por auto cuántos quedaron con base propia y cuántos con base null. Simulacro por defecto, `--apply` para escribir; se puede volver a correr.
+- **Revisión de los trabajos** (`Job.revision`, número; falta = 0 en `jobFrom`): se crea en 0; el miembro la sube en 1 cada vez que edita su trabajo, y el dueño también al corregir uno que no está aprobado (`jobEdit`, `lib/sharing.ts`, con pruebas). `approveJob` y `rejectJob` mandan la revisión que vio el dueño; si las reglas los deniegan (`permission-denied`), leen el trabajo en el servidor: si ya quedó aprobado (o rechazado) termina bien (`reviewAlreadyDone`, con pruebas), y si no, fallan con "El trabajo cambió mientras lo revisabas". `settle(p, errorTitle)` muestra ese aviso aunque llegue después del timeout sin conexión.
+- **`applyJobChange`**: los batches de los mantenimientos se commitean recién cuando el servidor confirma el del trabajo. Si las reglas rechazan una aprobación, los mantenimientos no quedan reiniciados con la versión vieja; sin conexión esperan la confirmación, y la reconciliación escribe lo que falte. La lectura `job-{id}` sólo se reescribe si cambió el km, la fecha o la aprobación.
+- **Editar = `update` de lo que cambió**: `changedFields(original, draft)` (`lib/utils.ts`, con pruebas: primitivos, null contra undefined, mapas por contenido, listas en orden). `saveJob`, `saveFuel` y `saveRule` lo usan al editar contra el registro como lo abrió el formulario, y devuelven `'saved' | 'unchanged'` (`WriteOutcome`); `settle` devuelve `'unchanged'` y `toastSaved` dice "Sin cambios". El `update` del miembro en un trabajo suma `status: 'pending'` si corresponde y siempre `revision`. `saveRule(actor, ctx, data, existing?)` recibe el mantenimiento (antes, el id): escribe lo declarado que cambió, la proyección sólo si cambió, y `baseKm`/`baseDate` siempre juntos. `saveFuel` recibe la `FuelLoad` completa y escribe la lectura `fuel-{id}` sólo si cambió el km o la fecha. Un `update` sobre un registro borrado falla con `not-found` (`errorMessage` → "Ese registro se borró en otro dispositivo.").
+- **Reglas de Firestore** (sólo `jobs`): `validJob` acepta `revision` (`optNum`). El dueño revisa (cambia `status` o `reviewedAt`) sólo `pending` → `approved`/`rejected` o `approved` → `rejected`, con la misma `revision` guardada (falta = 0, así sigue aprobando lo que escribe la 1.4.1 y la 1.4.1 sigue aprobando); editar sin revisar no cambia. El miembro, al editar, deja `revision` = anterior + 1. La 1.4.1 no la manda: desde que se publican las reglas hasta que el miembro recarga la app con la versión nueva, no puede editar sus trabajos pendientes o rechazados (crearlos y borrarlos sí).
+- **Pasos manuales, en orden**:
+  1. Publicar las reglas de Firestore (incluyen las de `jobs` y `revision`), justo antes del deploy: los miembros con la versión anterior no editan sus trabajos hasta actualizar.
+  2. Simulacro: `node --env-file=.env.local scripts/rebase-rules.mjs`.
+  3. `node --env-file=.env.local scripts/rebase-rules.mjs --apply`.
+  4. Deploy de la app.
+  5. `--apply` otra vez, para los mantenimientos que haya creado o editado la versión anterior de la PWA hasta actualizarse. Una tercera corrida tiene que dar 0 cambios.
+
 ## 1.4.1
 
 El km del auto sale siempre de sus registros de km, y las novedades de cada versión se anuncian al entrar. No cambian las reglas de Firestore y no hace falta migrar datos.

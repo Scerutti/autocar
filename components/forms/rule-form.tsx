@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { CalendarClock, CircleCheck, Repeat, Trash2 } from 'lucide-react'
 import { useConfirm } from '@/components/confirm-provider'
@@ -10,7 +11,7 @@ import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Field, FormError, Input } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { deleteRule, restoreRule, saveRule } from '@/lib/db'
-import { formatDate, formatKm, formatNumber, parseNumberInput } from '@/lib/format'
+import { formatDate, formatDayMonth, formatKm, formatNumber, parseNumberInput } from '@/lib/format'
 import {
   defaultWarnings,
   describeRemaining,
@@ -19,9 +20,11 @@ import {
   getRuleState,
   MISSING_LAST_KM,
   missingLastKm,
+  projectRule,
+  type RuleProjection,
 } from '@/lib/maintenance'
 import { isCarOwner } from '@/lib/sharing'
-import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
+import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type Job, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { cn } from '@/lib/utils'
 import { LinkButton, RuleProgress, StatusBadge } from '../common'
@@ -31,15 +34,52 @@ const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n)
 /** Aviso para quien ve un auto compartido: el plan de mantenimiento es del dueño. */
 export const OWNER_ONLY_PLAN = 'Solo el dueño puede cambiar el plan.'
 
+/**
+ * "Según el trabajo «Service» del 12/03" o "Cumplido con el trabajo «Volver al taller» del 12/03", con link al trabajo:
+ * el trabajo aprobado que manda en el mantenimiento (`lastDoneJobId` o `completedByJobId` de la proyección). null si
+ * manda la base.
+ */
+function RulingJobNotice({
+  car,
+  projection,
+  jobs,
+}: {
+  car: Car
+  projection: RuleProjection & Pick<MaintenanceRule, 'intervalKm'>
+  jobs: Job[]
+}) {
+  const id = projection.completedByJobId ?? projection.lastDoneJobId
+  const job = id ? jobs.find(j => j.id === id) : null
+  if (!job) return null
+  const missingKm = !projection.completedByJobId && missingLastKm(projection)
+  return (
+    <Link
+      href={`/autos/${car.id}/trabajos/${job.id}`}
+      className="block rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3 text-sm transition hover:bg-primary/10"
+    >
+      <span className="font-medium">
+        {projection.completedByJobId ? 'Cumplido con' : 'Según'} el trabajo «{job.title}» del {formatDayMonth(job.date)}
+      </span>
+      {!projection.completedByJobId && (
+        <span className="mt-0.5 block text-xs text-muted-foreground">
+          {[formatDate(job.date), formatLastDoneKm(projection)].filter(Boolean).join(' · ')}
+        </span>
+      )}
+      {missingKm && <span className="mt-0.5 block text-xs text-warning">{MISSING_LAST_KM}: cargalo en el trabajo.</span>}
+    </Link>
+  )
+}
+
 /** Un mantenimiento de un auto que me compartieron: su estado, sin acciones. */
 function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
-  const { rules } = useCar(car.id)
+  const { rules, jobs } = useCar(car.id)
   const state = rules.find(r => r.rule.id === rule.id)?.state
   const remaining = state ? describeRemaining(state) : null
   return (
     <div className="mx-auto max-w-xl space-y-4">
       <p className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-sm text-muted-foreground">{OWNER_ONLY_PLAN}</p>
-      {missingLastKm(rule) && (
+      <RulingJobNotice car={car} projection={rule} jobs={jobs} />
+      {missingLastKm(rule) && !rule.lastDoneJobId && (
         <p className="rounded-xl border border-warning/25 bg-warning/5 px-3.5 py-3 text-sm text-warning">
           {MISSING_LAST_KM}: hasta que {car.ownerName ?? 'el dueño'} lo complete, se calcula sólo por fecha.
         </p>
@@ -95,14 +135,20 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 /**
  * Formulario del mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
  * vacíos = automáticos según el intervalo. Si no se repite, se cuenta desde los km actuales. `pickerKey` cambia al
- * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo. Un km de la última vez estimado
- * (`lastDoneKmEstimated`, lo dejó un trabajo sin km) se muestra como tal y sigue estimado mientras no se cambie; si
- * falta, se pide.
+ * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
+ * La "última vez" que se carga acá es la base (`baseKm`, `baseDate`): cuenta si no hay un trabajo aprobado que lo
+ * marque desde esa fecha. El estado (la vista previa y lo que se guarda) sale de la proyección con la base del
+ * formulario (`projectRule`): si un trabajo manda, se muestra "Según el trabajo «X» del dd/mm" con su km (estimado,
+ * si el trabajo no tiene) y la base queda como dato secundario, que puede quedar vacío. Sin un trabajo que mande, la
+ * fecha es obligatoria y, si es por km, también el km.
+ * Al guardar, los cambios se miden contra el mantenimiento como estaba al abrir el formulario (`original`): lo que otro
+ * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
  */
 function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, today } = useData()
+  const { jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
   const presets = RULE_PRESETS.filter(p => !p.requires || car.fuelTypes.includes(p.requires))
@@ -111,26 +157,29 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const [repeat, setRepeat] = useState(rule?.repeat ?? true)
   const [intervalKm, setIntervalKm] = useState(numOrEmpty(rule?.intervalKm))
   const [intervalTime, setIntervalTime] = useState<TimeInterval | null>(rule?.intervalTime ?? null)
-  const [lastKm, setLastKm] = useState(numOrEmpty(rule ? rule.lastDoneKm : car.currentKm))
-  const [lastDate, setLastDate] = useState(rule?.lastDoneDate ?? today)
+  const [lastKm, setLastKm] = useState(numOrEmpty(rule ? rule.baseKm : car.currentKm))
+  const [lastDate, setLastDate] = useState(rule ? (rule.baseDate ?? '') : today)
   const [warnKm, setWarnKm] = useState(rule ? String(rule.warnKm) : '')
   const [warnDays, setWarnDays] = useState(rule ? String(rule.warnDays) : '')
   const [pickerKey, setPickerKey] = useState(0)
+  const [original] = useState(rule)
 
   const kmInterval = parseNumberInput(intervalKm) || null
   const auto = defaultWarnings(kmInterval, intervalTime)
-  const lastDoneKm = kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.lastDoneKm ?? car.currentKm)) : null
+  const baseKm = kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.baseKm ?? car.currentKm)) : null
   const draft = {
+    carId: car.id,
     intervalKm: kmInterval,
     intervalTime,
     repeat,
-    lastDoneKm,
-    lastDoneKmEstimated: Boolean(rule?.lastDoneKmEstimated) && lastDoneKm != null && lastDoneKm === rule?.lastDoneKm,
-    lastDoneDate: lastDate || null,
+    baseKm,
+    baseDate: lastDate || null,
     warnKm: parseNumberInput(warnKm) ?? auto.warnKm,
     warnDays: parseNumberInput(warnDays) ?? auto.warnDays,
   }
-  const preview = getRuleState(draft, car, today)
+  const projection = projectRule({ ...draft, id: rule?.id ?? '' }, jobs, readings)
+  const ruled = projection.lastDoneJobId != null || projection.completedByJobId != null
+  const preview = getRuleState({ ...draft, ...projection }, car, today)
   const remaining = describeRemaining(preview)
   const nextText = [
     preview.nextKm != null ? `a los ${formatKm(preview.nextKm)}` : null,
@@ -163,9 +212,10 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
     if (!draft.intervalKm && !draft.intervalTime) {
       return setError(repeat ? 'Elegí cada cuánto tiempo y/o cada cuántos km.' : 'Elegí dentro de cuánto tiempo y/o cuántos km.')
     }
-    if (draft.intervalKm && draft.lastDoneKm == null) return setError('Indicá a qué km se hizo la última vez.')
-    if (!draft.lastDoneDate) return setError(repeat ? 'Indicá la fecha de la última vez.' : 'Indicá desde qué fecha se cuenta.')
-    if (draft.lastDoneDate > today) return setError('La fecha no puede ser futura.')
+    if (!ruled && draft.intervalKm && draft.baseKm == null) return setError('Indicá a qué km se hizo la última vez.')
+    if (!ruled && !draft.baseDate) return setError(repeat ? 'Indicá la fecha de la última vez.' : 'Indicá desde qué fecha se cuenta.')
+    if (draft.baseDate && draft.baseDate > today) return setError('La fecha no puede ser futura.')
+    const rulingJob = ruled ? jobs.find(j => j.id === (projection.completedByJobId ?? projection.lastDoneJobId)) : null
 
     const confirmed = await confirm({
       title: rule ? `¿Guardar los cambios de "${name.trim()}"?` : `¿Agregar "${name.trim()}"?`,
@@ -173,10 +223,28 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
       details: [
         { label: 'Se repite', value: repeat ? 'Sí' : 'No, una sola vez' },
         { label: repeat ? 'Cada' : 'Dentro de', value: describeRuleInterval(draft).replace(/^(Cada|Una sola vez, dentro de) /, '') },
-        {
-          label: repeat ? 'Última vez' : 'Desde',
-          value: [formatDate(draft.lastDoneDate), repeat ? formatLastDoneKm(draft) : null].filter(Boolean).join(' · '),
-        },
+        ...(rulingJob
+          ? [
+              {
+                label: projection.completedByJobId ? 'Cumplido con' : 'Según el trabajo',
+                value: `«${rulingJob.title}» del ${formatDate(rulingJob.date)}`,
+              },
+            ]
+          : []),
+        ...(projection.completedByJobId
+          ? []
+          : [
+              {
+                label: repeat ? 'Última vez' : 'Desde',
+                value:
+                  [
+                    projection.lastDoneDate ? formatDate(projection.lastDoneDate) : null,
+                    repeat && draft.intervalKm ? formatLastDoneKm(projection) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '—',
+              },
+            ]),
         ...(nextText ? [{ label: 'Te toca', value: nextText }] : []),
         {
           label: 'Te avisamos',
@@ -193,7 +261,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveRule(actor, { carId: car.id, name: name.trim(), ...draft }, rule?.id))
+      status = await settle(saveRule(actor, { jobs, readings }, { ...draft, name: name.trim() }, original))
     })
     if (!ok) return
     toastSaved(rule ? 'Mantenimiento guardado' : 'Mantenimiento agregado', status, nextText ? `${name.trim()}: te toca ${nextText}` : undefined)
@@ -281,23 +349,30 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
         <Input value={intervalKm} onChange={e => setIntervalKm(e.target.value)} inputMode="numeric" placeholder={repeat ? '5000' : '1000'} />
       </Field>
 
-      <div>
-        <p className="text-sm font-medium">{repeat ? 'Última vez que se hizo' : 'Desde cuándo se cuenta'}</p>
-        <p className="mb-2 text-xs text-muted-foreground">
-          {repeat ? 'Si no te acordás, poné una fecha y km aproximados.' : 'Normalmente hoy, o el día que fuiste al taller.'}
-        </p>
-        <div className="grid grid-cols-2 gap-4">
-          {repeat && draft.intervalKm ? (
-            <Field
-              label={<span className="text-xs text-muted-foreground">A los km</span>}
-              hint={draft.lastDoneKmEstimated ? formatLastDoneKm(draft) : draft.lastDoneKm == null ? MISSING_LAST_KM : undefined}
-            >
-              <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
+      <div className="space-y-3">
+        <RulingJobNotice car={car} projection={{ ...projection, intervalKm: draft.intervalKm }} jobs={jobs} />
+        <div>
+          <p className="text-sm font-medium">{repeat ? 'Última vez (si no hay trabajos)' : 'Desde cuándo se cuenta'}</p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            {ruled
+              ? 'Cuenta sólo si se borra ese trabajo o se le saca este mantenimiento.'
+              : repeat
+                ? 'Si no te acordás, poné una fecha y km aproximados. Cuando registres un trabajo que lo incluya, manda el trabajo.'
+                : 'Normalmente hoy, o el día que fuiste al taller.'}
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            {repeat && draft.intervalKm ? (
+              <Field
+                label={<span className="text-xs text-muted-foreground">A los km</span>}
+                hint={!ruled && draft.baseKm == null ? MISSING_LAST_KM : undefined}
+              >
+                <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
+              </Field>
+            ) : null}
+            <Field label={<span className="text-xs text-muted-foreground">Fecha</span>}>
+              <Input type="date" value={lastDate} max={today} onChange={e => setLastDate(e.target.value)} />
             </Field>
-          ) : null}
-          <Field label={<span className="text-xs text-muted-foreground">Fecha</span>}>
-            <Input type="date" value={lastDate} max={today} onChange={e => setLastDate(e.target.value)} />
-          </Field>
+          </div>
         </div>
       </div>
 
