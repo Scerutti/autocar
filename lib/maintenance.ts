@@ -96,12 +96,16 @@ export function rulesWithState(rules: MaintenanceRule[], car: CarInput, today: I
     .sort((a, b) => compareRuleStates(a.state, b.state))
 }
 
-/** Texto corto de lo que falta: "faltan 420 km", "vence en 12 días", "vencido hace 300 km". */
+/**
+ * Texto corto de lo que falta: "faltan 420 km", "llegó al km" (justo en el km), "pasado 300 km", "vence en 12 días".
+ * El 0 tiene su texto porque `Intl` formatea `-0` como "-0".
+ */
 export function describeRemaining(state: RuleState): { km: string | null; date: string | null } {
   const fmt = (n: number) => new Intl.NumberFormat('es-AR').format(n)
   let km: string | null = null
   if (state.remainingKm != null) {
-    km = state.remainingKm > 0 ? `faltan ${fmt(state.remainingKm)} km` : `pasado ${fmt(-state.remainingKm)} km`
+    const r = state.remainingKm
+    km = r > 0 ? `faltan ${fmt(r)} km` : r === 0 ? 'llegó al km' : `pasado ${fmt(-r)} km`
   }
   let date: string | null = null
   if (state.remainingDays != null) {

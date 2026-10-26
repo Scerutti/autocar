@@ -15,6 +15,7 @@ El estado de cada mantenimiento sale de los trabajos aprobados, así que corregi
 - **Editar un mantenimiento ya no pisa un trabajo cargado desde otro celular.**
 - **Ficha del mantenimiento**: la "última vez" que cargás a mano es "Última vez (si no hay trabajos)". Si un trabajo manda, dice "Según el trabajo «Service» del 12/03", con link al trabajo; si a ese trabajo le falta el km, te lo pide ahí.
 - **Confirmaciones**: al editar o borrar un trabajo aprobado, la confirmación dice cómo queda cada mantenimiento que cambia ("Service vuelve a 12 de mar de 2026 · 40.000 km").
+- **Justo en el km del vencimiento** el mantenimiento dice "llegó al km", en vez de "pasado -0 km".
 
 ### Mantenimiento
 

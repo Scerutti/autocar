@@ -445,6 +445,10 @@ describe('describeRemaining', () => {
     const s = getRuleState(service, { currentKm: 14580, avgKmPerDay: null }, '2026-12-22')
     expect(describeRemaining(s)).toEqual({ km: 'faltan 420 km', date: 'vence en 19 días' })
   })
+  it('justo en el km dice "llegó al km", no "pasado -0 km"', () => {
+    const s = getRuleState(service, { currentKm: 15000, avgKmPerDay: null }, '2026-12-22')
+    expect(describeRemaining(s).km).toBe('llegó al km')
+  })
 })
 
 describe('addMonths', () => {
