@@ -70,7 +70,8 @@ interface AchievementData {
 
 /**
  * Lo que cuenta para mis logros: las cargas y lecturas que cargué yo y mis trabajos aprobados. En los autos que
- * me compartieron no cuentan los mantenimientos, porque el plan es del dueño.
+ * me compartieron no cuentan los mantenimientos, porque el plan es del dueño. Tampoco cuentan los recordatorios
+ * cumplidos (`completedByJobId`): antes un trabajo los borraba, y así los logros siguen contando lo mismo.
  */
 export function mineForAchievements(data: AchievementData, uid: string): AchievementData {
   const carById = new Map(data.cars.map(c => [c.id, c]))
@@ -82,7 +83,7 @@ export function mineForAchievements(data: AchievementData, uid: string): Achieve
     cars: data.cars,
     rules: data.rules.filter(r => {
       const car = carById.get(r.carId)
-      return car ? isCarOwner(car, uid) : false
+      return car ? isCarOwner(car, uid) && r.completedByJobId == null : false
     }),
     jobs: data.jobs.filter(j => mine(j) && isApproved(j)),
     fuel: data.fuel.filter(mine),

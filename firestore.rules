@@ -82,14 +82,19 @@ service cloud.firestore {
     // El nombre y el título de un trabajo van y vienen (job-form precarga el título con el nombre, y
     // "Volver al taller: <título>" arma un nombre), así que tienen el mismo tope, holgado.
     // lastDoneKmEstimated dice que lastDoneKm se estimó con las lecturas (un trabajo sin km); falta en los viejos.
+    // baseKm y baseDate son la "última vez" que carga el dueño; lastDone*, lastDoneJobId y completedByJobId son la
+    // proyección que sale de los trabajos aprobados (lastDoneJobId: el trabajo que manda; completedByJobId: el que
+    // cumplió un recordatorio de una vez). Todos faltan en lo que escribe la versión anterior de la PWA.
     function validRule(d) {
       return d.keys().hasOnly([
-          'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'lastDoneKm',
-          'lastDoneKmEstimated', 'lastDoneDate', 'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
+          'carId', 'name', 'intervalKm', 'intervalTime', 'intervalMonths', 'repeat', 'baseKm', 'baseDate',
+          'lastDoneKm', 'lastDoneKmEstimated', 'lastDoneDate', 'lastDoneJobId', 'completedByJobId',
+          'warnKm', 'warnDays', 'lastNotifiedAt', 'lastNotifiedStatus'])
         && optText(d, 'carId', 100) && optText(d, 'name', 500)
         && optNum(d, 'intervalKm') && optInterval(d, 'intervalTime') && optNum(d, 'intervalMonths')
-        && optBool(d, 'repeat') && optNum(d, 'lastDoneKm') && optBool(d, 'lastDoneKmEstimated')
-        && optText(d, 'lastDoneDate', 30)
+        && optBool(d, 'repeat') && optNum(d, 'baseKm') && optText(d, 'baseDate', 30)
+        && optNum(d, 'lastDoneKm') && optBool(d, 'lastDoneKmEstimated') && optText(d, 'lastDoneDate', 30)
+        && optText(d, 'lastDoneJobId', 100) && optText(d, 'completedByJobId', 100)
         && optNum(d, 'warnKm') && optNum(d, 'warnDays')
         && optTime(d, 'lastNotifiedAt') && optText(d, 'lastNotifiedStatus', 20);
     }

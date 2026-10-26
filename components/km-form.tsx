@@ -34,7 +34,7 @@ export function KmForm({
   inputRef?: React.RefObject<HTMLInputElement | null>
   autoFocus?: boolean
 }) {
-  const { actor, odometer, rules, today } = useData()
+  const { actor, odometer, rulesByCar, today } = useData()
   const [value, setValue] = useState('')
   const [date, setDate] = useState(today)
   const [step, setStep] = useState<'enter' | 'confirm'>('enter')
@@ -71,7 +71,8 @@ export function KmForm({
       status = await settle(recordKm(actor, car, odometer, km, day))
     })
     if (!ok) return setStep('enter')
-    const next = rulesWithState(rules.filter(r => r.carId === car.id), { ...car, currentKm: Math.max(km, car.currentKm) }, today)[0]
+    const active = (rulesByCar.get(car.id) ?? []).map(r => r.rule)
+    const next = rulesWithState(active, { ...car, currentKm: Math.max(km, car.currentKm) }, today)[0]
     toastSaved(`${formatKm(km)} guardados`, status, next ? summarizeRule(next.rule.name, next.state) : carName(car))
     onDone()
   }

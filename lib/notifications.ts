@@ -1,5 +1,5 @@
 import { weekdayOf } from './dates'
-import { compareRuleStates, describeRemaining, getRuleState, type RuleState } from './maintenance'
+import { compareRuleStates, describeRemaining, getRuleState, isCompleted, type RuleState } from './maintenance'
 import type { Car, ISODate, MaintenanceRule, UserSettings } from './types'
 
 export interface PushPayload {
@@ -69,7 +69,8 @@ export function updatesToPersist(ruleUpdates: RuleNotificationUpdate[], delivere
 /**
  * Decide qué avisos mandar hoy a un usuario. Es pura para poder testearla;
  * el cron se encarga de leer Firestore, enviar y persistir las actualizaciones.
- * Un mantenimiento que volvió a estar al día se limpia para que avise en el próximo ciclo. El pedido de
+ * Un recordatorio cumplido (`completedByJobId`) no se avisa: dejó de ser un mantenimiento activo. Un mantenimiento
+ * que volvió a estar al día se limpia para que avise en el próximo ciclo. El pedido de
  * km no se guarda en ningún lado, así que nunca se recorta: si no entra todo, los de varios autos van en
  * un solo mensaje (desde el inicio se cargan los km de cada uno) con lugar reservado. Si no entran todos
  * los avisos, van primero los vencidos y después los por vencer (los más urgentes antes).
@@ -100,7 +101,7 @@ export function planDailyNotifications(input: {
   const carById = new Map(cars.map(c => [c.id, c]))
   for (const rule of rules) {
     const car = carById.get(rule.carId)
-    if (!car) continue
+    if (!car || isCompleted(rule)) continue
     const state = getRuleState(rule, car, today)
 
     if (state.status !== 'soon' && state.status !== 'overdue') {

@@ -5,17 +5,25 @@ import {
   defaultWarnings,
   describeRemaining,
   describeRuleInterval,
+  activeRules,
+  describeProjectionChange,
   formatLastDoneKm,
   getRuleState,
+  isCompleted,
+  jobChangeDiff,
   jobDoneKm,
-  jobRuleUpdates,
   kmRulesOf,
   missingLastKm,
+  projectionDiff,
+  projectionPatch,
+  projectRule,
   summarizeRule,
+  type ProjectionJob,
 } from './maintenance'
+import { formatDate } from './format'
 import { linkedReadingId, readingDateOf } from './odometer'
 import { intervalFromDoc } from './parse'
-import type { Job, MaintenanceRule, TimeInterval } from './types'
+import type { MaintenanceRule, TimeInterval } from './types'
 
 const months = (amount: number): TimeInterval => ({ amount, unit: 'month' })
 const base = { warnKm: 500, warnDays: 30 }
@@ -28,9 +36,13 @@ const mrule = (id: string, extra: Partial<MaintenanceRule> = {}): MaintenanceRul
   intervalKm: 5000,
   intervalTime: months(12),
   repeat: true,
+  baseKm: 30_000,
+  baseDate: '2025-06-01',
   lastDoneKm: 30_000,
   lastDoneKmEstimated: false,
   lastDoneDate: '2025-06-01',
+  lastDoneJobId: null,
+  completedByJobId: null,
   warnKm: 500,
   warnDays: 30,
   lastNotifiedAt: null,
@@ -40,65 +52,271 @@ const mrule = (id: string, extra: Partial<MaintenanceRule> = {}): MaintenanceRul
 
 const odo = (id: string, km: number, date: string, carId = 'c1') => ({ id, carId, km, date: readingDateOf(date) })
 
-const work = (extra: Partial<Pick<Job, 'id' | 'carId' | 'date' | 'km' | 'ruleIds'>> = {}) => ({
+const work = (extra: Partial<ProjectionJob> = {}): ProjectionJob => ({
   id: 'j1',
   carId: 'c1',
   date: '2026-02-01',
-  km: null as number | null,
+  km: null,
   ruleIds: ['s'],
+  status: 'approved',
+  createdAt: new Date('2026-02-01T10:00:00'),
   ...extra,
 })
 
 /** 01/01 con 40.000 km y 01/03 con 46.000 km. */
 const series = [odo('a', 40_000, '2026-01-01'), odo('b', 46_000, '2026-03-01')]
 
-describe('jobRuleUpdates', () => {
-  it('un trabajo del 01/02 sin km, con lecturas de 40.000 (01/01) y 46.000 (01/03), marca el service con ≈43.000 km, estimado', () => {
-    expect(jobRuleUpdates([mrule('s')], work(), series)).toEqual([
-      { ruleId: 's', action: 'update', lastDoneKm: 43_153, lastDoneKmEstimated: true, lastDoneDate: '2026-02-01' },
-    ])
+const fromBase = (rule: MaintenanceRule) => ({
+  lastDoneKm: rule.baseKm,
+  lastDoneDate: rule.baseDate,
+  lastDoneKmEstimated: false,
+  lastDoneJobId: null,
+  completedByJobId: null,
+})
+
+/** Los mantenimientos después de escribir los cambios, como los vería la app en la próxima foto. */
+const applied = (rules: MaintenanceRule[], changes: { ruleId: string; patch: object }[]) =>
+  rules.map(r => ({ ...r, ...changes.find(c => c.ruleId === r.id)?.patch }))
+
+describe('projectRule', () => {
+  it('sin trabajos, la base', () => {
+    const rule = mrule('s')
+    expect(projectRule(rule, [], series)).toEqual(fromBase(rule))
   })
-  it('con km usa el del trabajo y no es estimado', () => {
-    expect(jobRuleUpdates([mrule('s')], work({ km: 42_000 }), series)).toEqual([
-      { ruleId: 's', action: 'update', lastDoneKm: 42_000, lastDoneKmEstimated: false, lastDoneDate: '2026-02-01' },
-    ])
+  it('un trabajo más nuevo que la base manda, con su km y su fecha', () => {
+    expect(projectRule(mrule('s'), [work({ km: 42_000 })], series)).toEqual({
+      lastDoneKm: 42_000,
+      lastDoneDate: '2026-02-01',
+      lastDoneKmEstimated: false,
+      lastDoneJobId: 'j1',
+      completedByJobId: null,
+    })
   })
-  it('nunca usa el km de hoy: un trabajo de hace 2 meses aprobado hoy toma el km de esa fecha', () => {
+  it('un trabajo del 01/02 sin km, con lecturas de 40.000 (01/01) y 46.000 (01/03), da ≈43.000 km estimado', () => {
+    expect(projectRule(mrule('s'), [work()], series)).toMatchObject({ lastDoneKm: 43_153, lastDoneKmEstimated: true, lastDoneJobId: 'j1' })
+  })
+  it('un trabajo más viejo que la base no cuenta', () => {
+    const rule = mrule('s', { baseDate: '2026-02-10', lastDoneDate: '2026-02-10' })
+    expect(projectRule(rule, [work({ km: 42_000 })], series)).toEqual(fromBase(rule))
+  })
+  it('un trabajo de la misma fecha que la base le gana', () => {
+    expect(projectRule(mrule('s', { baseDate: '2026-02-01' }), [work({ km: 43_500 })], series)).toMatchObject({
+      lastDoneKm: 43_500,
+      lastDoneJobId: 'j1',
+    })
+  })
+  it('entre dos trabajos de la misma fecha manda el cargado después (createdAt)', () => {
+    const first = work({ id: 'j1', km: 42_000, createdAt: new Date('2026-02-01T09:00:00') })
+    const second = work({ id: 'j2', km: 42_100, createdAt: new Date('2026-02-01T18:00:00') })
+    expect(projectRule(mrule('s'), [second, first], series)).toMatchObject({ lastDoneKm: 42_100, lastDoneJobId: 'j2' })
+    expect(projectRule(mrule('s'), [first, second], series)).toMatchObject({ lastDoneJobId: 'j2' })
+  })
+  it('manda el más reciente aunque se haya cargado antes', () => {
+    const recent = work({ id: 'j1', date: '2026-02-20', km: 44_000, createdAt: new Date('2026-02-20T10:00:00') })
+    const older = work({ id: 'j2', date: '2026-02-01', km: 42_000, createdAt: new Date('2026-03-01T10:00:00') })
+    expect(projectRule(mrule('s'), [recent, older], series)).toMatchObject({ lastDoneDate: '2026-02-20', lastDoneJobId: 'j1' })
+  })
+  it('ignora los trabajos pendientes y los rechazados', () => {
+    const rule = mrule('s')
+    const jobs = [work({ id: 'p', status: 'pending', km: 42_000 }), work({ id: 'r', status: 'rejected', km: 42_000 })]
+    expect(projectRule(rule, jobs, series)).toEqual(fromBase(rule))
+  })
+  it('un trabajo sin estado (viejo) cuenta como aprobado', () => {
+    expect(projectRule(mrule('s'), [work({ status: undefined, km: 42_000 })], series)).toMatchObject({ lastDoneJobId: 'j1' })
+  })
+  it('ignora los trabajos que no lo marcan y los de otro auto', () => {
+    const rule = mrule('s')
+    const jobs = [work({ ruleIds: ['otro'], km: 42_000 }), work({ id: 'x', carId: 'c2', km: 42_000 })]
+    expect(projectRule(rule, jobs, series)).toEqual(fromBase(rule))
+  })
+  it('corregir la fecha de un trabajo de 2027 a 2026 la toma: no queda la fecha futura', () => {
+    const rule = mrule('s', { lastDoneDate: '2027-02-01', lastDoneKm: 42_000, lastDoneJobId: 'j1' })
+    expect(projectRule(rule, [work({ date: '2026-02-01', km: 42_000 })], series)).toMatchObject({ lastDoneDate: '2026-02-01' })
+  })
+  it('nunca usa el km de hoy: un trabajo de hace 2 meses toma el km estimado a esa fecha', () => {
     const readings = [odo('a', 50_000, '2026-08-01'), odo('today', 60_000, '2026-10-20')]
-    const [u] = jobRuleUpdates([mrule('s')], work({ date: '2026-08-20' }), readings)
-    expect(u).toMatchObject({ action: 'update', lastDoneKm: 52_375, lastDoneKmEstimated: true, lastDoneDate: '2026-08-20' })
+    expect(projectRule(mrule('s'), [work({ date: '2026-08-20' })], readings)).toMatchObject({
+      lastDoneKm: 52_375,
+      lastDoneKmEstimated: true,
+      lastDoneDate: '2026-08-20',
+    })
   })
-  it('anterior a la primera lectura y sin km: deja la parte de km en null, sin marcarla estimada', () => {
-    expect(jobRuleUpdates([mrule('s')], work({ date: '2025-12-01' }), series)).toEqual([
-      { ruleId: 's', action: 'update', lastDoneKm: null, lastDoneKmEstimated: false, lastDoneDate: '2025-12-01' },
+  it('sin km y anterior a la primera lectura: la parte de km queda en null, sin marcarla estimada', () => {
+    expect(projectRule(mrule('s'), [work({ date: '2025-12-01' })], series)).toMatchObject({
+      lastDoneKm: null,
+      lastDoneKmEstimated: false,
+      lastDoneDate: '2025-12-01',
+    })
+  })
+  it('no cuenta la lectura del propio trabajo ni las de otro auto', () => {
+    const readings = [...series, odo(linkedReadingId('job', 'j1'), 99_999, '2026-02-01'), odo('x', 90_000, '2026-02-01', 'c2')]
+    expect(projectRule(mrule('s'), [work()], readings)).toMatchObject({ lastDoneKm: 43_153, lastDoneKmEstimated: true })
+  })
+  it('sin intervalo de km toma la fecha del trabajo y el km queda en null', () => {
+    const vtv = mrule('s', { intervalKm: null, baseKm: null, lastDoneKm: null })
+    expect(projectRule(vtv, [work({ km: 42_000 })], series)).toEqual({
+      lastDoneKm: null,
+      lastDoneDate: '2026-02-01',
+      lastDoneKmEstimated: false,
+      lastDoneJobId: 'j1',
+      completedByJobId: null,
+    })
+  })
+  it('un recordatorio de una vez queda cumplido por el trabajo y conserva su base', () => {
+    const once = mrule('s', { repeat: false, intervalKm: null, baseKm: null, baseDate: '2026-01-15', lastDoneDate: '2026-01-15' })
+    expect(projectRule(once, [work()], series)).toEqual({ ...fromBase(once), completedByJobId: 'j1' })
+  })
+  it('sin el trabajo que lo cumplió, el recordatorio vuelve a estar activo', () => {
+    const once = mrule('s', { repeat: false, intervalKm: null, baseKm: null, baseDate: '2026-01-15', completedByJobId: 'j1' })
+    expect(projectRule(once, [], series)).toEqual(fromBase(once))
+  })
+  it('con la base en null (la explicaba un trabajo), sin trabajos queda sin dato', () => {
+    const rule = mrule('s', { baseKm: null, baseDate: null })
+    expect(projectRule(rule, [work({ km: 42_000 })], series)).toMatchObject({ lastDoneDate: '2026-02-01', lastDoneKm: 42_000 })
+    expect(projectRule(rule, [], series)).toEqual({
+      lastDoneKm: null,
+      lastDoneDate: null,
+      lastDoneKmEstimated: false,
+      lastDoneJobId: null,
+      completedByJobId: null,
+    })
+  })
+})
+
+describe('projectionDiff', () => {
+  const jobs = [
+    work({ id: 'j1', km: 42_000, ruleIds: ['s', 'once'] }),
+    work({ id: 'j2', date: '2026-02-20', ruleIds: ['s'], createdAt: new Date('2026-02-20T10:00:00') }),
+  ]
+  const rules = [
+    mrule('s'),
+    mrule('vtv', { intervalKm: null, baseKm: null, lastDoneKm: null }),
+    mrule('once', { repeat: false, intervalKm: null, baseKm: null, baseDate: '2026-01-15', lastDoneDate: '2026-01-15' }),
+  ]
+
+  it('aplicar el diff y volver a calcular da vacío (idempotencia)', () => {
+    const changes = projectionDiff(rules, jobs, series)
+    expect(changes.map(c => c.ruleId)).toEqual(['s', 'once'])
+    expect(projectionDiff(applied(rules, changes), jobs, series)).toEqual([])
+  })
+  it('un mantenimiento al día no genera cambios', () => {
+    expect(projectionDiff([mrule('s')], [], series)).toEqual([])
+  })
+  it('si cambia la fecha o el cumplido, vuelve a avisar', () => {
+    const changes = projectionDiff(rules, jobs, series)
+    expect(changes.find(c => c.ruleId === 's')?.patch).toMatchObject({
+      lastDoneDate: '2026-02-20',
+      lastDoneKmEstimated: true,
+      lastDoneJobId: 'j2',
+      lastNotifiedAt: null,
+      lastNotifiedStatus: null,
+    })
+    expect(changes.find(c => c.ruleId === 'once')?.patch).toMatchObject({
+      completedByJobId: 'j1',
+      lastNotifiedAt: null,
+      lastNotifiedStatus: null,
+    })
+  })
+  it('un km estimado que se ajusta (otra lectura) se guarda sin volver a avisar', () => {
+    const stored = mrule('s', { lastDoneKm: 43_000, lastDoneKmEstimated: true, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+    const [change] = projectionDiff([stored], [work()], series)
+    expect(change.patch).toEqual({
+      lastDoneKm: 43_153,
+      lastDoneDate: '2026-02-01',
+      lastDoneKmEstimated: true,
+      lastDoneJobId: 'j1',
+      completedByJobId: null,
+    })
+  })
+  it('un estimado que pasa a ser el km del trabajo vuelve a avisar', () => {
+    const stored = mrule('s', { lastDoneKm: 43_153, lastDoneKmEstimated: true, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+    const [change] = projectionDiff([stored], [work({ km: 44_000 })], series)
+    expect(change.patch).toMatchObject({ lastDoneKm: 44_000, lastDoneKmEstimated: false, lastNotifiedAt: null })
+  })
+  it('si sólo cambia el trabajo que lo explica (misma fecha y km), no vuelve a avisar', () => {
+    const stored = mrule('s', { lastDoneKm: 42_000, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+    const other = work({ id: 'j2', km: 42_000, createdAt: new Date('2026-02-01T18:00:00') })
+    const [change] = projectionDiff([stored], [work({ km: 42_000 }), other], series)
+    expect(change.patch).not.toHaveProperty('lastNotifiedAt')
+    expect(change.patch.lastDoneJobId).toBe('j2')
+  })
+  it('en un mantenimiento sin intervalo de km, el km no hace volver a avisar', () => {
+    const stored = mrule('s', { intervalKm: null, lastDoneKm: 12_000, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+    const [change] = projectionDiff([stored], [work({ km: 42_000 })], series)
+    expect(change.patch).toEqual({ ...fromBase(stored), lastDoneKm: null, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+  })
+})
+
+describe('projectionPatch', () => {
+  it('null si la proyección guardada ya es la calculada', () => {
+    const rule = mrule('s')
+    expect(projectionPatch(rule, fromBase(rule))).toBeNull()
+  })
+  it('un km no estimado que cambia vuelve a avisar', () => {
+    expect(projectionPatch(mrule('s'), { ...fromBase(mrule('s')), lastDoneKm: 31_000 })).toMatchObject({ lastNotifiedStatus: null })
+  })
+})
+
+describe('jobChangeDiff', () => {
+  const older = work({ id: 'old', date: '2026-01-10', km: 40_500, createdAt: new Date('2026-01-10T10:00:00') })
+  const job = work({ id: 'j1', km: 42_000 })
+  const stored = mrule('s', { lastDoneKm: 42_000, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
+
+  it('le saco el mantenimiento a un trabajo aprobado y vuelve a su trabajo anterior', () => {
+    const changes = jobChangeDiff({ rules: [stored], jobs: [older, job], readings: series, before: job, after: { ...job, ruleIds: [] } })
+    expect(changes).toEqual([
+      {
+        ruleId: 's',
+        carId: 'c1',
+        patch: {
+          lastDoneKm: 40_500,
+          lastDoneDate: '2026-01-10',
+          lastDoneKmEstimated: false,
+          lastDoneJobId: 'old',
+          completedByJobId: null,
+          lastNotifiedAt: null,
+          lastNotifiedStatus: null,
+        },
+      },
     ])
   })
-  it('no cuenta la lectura del propio trabajo (se borra en el mismo batch si se le sacó el km)', () => {
-    const readings = [...series, odo(linkedReadingId('job', 'j1'), 99_999, '2026-02-01')]
-    const [u] = jobRuleUpdates([mrule('s')], work(), readings)
-    expect(u).toMatchObject({ lastDoneKm: 43_153, lastDoneKmEstimated: true })
+  it('borro un trabajo aprobado y vuelve a la base; "Deshacer" con los datos de antes lo deja como estaba', () => {
+    const removed = jobChangeDiff({ rules: [stored], jobs: [job], readings: series, before: job, after: null })
+    expect(removed[0].patch).toMatchObject(fromBase(stored))
+    const restored = jobChangeDiff({ rules: [stored], jobs: [job], readings: series, before: null, after: job })
+    expect(restored[0].patch).toMatchObject({ lastDoneKm: 42_000, lastDoneDate: '2026-02-01', lastDoneJobId: 'j1' })
   })
-  it('no mezcla lecturas de otro auto', () => {
-    const readings = [...series, odo('x', 90_000, '2026-02-01', 'c2')]
-    expect(jobRuleUpdates([mrule('s')], work(), readings)[0]).toMatchObject({ lastDoneKm: 43_153 })
+  it('rechazar un trabajo aprobado lo deja de contar', () => {
+    const changes = jobChangeDiff({ rules: [stored], jobs: [job], readings: series, before: job, after: { ...job, status: 'rejected' } })
+    expect(changes[0].patch).toMatchObject(fromBase(stored))
   })
-  it('los de una sola vez se borran', () => {
-    expect(jobRuleUpdates([mrule('s', { repeat: false })], work(), series)).toEqual([{ ruleId: 's', action: 'delete' }])
+  it('un trabajo pendiente no cambia nada', () => {
+    const pending = { ...job, status: 'pending' as const }
+    expect(jobChangeDiff({ rules: [mrule('s')], jobs: [], readings: series, before: null, after: pending })).toEqual([])
   })
-  it('no toca un mantenimiento hecho después del trabajo', () => {
-    expect(jobRuleUpdates([mrule('s', { lastDoneDate: '2026-02-10' })], work(), series)).toEqual([])
+  it('un recordatorio cumplido vuelve a estar activo si se borra el trabajo', () => {
+    const once = mrule('once', { repeat: false, intervalKm: null, baseKm: null, baseDate: '2026-01-15', completedByJobId: 'j1' })
+    const done = { ...job, ruleIds: ['once'] }
+    const [change] = jobChangeDiff({ rules: [once], jobs: [done], readings: series, before: done, after: null })
+    expect(change.patch).toMatchObject({ completedByJobId: null, lastNotifiedAt: null })
   })
-  it('el mismo día que la última vez sí lo reinicia', () => {
-    expect(jobRuleUpdates([mrule('s', { lastDoneDate: '2026-02-01' })], work({ km: 43_500 }), series)).toHaveLength(1)
+  it('ignora los mantenimientos que ya no existen', () => {
+    expect(jobChangeDiff({ rules: [], jobs: [job], readings: series, before: job, after: null })).toEqual([])
   })
-  it('sin intervalo de km conserva su km (y su marca de estimado)', () => {
-    const vtv = mrule('s', { intervalKm: null, lastDoneKm: 12_000, lastDoneKmEstimated: true })
-    expect(jobRuleUpdates([vtv], work(), series)).toEqual([
-      { ruleId: 's', action: 'update', lastDoneKm: 12_000, lastDoneKmEstimated: true, lastDoneDate: '2026-02-01' },
-    ])
+})
+
+describe('mantenimientos cumplidos', () => {
+  it('un cumplido no es activo', () => {
+    const rules = [mrule('a'), mrule('b', { repeat: false, completedByJobId: 'j1' })]
+    expect(isCompleted(rules[1])).toBe(true)
+    expect(activeRules(rules).map(r => r.id)).toEqual(['a'])
   })
-  it('ignora los mantenimientos que el trabajo no marcó', () => {
-    expect(jobRuleUpdates([mrule('s'), mrule('otro')], work(), series).map(u => u.ruleId)).toEqual(['s'])
+  it('describe cómo queda cada mantenimiento', () => {
+    const rule = mrule('s', { lastDoneDate: '2026-02-01' })
+    expect(describeProjectionChange(rule, fromBase(rule))).toBe(`Service vuelve a ${formatDate('2025-06-01')} · 30.000 km`)
+    expect(describeProjectionChange({ ...rule, repeat: false }, { ...fromBase(rule), completedByJobId: 'j1' })).toBe('Service queda cumplido')
+    expect(describeProjectionChange({ ...rule, repeat: false }, fromBase(rule))).toBe('Service vuelve a estar activo')
+    expect(describeProjectionChange(rule, { ...fromBase(rule), lastDoneDate: null })).toBe('Service queda sin la última vez')
   })
 })
 
@@ -226,6 +444,10 @@ describe('describeRemaining', () => {
   it('describe km y días', () => {
     const s = getRuleState(service, { currentKm: 14580, avgKmPerDay: null }, '2026-12-22')
     expect(describeRemaining(s)).toEqual({ km: 'faltan 420 km', date: 'vence en 19 días' })
+  })
+  it('justo en el km dice "llegó al km", no "pasado -0 km"', () => {
+    const s = getRuleState(service, { currentKm: 15000, avgKmPerDay: null }, '2026-12-22')
+    expect(describeRemaining(s).km).toBe('llegó al km')
   })
 })
 
