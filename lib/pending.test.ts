@@ -101,6 +101,7 @@ const job = (extra: Partial<Job> = {}): Job => ({
   notes: null,
   ruleIds: [],
   status: 'approved',
+  revision: 0,
   createdBy: OWNER,
   createdByName: 'Ana',
   createdAt: new Date(0),

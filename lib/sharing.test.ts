@@ -7,9 +7,11 @@ import {
   canEditJob,
   isCarOwner,
   isSharedCar,
+  jobEdit,
   memberError,
   mineForAchievements,
   normalizeEmail,
+  reviewAlreadyDone,
 } from './sharing'
 import type { Car, FuelLoad, Job, MaintenanceRule, OdometerReading } from './types'
 
@@ -48,6 +50,7 @@ const job = (extra: Partial<Job> = {}): Job => ({
   notes: null,
   ruleIds: [],
   status: 'approved',
+  revision: 0,
   createdBy: OWNER,
   createdByName: 'Ana',
   createdAt: new Date('2026-09-01T12:00:00'),
@@ -250,5 +253,46 @@ describe('mineForAchievements', () => {
     expect(mine.jobs.map(j => j.id)).toEqual(['j-other'])
     expect(mine.fuel.map(f => f.id)).toEqual(['f-other'])
     expect(mine.odometer.map(r => r.id)).toEqual(['o-other'])
+  })
+})
+
+describe('jobEdit', () => {
+  const pending = { status: 'pending' as const, revision: 2 }
+  const rejected = { status: 'rejected' as const, revision: 2 }
+  const approved = { status: 'approved' as const, revision: 2 }
+
+  it('sin cambios no escribe nada', () => {
+    expect(jobEdit(pending, {}, true)).toBeNull()
+    expect(jobEdit(approved, {}, false)).toBeNull()
+    expect(jobEdit(pending, {}, false)).toBeNull()
+  })
+  it('el miembro sube la revisión y no manda el estado si ya está pendiente', () => {
+    expect(jobEdit(pending, { km: 41_000 }, true)).toEqual({ km: 41_000, revision: 3 })
+  })
+  it('el miembro vuelve a mandar uno rechazado, aunque no le cambie nada', () => {
+    expect(jobEdit(rejected, {}, true)).toEqual({ status: 'pending', revision: 3 })
+    expect(jobEdit(rejected, { cost: 5 }, true)).toEqual({ cost: 5, status: 'pending', revision: 3 })
+  })
+  it('el dueño no toca la revisión de uno aprobado ni el estado', () => {
+    expect(jobEdit(approved, { title: 'Aceite' }, false)).toEqual({ title: 'Aceite' })
+    expect(jobEdit({ revision: 0 }, { title: 'Aceite' }, false)).toEqual({ title: 'Aceite' })
+  })
+  it('el dueño que corrige uno sin aprobar sube la revisión y no le cambia el estado', () => {
+    expect(jobEdit(pending, { km: 41_000 }, false)).toEqual({ km: 41_000, revision: 3 })
+    expect(jobEdit(rejected, { km: 41_000 }, false)).toEqual({ km: 41_000, revision: 3 })
+  })
+})
+
+describe('reviewAlreadyDone', () => {
+  it('aprobar o rechazar dos veces, o desde dos dispositivos, ya está hecho', () => {
+    expect(reviewAlreadyDone('approved', 'approved')).toBe(true)
+    expect(reviewAlreadyDone('rejected', 'rejected')).toBe(true)
+  })
+  it('si quedó de otra forma, el trabajo cambió', () => {
+    expect(reviewAlreadyDone('approved', 'pending')).toBe(false)
+    expect(reviewAlreadyDone('approved', 'rejected')).toBe(false)
+    expect(reviewAlreadyDone('rejected', 'approved')).toBe(false)
+    expect(reviewAlreadyDone('rejected', 'pending')).toBe(false)
+    expect(reviewAlreadyDone('approved', null)).toBe(false)
   })
 })

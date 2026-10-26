@@ -62,6 +62,10 @@ function ruleChangeLines(rules: MaintenanceRule[], changes: ReturnType<typeof jo
  * Aprobar o rechazar el trabajo que cargó un miembro (lo hace el dueño), con su confirmación. Aprobar recalcula los
  * mantenimientos con las lecturas que tiene la app en ese momento: si el trabajo no tiene km y marca un mantenimiento
  * por km, el km estimado a la fecha del trabajo. Cada acción devuelve true si se hizo.
+ * Se aprueba o se rechaza la versión que se mostró en la confirmación (`approveJob`, `rejectJob`): si el miembro la
+ * editó mientras tanto, falla con "El trabajo cambió mientras lo revisabas". Si ya estaba aprobado (o rechazado) desde
+ * otro dispositivo, cuenta como hecho. Si el rechazo de las reglas llega después de `settle` (sin conexión), el aviso
+ * sale en un toast "No se pudo aprobar" o "No se pudo rechazar".
  */
 export function useJobReview() {
   const confirm = useConfirm()
@@ -91,7 +95,7 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(approveJob(actor, ctx, job))
+      const status = await settle(approveJob(actor, ctx, job), 'No se pudo aprobar')
       toastSaved('Trabajo aprobado', status, job.title)
       return true
     } catch (e) {
@@ -110,7 +114,7 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job))
+      const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job), 'No se pudo rechazar')
       toastSaved('Trabajo rechazado', status, job.title)
       return true
     } catch (e) {
@@ -189,6 +193,8 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
  * el km estimado a la fecha (`jobDoneKm`) como sugerencia: el trabajo se guarda sin km y el mantenimiento toma ese
  * estimado marcado como tal. Sin estimación (fecha anterior a la primera lectura), el km es
  * obligatorio.
+ * Al guardar, los cambios se miden contra el trabajo como estaba al abrir el formulario (`original`): lo que otro
+ * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
  */
 function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
@@ -215,6 +221,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
   const [comeBack, setComeBack] = useState(false)
   const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
+  const [original] = useState(job)
 
   const kmNum = parseNumberInput(km)
   const kmRules = kmRulesOf(selectable, ruleIds)
@@ -304,7 +311,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveJob(actor, ctx, input, job, followUp))
+      status = await settle(saveJob(actor, ctx, input, original, followUp))
     })
     if (!ok) return
     const note = applies

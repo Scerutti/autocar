@@ -139,6 +139,12 @@ export interface Job extends Authorship {
   status?: JobStatus
   /** Cuándo el dueño aprobó o rechazó el trabajo de un miembro; null si nadie lo revisó. */
   reviewedAt?: Date | null
+  /**
+   * Versión del trabajo: arranca en 0 y sube en 1 cada vez que se edita uno que no está aprobado (`jobEdit`). El dueño
+   * aprueba o rechaza con la que vio y las reglas de Firestore lo deniegan si ya no es la guardada: así no aprueba una
+   * versión vieja. Un trabajo sin el campo (guardado por la versión 1.4.1 de la PWA o anterior) cuenta como 0.
+   */
+  revision: number
   createdAt: Date
 }
 

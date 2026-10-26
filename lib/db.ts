@@ -6,6 +6,7 @@ import {
   collection,
   deleteField,
   doc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
@@ -22,10 +23,10 @@ import {
 } from 'firebase/firestore'
 import { firestore } from './firebase/client'
 import { toISODate } from './dates'
-import { defaultWarnings, jobChangeDiff, projectRule, type ProjectionChange } from './maintenance'
+import { defaultWarnings, jobChangeDiff, projectionPatch, projectRule, type ProjectionChange } from './maintenance'
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
-import { isApproved } from './sharing'
+import { isApproved, jobEdit, reviewAlreadyDone, type ReviewTarget } from './sharing'
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
@@ -41,6 +42,7 @@ import {
   type TimeInterval,
   type UserSettings,
 } from './types'
+import { changedFields, isUnchanged } from './utils'
 
 /**
  * Los ajustes, las suscripciones push y los logros cuelgan de users/{uid}. Cada auto es un documento de
@@ -154,6 +156,7 @@ function jobFrom(d: QueryDocumentSnapshot<DocumentData>): Job {
     ruleIds: Array.isArray(x.ruleIds) ? x.ruleIds : [],
     status: statusFrom(x.status),
     reviewedAt: toDate(x.reviewedAt),
+    revision: num(x.revision) ?? 0,
     createdBy: str(x.createdBy),
     createdByName: str(x.createdByName),
     createdAt: toDate(x.createdAt) ?? new Date(0),
@@ -644,16 +647,30 @@ export type RuleInput = Pick<
 export type ProjectionContext = { jobs: Job[]; readings: OdometerReading[] }
 
 /**
+ * Cómo terminó un guardado: `unchanged` si al editar no había nada distinto y no se escribió nada. `settle`
+ * (lib/use-saver.ts) lo pasa a `SaveStatus`, y `toastSaved` dice "Sin cambios".
+ */
+export type WriteOutcome = 'saved' | 'unchanged'
+
+/**
  * Guarda un mantenimiento: lo declarado (`RuleInput`) más su proyección, calculada con la base nueva y los trabajos
  * aprobados que tiene la app (`projectRule`). Nunca escribe una "última vez" que venga del formulario. Al crear,
- * escribe el documento completo. Al editar, sólo lo declarado y la proyección (`update`): no reescribe el documento,
- * así no pisa lo que no maneja el formulario, y borra `intervalMonths` (el formato viejo del intervalo, que
- * `intervalFromDoc` leería si el intervalo de tiempo queda vacío). Siempre resetea el aviso para que vuelva a
- * notificar con los datos nuevos. Si otro dispositivo aprobó un trabajo que la app todavía no tiene, la
+ * escribe el documento completo y resetea el aviso.
+ * Al editar (`existing`, el mantenimiento como lo abrió el formulario, con la proyección en memoria) hace `update` sólo
+ * de lo que cambió, así no pisa lo que otro dispositivo cambió mientras tanto en otros campos:
+ * - De lo declarado, los campos distintos (`changedFields`). Si cambió alguno, resetea el aviso para que vuelva a
+ *   notificar con los datos nuevos. Si cambió el intervalo de tiempo, borra `intervalMonths` (el formato viejo, que
+ *   `intervalFromDoc` leería si el intervalo queda vacío).
+ * - La proyección, sólo si no es la que tiene la app (`projectionPatch`, que dice si vuelve a avisar).
+ * - La base (`baseKm` y `baseDate`) va siempre junta y con la proyección: un documento sin `baseDate` (de la versión
+ *   anterior de la PWA) toma la base de `lastDone*` (`ruleFrom`), así que escribir uno solo, o la proyección sin la
+ *   base, cambiaría la base que se lee.
+ * Si no cambió nada, no escribe y devuelve `unchanged`. Si el mantenimiento se borró en otro dispositivo, el `update`
+ * falla con `not-found` y no lo vuelve a crear. Si otro dispositivo aprobó un trabajo que la app todavía no tiene, la
  * reconciliación de `DataProvider` corrige la proyección cuando llega.
  */
-export async function saveRule(actor: Actor, ctx: ProjectionContext, data: RuleInput, ruleId?: string) {
-  const id = ruleId ?? newChildId(data.carId, 'rules')
+export async function saveRule(actor: Actor, ctx: ProjectionContext, data: RuleInput, existing?: MaintenanceRule): Promise<WriteOutcome> {
+  const id = existing?.id ?? newChildId(data.carId, 'rules')
   const declared: RuleInput = {
     carId: data.carId,
     name: data.name,
@@ -665,18 +682,26 @@ export async function saveRule(actor: Actor, ctx: ProjectionContext, data: RuleI
     warnKm: data.warnKm,
     warnDays: data.warnDays,
   }
-  const fields = {
-    ...declared,
-    ...projectRule({ ...declared, id }, ctx.jobs, ctx.readings),
-    lastNotifiedAt: null,
-    lastNotifiedStatus: null,
-  }
+  const projection = projectRule({ ...declared, id }, ctx.jobs, ctx.readings)
   const ref = doc(carCol(data.carId, 'rules'), id)
   const batch = writeBatch(firestore())
-  if (ruleId) batch.update(ref, { ...fields, intervalMonths: deleteField() })
-  else batch.set(ref, fields)
+  if (!existing) {
+    batch.set(ref, { ...declared, ...projection, lastNotifiedAt: null, lastNotifiedStatus: null })
+  } else {
+    const changed = changedFields(existing, declared)
+    const patch = projectionPatch(existing, projection)
+    if (isUnchanged(changed) && !patch) return 'unchanged'
+    const base = 'baseKm' in changed || 'baseDate' in changed || patch ? { baseKm: declared.baseKm, baseDate: declared.baseDate } : {}
+    batch.update(ref, {
+      ...changed,
+      ...base,
+      ...patch,
+      ...(isUnchanged(changed) ? {} : { lastNotifiedAt: null, lastNotifiedStatus: null }),
+      ...('intervalTime' in changed ? { intervalMonths: deleteField() } : {}),
+    })
+  }
   await batch.commit()
-  return id
+  return 'saved'
 }
 
 /**
@@ -708,7 +733,7 @@ export async function restoreRule(actor: Actor, rule: MaintenanceRule) {
   })
 }
 
-export type JobInput = Omit<Job, 'id' | 'createdAt' | 'createdBy' | 'createdByName' | 'status' | 'reviewedAt'>
+export type JobInput = Omit<Job, 'id' | 'createdAt' | 'createdBy' | 'createdByName' | 'status' | 'reviewedAt' | 'revision'>
 
 /** "Volver al taller en…": recordatorio de una sola vez que se crea junto con un trabajo. */
 export interface FollowUp {
@@ -726,13 +751,18 @@ type JobContext = KmContext & ProjectionContext & { rules: MaintenanceRule[] }
  * El camino único para crear, editar, aprobar, rechazar, borrar y restaurar un trabajo: pasa de `before` a `after`
  * (null = no existe). `writeJob` escribe el documento del trabajo (y lo que va con él) en el batch del trabajo.
  * - La lectura de km del trabajo (`job-{id}`) va en ese mismo batch (`writeLinkedReading`): si queda aprobado, se
- *   escribe a nombre de su autor (o se borra si no tiene km); si estaba aprobado y deja de estarlo, se borra.
+ *   escribe a nombre de su autor (o se borra si no tiene km); si estaba aprobado y deja de estarlo, se borra. Si
+ *   estaba aprobado, sigue aprobado y no le cambió ni el km ni la fecha, no se toca.
  * - Los mantenimientos que marca antes o después se recalculan con `jobChangeDiff` y se escriben sólo los que cambian,
  *   cada uno en su propio batch: si alguno ya no existe (borrado en otro dispositivo) su update falla, y en un solo
  *   batch eso tiraba abajo también el trabajo.
- * Se commitea primero el trabajo (Firestore respeta el orden) y los mantenimientos no se esperan: sin conexión
- * quedaría colgado. Si alguno falla, la reconciliación de `DataProvider` lo corrige en la próxima carga confirmada por
- * el servidor. Ningún trabajo borra un mantenimiento: los de una sola vez quedan cumplidos (`completedByJobId`).
+ * Los batches de los mantenimientos se commitean recién cuando el servidor confirma el del trabajo: si las reglas lo
+ * rechazan (una aprobación de una versión vieja) o el trabajo se borró en otro dispositivo, el batch del trabajo se
+ * deshace entero (también la lectura) y los mantenimientos no quedan reiniciados con un trabajo que no se guardó. Sin
+ * conexión quedan para cuando llegue la confirmación, y si la app se cierra antes no se escriben. Mientras tanto la
+ * pantalla muestra la proyección en memoria (`DataProvider`), y la reconciliación de `DataProvider` escribe lo que haya
+ * faltado o fallado en la próxima carga confirmada por el servidor. La promesa espera sólo el batch del trabajo.
+ * Ningún trabajo borra un mantenimiento: los de una sola vez quedan cumplidos (`completedByJobId`).
  */
 async function applyJobChange(
   actor: Actor,
@@ -748,45 +778,77 @@ async function applyJobChange(
   const link: ReadingLink = { source: 'job', sourceId: job.id }
   let readingsAfter: OdometerReading[] = ctx.readings
   if (after && isApproved(after)) {
-    readingsAfter = writeLinkedReading(jobBatch, ctx, link, { date: after.date, km: after.km, author: authorOf(after, actor) })
+    const moved = !before || !isApproved(before) || before.km !== after.km || before.date !== after.date
+    if (moved) readingsAfter = writeLinkedReading(jobBatch, ctx, link, { date: after.date, km: after.km, author: authorOf(after, actor) })
   } else if (before && isApproved(before)) {
     readingsAfter = writeLinkedReading(jobBatch, ctx, link, null)
   }
   const changes = jobChangeDiff({ rules: ctx.rules, jobs: ctx.jobs, readings: ctx.readings, readingsAfter, before, after })
   const saved = jobBatch.commit()
-  for (const change of changes) {
-    const ruleBatch = writeBatch(firestore())
-    ruleBatch.update(doc(carCol(change.carId, 'rules'), change.ruleId), change.patch)
-    ruleBatch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', job.id, change.ruleId, e))
-  }
+  saved.then(
+    () => {
+      for (const change of changes) {
+        const ruleBatch = writeBatch(firestore())
+        ruleBatch.update(doc(carCol(change.carId, 'rules'), change.ruleId), change.patch)
+        ruleBatch.commit().catch(e => console.warn('No se actualizó un mantenimiento del trabajo', job.id, change.ruleId, e))
+      }
+    },
+    () => {},
+  )
   await saved
 }
 
 /**
- * Guarda un trabajo (`applyJobChange` desde `existing`, el trabajo como estaba). Si lo guarda el dueño, queda aprobado
- * y sus mantenimientos se recalculan; opcionalmente, agenda la vuelta al taller.
- * Si lo guarda un miembro, queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos
- * y el km quedan guardados en el trabajo y cuentan al aprobarlo (`approveJob`), así un trabajo rechazado no deja nada
- * mal cargado. Un miembro que edita su trabajo (pendiente o rechazado) lo vuelve a `pending`.
- * Al crearlo se graba quién lo cargó; al editarlo no se toca. El dueño que edita un trabajo de un miembro sin
- * aprobar no le cambia el estado: cuenta al aprobarlo.
+ * Guarda un trabajo (`applyJobChange` desde `existing`, el trabajo como estaba).
+ * - Al crearlo, `set` del documento completo con quién lo cargó y `revision: 0`. Si lo crea el dueño queda aprobado
+ *   y sus mantenimientos se recalculan; opcionalmente, agenda la vuelta al taller (`followUp`, sólo al crear). Si lo
+ *   crea un miembro queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos y el km
+ *   quedan guardados en el trabajo y cuentan al aprobarlo (`approveJob`), así un trabajo rechazado no deja nada mal
+ *   cargado.
+ * - Al editarlo, `update` sólo de los campos que cambiaron (`changedFields`) contra `existing`, el trabajo como lo
+ *   abrió el formulario: así no pisa lo que otro dispositivo cambió mientras tanto en otros campos. Suma el estado y
+ *   la revisión que dice `jobEdit` con el trabajo como lo tiene la app ahora (`ctx.jobs`; si no está, `existing`):
+ *   el miembro lo vuelve a `pending` y sube `revision`; el dueño no le cambia el estado. Los efectos (lectura y
+ *   mantenimientos) también salen del trabajo actual con los cambios. No toca quién lo cargó. Si no cambió nada, no
+ *   escribe nada (ni el trabajo, ni su lectura, ni los mantenimientos) y devuelve `unchanged`. Si el trabajo se borró
+ *   en otro dispositivo, el `update` falla con `not-found` y no lo vuelve a crear.
  */
-export async function saveJob(actor: Actor, ctx: JobContext, data: JobInput, existing?: Job, followUp?: FollowUp | null) {
+export async function saveJob(
+  actor: Actor,
+  ctx: JobContext,
+  data: JobInput,
+  existing?: Job,
+  followUp?: FollowUp | null,
+): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const member = ctx.car.ownerUid !== actor.uid
-  const id = existing?.id ?? newChildId(carId, 'jobs')
-  const status: JobStatus = member ? 'pending' : (existing?.status ?? 'approved')
-  const now = new Date()
-  const created = existing ? {} : { createdAt: Timestamp.fromDate(now), createdBy: actor.uid, createdByName: actor.name }
-  const statusField = member || !existing ? { status } : {}
-  const after: Job = {
-    ...(existing ?? { createdAt: now, createdBy: actor.uid, createdByName: actor.name, reviewedAt: null }),
-    ...data,
-    id,
-    status,
+  if (existing) {
+    const current = ctx.jobs.find(j => j.id === existing.id) ?? existing
+    const changes = changedFields(existing, data)
+    const update = jobEdit(current, changes, member)
+    if (!update) return 'unchanged'
+    const after: Job = {
+      ...current,
+      ...changes,
+      status: update.status ?? current.status,
+      revision: update.revision ?? current.revision,
+    }
+    await applyJobChange(actor, ctx, current, after, batch => batch.update(doc(carCol(carId, 'jobs'), current.id), update))
+    return 'saved'
   }
-  await applyJobChange(actor, ctx, existing ?? null, after, batch => {
-    batch.set(doc(carCol(carId, 'jobs'), id), { ...data, ...created, ...statusField }, { merge: true })
+  const id = newChildId(carId, 'jobs')
+  const status: JobStatus = member ? 'pending' : 'approved'
+  const now = new Date()
+  const after: Job = { ...data, id, status, reviewedAt: null, revision: 0, createdAt: now, createdBy: actor.uid, createdByName: actor.name }
+  await applyJobChange(actor, ctx, null, after, batch => {
+    batch.set(doc(carCol(carId, 'jobs'), id), {
+      ...data,
+      status,
+      revision: 0,
+      createdAt: Timestamp.fromDate(now),
+      createdBy: actor.uid,
+      createdByName: actor.name,
+    })
     if (!followUp || status !== 'approved') return
     batch.set(doc(carCol(carId, 'rules')), {
       carId,
@@ -806,31 +868,53 @@ export async function saveJob(actor: Actor, ctx: JobContext, data: JobInput, exi
       lastNotifiedStatus: null,
     })
   })
-  return id
+  return 'saved'
+}
+
+/** Lo que dice el error cuando el dueño aprueba o rechaza una versión del trabajo que ya no es la guardada. */
+export const REVIEW_CHANGED = 'El trabajo cambió mientras lo revisabas. Miralo de nuevo.'
+
+/**
+ * El dueño aprueba o rechaza un trabajo (`applyJobChange`): `update` del estado, `reviewedAt` y la `revision` que vio
+ * (la de `job`). Las reglas sólo lo aceptan si el trabajo estaba pendiente (o, al rechazar, aprobado) y su revisión es
+ * esa. Si lo rechazan (`permission-denied`), el batch del trabajo se deshace entero y los mantenimientos no se
+ * escriben; entonces lee el trabajo en el servidor: si ya quedó en `target` (aprobado o rechazado dos veces, o desde
+ * dos dispositivos: `reviewAlreadyDone`) termina bien, sin aplicar nada de nuevo; si no, falla con `REVIEW_CHANGED`.
+ * Si tampoco lo puede leer, falla con el error original. Se lee el servidor y no los datos de la app porque, cuando
+ * llega el rechazo, la caché puede no tener todavía la versión que lo causó (otro dispositivo, o la app sin conexión).
+ */
+async function reviewJob(actor: Actor, ctx: JobContext, job: Job, target: ReviewTarget) {
+  const reviewedAt = new Date()
+  const ref = doc(carCol(job.carId, 'jobs'), job.id)
+  try {
+    await applyJobChange(actor, ctx, job, { ...job, status: target, reviewedAt }, batch =>
+      batch.update(ref, { status: target, reviewedAt: Timestamp.fromDate(reviewedAt), revision: job.revision }),
+    )
+  } catch (e) {
+    if ((e as { code?: string }).code !== 'permission-denied') throw e
+    const snap = await getDocFromServer(ref).catch(() => null)
+    if (!snap) throw e
+    if (reviewAlreadyDone(target, snap.exists() ? statusFrom(snap.get('status')) : null)) return
+    throw new Error(REVIEW_CHANGED)
+  }
 }
 
 /**
- * El dueño aprueba el trabajo de un miembro: pasa a `approved` con `reviewedAt` y sus mantenimientos se recalculan
- * con las lecturas que tiene la app del dueño en ese momento: el km del trabajo o, si no tiene, el estimado a la fecha
- * del trabajo (nunca el km de hoy). La lectura de km queda a nombre de quien cargó el trabajo.
+ * El dueño aprueba el trabajo de un miembro (`reviewJob`): pasa a `approved` con `reviewedAt` y sus mantenimientos se
+ * recalculan con las lecturas que tiene la app del dueño en ese momento: el km del trabajo o, si no tiene, el estimado
+ * a la fecha del trabajo (nunca el km de hoy). La lectura de km queda a nombre de quien cargó el trabajo.
  */
 export async function approveJob(actor: Actor, ctx: JobContext, job: Job) {
-  const reviewedAt = new Date()
-  await applyJobChange(actor, ctx, job, { ...job, status: 'approved', reviewedAt }, batch =>
-    batch.update(doc(carCol(ctx.car.id, 'jobs'), job.id), { status: 'approved' satisfies JobStatus, reviewedAt: Timestamp.fromDate(reviewedAt) }),
-  )
+  await reviewJob(actor, ctx, job, 'approved')
 }
 
 /**
- * El dueño rechaza un trabajo: queda `rejected`, y quien lo cargó lo puede corregir o borrar. Si estaba aprobado, deja
- * de contar: se borra su lectura de km (se recalcula el km del auto) y sus mantenimientos vuelven a como estaban
- * antes de él.
+ * El dueño rechaza un trabajo (`reviewJob`): queda `rejected`, y quien lo cargó lo puede corregir o borrar. Si estaba
+ * aprobado, deja de contar: se borra su lectura de km (se recalcula el km del auto) y sus mantenimientos vuelven a como
+ * estaban antes de él.
  */
 export async function rejectJob(actor: Actor, ctx: JobContext, job: Job) {
-  const reviewedAt = new Date()
-  await applyJobChange(actor, ctx, job, { ...job, status: 'rejected', reviewedAt }, batch =>
-    batch.update(doc(carCol(job.carId, 'jobs'), job.id), { status: 'rejected' satisfies JobStatus, reviewedAt: Timestamp.fromDate(reviewedAt) }),
-  )
+  await reviewJob(actor, ctx, job, 'rejected')
 }
 
 /**
@@ -843,9 +927,9 @@ export async function deleteJob(actor: Actor, ctx: JobContext, job: Job) {
 }
 
 /**
- * Vuelve a crear un trabajo borrado ("Deshacer") con su autoría y estado originales y, si estaba aprobado, su lectura
- * de km y sus mantenimientos como estaban. `ctx` puede ser el de antes de borrarlo: `jobChangeDiff` compara sin el
- * trabajo contra con el trabajo.
+ * Vuelve a crear un trabajo borrado ("Deshacer") con su autoría, estado y revisión originales y, si estaba aprobado,
+ * su lectura de km y sus mantenimientos como estaban. `ctx` puede ser el de antes de borrarlo: `jobChangeDiff` compara
+ * sin el trabajo contra con el trabajo.
  */
 export async function restoreJob(actor: Actor, ctx: JobContext, job: Job) {
   const { id, createdAt, createdBy, createdByName, status, reviewedAt, ...data } = job
@@ -864,23 +948,30 @@ export type FuelInput = Omit<FuelLoad, 'id' | 'createdAt' | 'createdBy' | 'creat
 
 /**
  * Guarda una carga y, en el mismo batch, su lectura de km (`fuel-{id}`, `writeLinkedReading`): si tiene km la pone
- * o la corrige, y si se le sacó el km la borra. Al crearla se graba quién la cargó; al editarla (`existing`) no se
- * toca, y la lectura sigue a nombre de quien cargó la carga.
+ * o la corrige, y si se le sacó el km la borra.
+ * - Al crearla, `set` del documento completo con quién la cargó.
+ * - Al editarla (`existing`, la carga como la abrió el formulario), `update` sólo de los campos que cambiaron
+ *   (`changedFields`): dos dispositivos que cambian campos distintos no se pisan. No toca quién la cargó, y la lectura
+ *   sigue a su nombre; la lectura se escribe sólo si cambió el km o la fecha. Si no cambió nada, no escribe y devuelve
+ *   `unchanged`. Si la carga se borró en otro dispositivo, el `update` falla con `not-found` (el batch entero, también
+ *   la lectura) y no la vuelve a crear.
  */
-export async function saveFuel(
-  actor: Actor,
-  ctx: KmContext,
-  data: FuelInput,
-  existing?: Pick<FuelLoad, 'id' | 'createdBy' | 'createdByName'>,
-) {
+export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, existing?: FuelLoad): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const batch = writeBatch(firestore())
-  const id = existing?.id ?? newChildId(carId, 'fuel')
-  const created = existing ? {} : { createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name }
-  batch.set(doc(carCol(carId, 'fuel'), id), { ...data, ...created }, { merge: true })
-  writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, { date: data.date, km: data.km, author: authorOf(existing ?? {}, actor) })
+  const entry = { date: data.date, km: data.km, author: authorOf(existing ?? {}, actor) }
+  if (existing) {
+    const changes = changedFields(existing, data)
+    if (isUnchanged(changes)) return 'unchanged'
+    batch.update(doc(carCol(carId, 'fuel'), existing.id), changes)
+    if ('km' in changes || 'date' in changes) writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: existing.id }, entry)
+  } else {
+    const id = newChildId(carId, 'fuel')
+    batch.set(doc(carCol(carId, 'fuel'), id), { ...data, createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name })
+    writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, entry)
+  }
   await batch.commit()
-  return id
+  return 'saved'
 }
 
 /** Borra una carga con su lectura de km y recalcula el km del auto. */

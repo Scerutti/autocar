@@ -141,6 +141,8 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
  * formulario (`projectRule`): si un trabajo manda, se muestra "Según el trabajo «X» del dd/mm" con su km (estimado,
  * si el trabajo no tiene) y la base queda como dato secundario, que puede quedar vacío. Sin un trabajo que mande, la
  * fecha es obligatoria y, si es por km, también el km.
+ * Al guardar, los cambios se miden contra el mantenimiento como estaba al abrir el formulario (`original`): lo que otro
+ * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
  */
 function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const router = useRouter()
@@ -160,6 +162,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   const [warnKm, setWarnKm] = useState(rule ? String(rule.warnKm) : '')
   const [warnDays, setWarnDays] = useState(rule ? String(rule.warnDays) : '')
   const [pickerKey, setPickerKey] = useState(0)
+  const [original] = useState(rule)
 
   const kmInterval = parseNumberInput(intervalKm) || null
   const auto = defaultWarnings(kmInterval, intervalTime)
@@ -258,7 +261,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
 
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveRule(actor, { jobs, readings }, { ...draft, name: name.trim() }, rule?.id))
+      status = await settle(saveRule(actor, { jobs, readings }, { ...draft, name: name.trim() }, original))
     })
     if (!ok) return
     toastSaved(rule ? 'Mantenimiento guardado' : 'Mantenimiento agregado', status, nextText ? `${name.trim()}: te toca ${nextText}` : undefined)

@@ -1,4 +1,4 @@
-import type { Authorship, Car, FuelLoad, Job, MaintenanceRule, OdometerReading } from './types'
+import type { Authorship, Car, FuelLoad, Job, JobStatus, MaintenanceRule, OdometerReading } from './types'
 
 /** Cuántas personas, además del dueño, pueden tener un auto. */
 export const MAX_MEMBERS = 2
@@ -37,6 +37,35 @@ export function canEditJob(car: Pick<Car, 'ownerUid'>, uid: string, job: Pick<Jo
   if (isCarOwner(car, uid)) return true
   return authorOf(job, car) === uid && !isApproved(job)
 }
+
+/**
+ * Lo que se escribe al editar un trabajo (`update`), a partir de los campos que cambiaron (`changedFields`); null si no
+ * hay nada que escribir. El miembro lo vuelve a `pending` si no lo estaba (volver a mandar uno rechazado, aunque no le
+ * cambie nada) y siempre sube `revision` en 1: así el dueño no aprueba una versión que ya no es la última. El dueño no
+ * le cambia el estado; en uno que no está aprobado (el de un miembro, pendiente o rechazado) también sube `revision`,
+ * así otro dispositivo suyo no aprueba la versión de antes. En uno aprobado no la toca.
+ */
+export function jobEdit<T extends object>(job: Pick<Job, 'status' | 'revision'>, changes: T, member: boolean): (T & JobEditExtras) | null {
+  const resend = member && job.status !== 'pending'
+  if (!Object.keys(changes).length && !resend) return null
+  const extras: JobEditExtras = {}
+  if (resend) extras.status = 'pending'
+  if (member || !isApproved(job)) extras.revision = job.revision + 1
+  return { ...changes, ...extras }
+}
+
+/** Lo que `jobEdit` suma a los campos que cambiaron. */
+type JobEditExtras = { status?: JobStatus; revision?: number }
+
+/** Lo que el dueño quiere dejar en un trabajo al revisarlo. */
+export type ReviewTarget = Extract<JobStatus, 'approved' | 'rejected'>
+
+/**
+ * Si una revisión del dueño que las reglas rechazaron ya está hecha: el trabajo en el servidor (`current`; null si no
+ * existe) quedó como se quería, porque se aprobó o se rechazó dos veces, o desde dos dispositivos. Si no (el miembro lo
+ * editó, lo borró o lo revisó otro dispositivo de otra forma), el trabajo cambió mientras el dueño lo revisaba.
+ */
+export const reviewAlreadyDone = (target: ReviewTarget, current: JobStatus | null) => current === target
 
 /** "vos", el nombre de quien lo cargó o, si no lo tiene, "otra persona". */
 export function authorLabel(record: Authorship, car: Pick<Car, 'ownerUid' | 'ownerName'>, uid: string) {
