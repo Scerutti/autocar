@@ -106,7 +106,7 @@ export const CHAPTERS = [
       },
       { h: 'Pendientes' },
       { p: 'La campana de la parte superior junta todo lo que hay para hacer en los vehículos. El número indica cuántas cosas esperan atención. Al tocarla se abre la lista **Pendientes**; si no hay nada, muestra "Todo al día".' },
-      { fig: 'pendientes.jpg', caption: 'Lista de pendientes.', width: 150 },
+      { fig: 'pendientes.jpg', caption: 'Lista de pendientes.', width: 175 },
       {
         defs: [
           ['Cargar los km', 'Falta el kilometraje de la semana. El botón **Cargar** abre la ventana para registrarlo.'],
@@ -161,7 +161,7 @@ export const CHAPTERS = [
       { p: 'El valor tiene que encajar con los registros de antes y de después de esa fecha. Si no encaja, la aplicación lo indica: por ejemplo, "El 12 de mar de 2026 ya tenía 45.000 km: no puede ser menos".' },
       { h: 'Registros de km' },
       { p: 'Para ver todos los registros de un vehículo, tocarlo en la pantalla de inicio y abrir la pestaña **Km**. Muestra los kilómetros actuales, el uso promedio por semana, un gráfico y la lista **Registros de km**.' },
-      { fig: 'km-registros.jpg', caption: 'Pestaña Km de un vehículo.', width: 150 },
+      { fig: 'km-registros.jpg', caption: 'Registros de km de un vehículo.', width: 175 },
       {
         defs: [
           ['Carga manual', 'Kilometraje registrado con **Cargar km**. Se puede borrar con el ícono de papelera.'],
@@ -221,7 +221,6 @@ export const CHAPTERS = [
       { h: 'Recordatorios de una sola vez' },
       { p: 'Para un recordatorio que no se repite, como volver al taller para un control, elegir **Volver al taller** o, en **¿Se repite?**, seleccionar **No, una sola vez**. En ese caso se indica **¿Dentro de cuánto tiempo?** y **Desde cuándo se cuenta**.' },
       { p: 'Cuando se registra el trabajo que lo incluye, el recordatorio queda cumplido: deja de avisar y pasa a la sección **Cumplidos**, al final de la pestaña **Estado**. Tocar **Cumplidos** para desplegarla; cada uno indica con qué trabajo se cumplió. Si ese trabajo se borra, o se le quita el recordatorio, vuelve a estar activo.' },
-      { fig: 'cumplidos.jpg', caption: 'Sección Cumplidos de la pestaña Estado.', width: 175 },
       { h: 'Modificar o eliminar un mantenimiento' },
       { p: 'Tocar el mantenimiento en la pestaña **Estado**. Se abre con sus datos para modificarlos; al final de la pantalla se encuentra el botón **Borrar mantenimiento**. Borrar un mantenimiento no borra los trabajos ya registrados.' },
       { note: 'Solo el dueño del vehículo agrega, modifica o borra mantenimientos. Una persona invitada los ve, pero no los puede cambiar.' },
@@ -320,7 +319,6 @@ export const CHAPTERS = [
           'Confirmar con **Sí, aprobar** o **Sí, rechazar**.',
         ],
       },
-      { fig: 'aprobar.jpg', caption: 'Trabajo pendiente de aprobación.', width: 175 },
       { p: 'Un trabajo rechazado queda con la etiqueta **Rechazado**. Quien lo cargó lo puede corregir y tocar **Volver a mandar**, o borrarlo. Si la persona corrige el trabajo mientras el dueño lo está revisando, la aplicación avisa que cambió para que se revise de nuevo.' },
       { h: 'Salir de un vehículo compartido' },
       { p: 'La persona invitada puede dejar de ver el vehículo con el botón **Salir de este auto**, en la pantalla del vehículo, y confirmar con **Sí, salir**. Lo que cargó queda en el historial. Para volver, el dueño la tiene que agregar de nuevo.' },
