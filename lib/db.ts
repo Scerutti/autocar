@@ -6,11 +6,13 @@ import {
   collection,
   deleteField,
   doc,
+  getDoc,
   getDocFromServer,
   getDocs,
   onSnapshot,
   query,
   runTransaction,
+  serverTimestamp,
   setDoc,
   Timestamp,
   where,
@@ -26,7 +28,18 @@ import { toISODate } from './dates'
 import { defaultWarnings, jobChangeDiff, projectionPatch, projectRule, type ProjectionChange } from './maintenance'
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
-import { isApproved, jobEdit, reviewAlreadyDone, type ReviewTarget } from './sharing'
+import {
+  canonicalEmail,
+  INVITE_DAYS,
+  inviteCarLabel,
+  inviteId,
+  isApproved,
+  jobEdit,
+  normalizeEmail,
+  reviewAlreadyDone,
+  type CarMember,
+  type ReviewTarget,
+} from './sharing'
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
@@ -34,10 +47,13 @@ import {
   type AchievementRecord,
   type Car,
   type FuelLoad,
+  type Invite,
+  type InviteStatus,
   type ISODate,
   type Job,
   type JobStatus,
   type MaintenanceRule,
+  type MemberProfile,
   type OdometerReading,
   type TimeInterval,
   type UserSettings,
@@ -54,6 +70,8 @@ const userCol = (uid: string, name: UserCollectionName) => collection(firestore(
 const carsCol = () => collection(firestore(), 'cars')
 const carDoc = (carId: string) => doc(carsCol(), carId)
 const carCol = (carId: string, name: RelatedName) => collection(firestore(), 'cars', carId, name)
+const invitesCol = () => collection(firestore(), 'invites')
+const inviteDoc = (id: string) => doc(invitesCol(), id)
 
 type UserCollectionName = 'pushSubscriptions' | 'achievements'
 type RelatedName = 'rules' | 'jobs' | 'fuel' | 'odometer'
@@ -87,6 +105,20 @@ function toDate(v: unknown): Date | null {
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((m: unknown): m is string => typeof m === 'string') : [])
+
+/** Perfiles de los miembros (`memberProfiles`): se descarta lo que no es un mapa. */
+function profilesFrom(v: unknown): Record<string, MemberProfile> {
+  if (!v || typeof v !== 'object') return {}
+  const out: Record<string, MemberProfile> = {}
+  for (const [uid, p] of Object.entries(v as Record<string, unknown>)) {
+    if (!p || typeof p !== 'object') continue
+    const x = p as Record<string, unknown>
+    out[uid] = { email: str(x.email) ?? '', name: str(x.name) }
+  }
+  return out
+}
+
 /** Un trabajo sin estado (guardado antes de compartir autos) cuenta como aprobado. */
 const statusFrom = (v: unknown): JobStatus => (v === 'pending' || v === 'rejected' ? v : 'approved')
 
@@ -108,7 +140,29 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     createdAt: toDate(x.createdAt) ?? new Date(0),
     ownerUid: str(x.ownerUid) ?? '',
     ownerName: str(x.ownerName),
-    members: Array.isArray(x.members) ? x.members.filter((m: unknown): m is string => typeof m === 'string') : [],
+    members: strings(x.members),
+    memberUids: strings(x.memberUids),
+    memberProfiles: profilesFrom(x.memberProfiles),
+  }
+}
+
+const INVITE_STATUSES: readonly InviteStatus[] = ['pending', 'accepted', 'declined', 'revoked']
+
+/** Una invitación como la usa la app. Un estado que no se conoce cuenta como cancelada. */
+function inviteFrom(id: string, x: DocumentData): Invite {
+  return {
+    id,
+    carId: x.carId ?? '',
+    ownerUid: x.ownerUid ?? '',
+    ownerName: str(x.ownerName),
+    carLabel: x.carLabel ?? '',
+    email: x.email ?? '',
+    emailKey: x.emailKey ?? '',
+    status: INVITE_STATUSES.includes(x.status) ? x.status : 'revoked',
+    createdAt: toDate(x.createdAt) ?? new Date(0),
+    expiresAt: toDate(x.expiresAt) ?? new Date(0),
+    respondedAt: toDate(x.respondedAt),
+    acceptedUid: str(x.acceptedUid),
   }
 }
 
@@ -217,6 +271,10 @@ export interface UserData {
   fuel: FuelLoad[]
   odometer: OdometerReading[]
   achievements: AchievementRecord[]
+  /** Las invitaciones que mandé como dueño, en cualquier estado. */
+  invites: Invite[]
+  /** Las invitaciones pendientes para mi mail (`emailKey`); pueden estar vencidas. */
+  myInvites: Invite[]
 }
 
 type Part = keyof UserData
@@ -235,7 +293,7 @@ interface CarListeners {
   fromCache: Partial<Record<RelatedName, boolean>>
 }
 
-/** Una de las dos consultas de autos (los míos y los compartidos conmigo), con su última foto. */
+/** Una de las tres consultas de autos (los míos, los compartidos por uid y por el mail viejo), con su última foto. */
 interface CarQuery {
   ready: boolean
   fromCache: boolean
@@ -247,11 +305,17 @@ interface CarQuery {
  * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
  * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
  *
- * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
- * compartieron (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la
- * unión, y sale cuando las dos entregaron su primera foto. Si la de compartidos falla con
- * `permission-denied` (la app publicada antes que las reglas nuevas), cuenta como "sin autos compartidos"
- * y no como un error. Cada auto abre 4 listeners propios, que se abren y se cierran cuando el auto aparece
+ * Los autos salen de tres consultas, las que pide la regla de lectura: los míos (`ownerUid`), los que me
+ * compartieron por invitación (`memberUids` contiene mi uid) y, hasta #66, los compartidos por el mail viejo
+ * (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la unión por id, y sale
+ * cuando las tres entregaron su primera foto. Si una de compartidos falla con `permission-denied` (la app publicada
+ * antes que las reglas nuevas), cuenta como "sin autos compartidos" y no como un error.
+ *
+ * Las invitaciones salen de dos consultas: las que mandé como dueño (`ownerUid`, parte `invites`) y las pendientes
+ * para mi mail canónico (`emailKey` y `status == 'pending'`, parte `myInvites`; sin `email`, vacía). Si fallan con
+ * `permission-denied` (reglas sin publicar), cuentan como vacías.
+ *
+ * Cada auto abre 4 listeners propios, que se abren y se cierran cuando el auto aparece
  * o desaparece. `onChange` sigue recibiendo una parte por colección: la de los mantenimientos, trabajos,
  * cargas y lecturas sale cuando todos los autos actuales entregaron su primera foto (enseguida si no hay
  * autos), y `fromCache` es true si alguna de esas fotos, o alguna de las consultas de autos, salió de la
@@ -350,11 +414,13 @@ export function subscribeUserData(
   }
 
   const owned: CarQuery = { ready: false, fromCache: true, docs: [] }
-  const shared: CarQuery = { ready: !email, fromCache: false, docs: [] }
+  const byUid: CarQuery = { ready: false, fromCache: true, docs: [] }
+  const byMail: CarQuery = { ready: !email, fromCache: false, docs: [] }
+  const carQueries = [owned, byUid, byMail]
 
   const publishCars = () => {
-    if (!owned.ready || !shared.ready) return
-    const byId = new Map([...owned.docs, ...shared.docs].map(d => [d.id, d]))
+    if (carQueries.some(q => !q.ready)) return
+    const byId = new Map(carQueries.flatMap(q => q.docs).map(d => [d.id, d]))
     const ids = [...byId.keys()]
     for (const [carId, entry] of perCar) {
       if (!ids.includes(carId)) dropCar(carId, entry)
@@ -362,7 +428,7 @@ export function subscribeUserData(
     for (const carId of revoked) if (!ids.includes(carId)) revoked.delete(carId)
     for (const carId of ids) if (!perCar.has(carId) && !revoked.has(carId)) listenCar(carId)
 
-    const fromCache = owned.fromCache || shared.fromCache
+    const fromCache = carQueries.some(q => q.fromCache)
     const idsKey = [...ids].sort().join(',')
     const changed = !carsReady || idsKey !== carIdsKey || fromCache !== carsFromCache
     carsReady = true
@@ -384,18 +450,43 @@ export function subscribeUserData(
       onFail,
     )
 
+  const sharedFailed = (target: CarQuery) => (e: Error) => {
+    if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
+    console.warn('No se pudieron leer los autos compartidos; se sigue sin ellos', e)
+    target.ready = true
+    target.fromCache = false
+    target.docs = []
+    publishCars()
+  }
+
   subs.push(listenCars(owned, query(carsCol(), where('ownerUid', '==', uid)), onError))
+  subs.push(listenCars(byUid, query(carsCol(), where('memberUids', 'array-contains', uid)), sharedFailed(byUid)))
+  if (email) {
+    subs.push(listenCars(byMail, query(carsCol(), where('members', 'array-contains', email)), sharedFailed(byMail)))
+  }
+
+  const listenInvites = (part: 'invites' | 'myInvites', q: Query<DocumentData>) =>
+    onSnapshot(
+      q,
+      snap =>
+        onChange({ [part]: snap.docs.map(d => inviteFrom(d.id, d.data())) } as Partial<UserData>, part, snap.metadata.fromCache),
+      e => {
+        if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
+        console.warn('No se pudieron leer las invitaciones; se sigue sin ellas', e)
+        onChange({ [part]: [] } as Partial<UserData>, part, false)
+      },
+    )
+
+  subs.push(listenInvites('invites', query(invitesCol(), where('ownerUid', '==', uid))))
   if (email) {
     subs.push(
-      listenCars(shared, query(carsCol(), where('members', 'array-contains', email)), e => {
-        if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
-        console.warn('No se pudieron leer los autos compartidos; se sigue sin ellos', e)
-        shared.ready = true
-        shared.fromCache = false
-        shared.docs = []
-        publishCars()
-      }),
+      listenInvites(
+        'myInvites',
+        query(invitesCol(), where('emailKey', '==', canonicalEmail(email)), where('status', '==', 'pending')),
+      ),
     )
+  } else {
+    onChange({ myInvites: [] }, 'myInvites', false)
   }
   return () => {
     subs.forEach(u => u())
@@ -552,7 +643,7 @@ export type CarInput = Pick<Car, 'brand' | 'model' | 'version' | 'year' | 'plate
   photoPublicId?: string | null
 }
 
-/** Crea el auto con su dueño (`members` arranca vacío) y la lectura inicial de km, en un mismo batch. */
+/** Crea el auto con su dueño (sin miembros) y la lectura inicial de km, en un mismo batch. */
 export async function createCar(actor: Actor, data: CarInput, initialKm: number, carId = newCarId()) {
   const now = new Date()
   const batch = writeBatch(firestore())
@@ -561,6 +652,8 @@ export async function createCar(actor: Actor, data: CarInput, initialKm: number,
     ownerUid: actor.uid,
     ownerName: actor.name,
     members: [],
+    memberUids: [],
+    memberProfiles: {},
     currentKm: initialKm,
     kmUpdatedAt: Timestamp.fromDate(now),
     avgKmPerDay: null,
@@ -590,24 +683,101 @@ export async function updateCar(actor: Actor, carId: string, data: Partial<CarIn
 }
 
 /**
- * Suma o saca un mail de `members` (lo hace el dueño). Va con arrayUnion/arrayRemove y no con la lista que tiene
- * la app, así un cambio hecho en otro dispositivo no se pisa. El tope de 2 lo controlan también las reglas.
+ * Invita a un mail a compartir el auto (lo hace el dueño; validar antes con `memberError`): `set` de
+ * `invites/{carId}_{mail canónico}` pendiente, que vence a los `INVITE_DAYS` días. El id es fijo: volver a invitar a
+ * un mail cuya invitación venció, se rechazó, se canceló o ya no es miembro pisa la anterior (las reglas deciden cuándo
+ * se puede). El auto no le aparece al invitado hasta que acepta.
  */
-export async function addMember(actor: Actor, carId: string, email: string) {
+export async function inviteMember(actor: Actor, car: Car, email: string) {
+  const mail = normalizeEmail(email)
+  const now = new Date()
   const batch = writeBatch(firestore())
-  batch.update(carDoc(carId), { members: arrayUnion(email) })
+  batch.set(inviteDoc(inviteId(car.id, mail)), {
+    carId: car.id,
+    ownerUid: actor.uid,
+    ownerName: actor.name,
+    carLabel: inviteCarLabel(car),
+    email: mail,
+    emailKey: canonicalEmail(mail),
+    status: 'pending',
+    createdAt: Timestamp.fromDate(now),
+    expiresAt: Timestamp.fromDate(new Date(now.getTime() + INVITE_DAYS * 24 * 60 * 60 * 1000)),
+    respondedAt: null,
+    acceptedUid: null,
+  })
   await batch.commit()
 }
 
-export async function removeMember(actor: Actor, carId: string, email: string) {
+/** El dueño cancela una invitación pendiente: el link deja de servir. */
+export async function revokeInvite(actor: Actor, invite: Invite) {
   const batch = writeBatch(firestore())
-  batch.update(carDoc(carId), { members: arrayRemove(email) })
+  batch.update(inviteDoc(invite.id), { status: 'revoked' })
   await batch.commit()
 }
 
-/** El miembro sale de un auto compartido: saca su propio mail de `members`. Lo que cargó queda en el auto. */
-export async function leaveCar(actor: Actor, carId: string, email: string) {
-  await removeMember(actor, carId, email)
+/**
+ * Lee una invitación (la página del link). null si no existe. Si es para otra cuenta, las reglas la deniegan y tira
+ * un `FirebaseError` con `code: 'permission-denied'`.
+ */
+export async function getInvite(id: string): Promise<Invite | null> {
+  const snap = await getDoc(inviteDoc(id))
+  return snap.exists() ? inviteFrom(snap.id, snap.data()) : null
+}
+
+/**
+ * El invitado acepta: en un mismo batch la invitación queda `accepted` con su uid, y el auto suma su uid a
+ * `memberUids` y su perfil (`email`: el mail de su login en minúscula; su nombre) a `memberProfiles`. Las reglas
+ * exigen las dos escrituras juntas.
+ */
+export async function acceptInvite(actor: Actor, invite: Invite, email: string | null) {
+  const batch = writeBatch(firestore())
+  batch.update(inviteDoc(invite.id), { status: 'accepted', acceptedUid: actor.uid, respondedAt: serverTimestamp() })
+  batch.update(carDoc(invite.carId), {
+    memberUids: arrayUnion(actor.uid),
+    [`memberProfiles.${actor.uid}`]: { email: email ? normalizeEmail(email) : invite.email, name: actor.name },
+  })
+  await batch.commit()
+}
+
+/** El invitado rechaza: la invitación queda `declined` y el dueño la puede volver a mandar. */
+export async function declineInvite(actor: Actor, invite: Invite) {
+  const batch = writeBatch(firestore())
+  batch.update(inviteDoc(invite.id), { status: 'declined', acceptedUid: actor.uid, respondedAt: serverTimestamp() })
+  await batch.commit()
+}
+
+/**
+ * El dueño saca a un miembro: su uid de `memberUids`, su perfil de `memberProfiles` y los mails viejos de `members`
+ * que son suyos (comparados con `canonicalEmail`). Un miembro sólo por el mail viejo (`uid` null) sale de `members`.
+ * Va con arrayRemove y no con la lista que tiene la app, así un cambio hecho en otro dispositivo no se pisa.
+ */
+export async function removeMember(actor: Actor, car: Car, member: CarMember) {
+  const key = canonicalEmail(member.email)
+  const mails = [member.email, ...(car.members ?? []).filter(m => canonicalEmail(m) === key)]
+  const batch = writeBatch(firestore())
+  batch.update(
+    carDoc(car.id),
+    member.uid
+      ? { memberUids: arrayRemove(member.uid), [`memberProfiles.${member.uid}`]: deleteField(), members: arrayRemove(...mails) }
+      : { members: arrayRemove(...mails) },
+  )
+  await batch.commit()
+}
+
+/**
+ * El miembro sale de un auto compartido. Si entró por invitación saca su uid, su perfil y, si está, su mail viejo
+ * (`email`, el del login en minúscula); si sólo está por el mail viejo, saca el mail. Lo que cargó queda en el auto.
+ */
+export async function leaveCar(actor: Actor, car: Car, email: string | null) {
+  const mail = email ? { members: arrayRemove(normalizeEmail(email)) } : {}
+  const batch = writeBatch(firestore())
+  batch.update(
+    carDoc(car.id),
+    car.memberUids?.includes(actor.uid)
+      ? { memberUids: arrayRemove(actor.uid), [`memberProfiles.${actor.uid}`]: deleteField(), ...mail }
+      : mail,
+  )
+  await batch.commit()
 }
 
 /** Borra en tandas de 450: un batch admite hasta 500 operaciones. */
@@ -624,7 +794,8 @@ async function deleteRefs(refs: ReturnType<typeof doc>[]) {
  * Los hijos van antes que el auto: las reglas deciden el permiso de un hijo con el documento del auto, así
  * que sin el auto ya no se pueden leer ni borrar, y quedarían huérfanos. Primero borra lo que la app ya
  * tiene en memoria, después barre en el servidor lo que pudiera haber quedado (por ejemplo, cargado desde
- * otro dispositivo) y por último borra el auto, que recién ahí desaparece de la pantalla.
+ * otro dispositivo), borra las invitaciones del auto (así a nadie le queda una pendiente de un auto que no existe) y
+ * por último borra el auto, que recién ahí desaparece de la pantalla.
  */
 export async function deleteCar(actor: Actor, carId: string, known: Partial<Record<RelatedName, string[]>> = {}) {
   await deleteRefs(RELATED.flatMap(name => (known[name] ?? []).map(id => doc(carCol(carId, name), id))))
@@ -634,6 +805,8 @@ export async function deleteCar(actor: Actor, carId: string, known: Partial<Reco
     leftovers.push(...snap.docs.map(d => d.ref))
   }
   if (leftovers.length) await deleteRefs(leftovers)
+  const invites = await getDocs(query(invitesCol(), where('ownerUid', '==', actor.uid), where('carId', '==', carId)))
+  if (!invites.empty) await deleteRefs(invites.docs.map(d => d.ref))
   await deleteRefs([carDoc(carId)])
 }
 

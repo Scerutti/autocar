@@ -5,8 +5,8 @@ import { subscribeUserData, syncCarKm, syncRuleProjection, type UserData } from 
 import { toISODate } from '@/lib/dates'
 import { activeRules, isCompleted, projectionDiff, projectionKey, projectRules, rulesWithState, type RuleWithState } from '@/lib/maintenance'
 import { kmCorrection, topReading } from '@/lib/odometer'
-import { isCarOwner } from '@/lib/sharing'
-import { DEFAULT_SETTINGS, type Actor, type Car, type MaintenanceRule } from '@/lib/types'
+import { isCarOwner, isInviteOpen } from '@/lib/sharing'
+import { DEFAULT_SETTINGS, type Actor, type Car, type Invite, type MaintenanceRule } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
@@ -23,13 +23,25 @@ interface DataState extends UserData {
   rules: MaintenanceRule[]
   /** Mantenimientos activos de cada auto (sin los recordatorios cumplidos) con su estado, ordenados por urgencia. */
   rulesByCar: Map<string, RuleWithState[]>
+  /** Las invitaciones para mi mail que puedo responder: pendientes y sin vencer (se filtra al recalcular, con `today`). */
+  myInvites: Invite[]
 }
 
 const DataContext = createContext<DataState | null>(null)
 
-const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer', 'achievements']
+const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer', 'achievements', 'invites', 'myInvites']
 
-const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [] }
+const EMPTY: UserData = {
+  settings: DEFAULT_SETTINGS,
+  cars: [],
+  rules: [],
+  jobs: [],
+  fuel: [],
+  odometer: [],
+  achievements: [],
+  invites: [],
+  myInvites: [],
+}
 
 /**
  * Datos del usuario en vivo desde Firestore. Si la app queda abierta pasada la medianoche, recalcula los
@@ -152,6 +164,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       jobs: [...data.jobs].sort(byDateDesc),
       fuel: [...data.fuel].sort(byDateDesc),
       odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
+      myInvites: data.myInvites.filter(i => isInviteOpen(i, new Date())),
       uid,
       email,
       actor,
