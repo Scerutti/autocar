@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Camera, CarFront, Copy, MailX, RotateCw, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { Camera, CarFront, Copy, KeyRound, MailX, RotateCw, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
 import { carName } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
@@ -14,7 +14,17 @@ import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
 import { toISODate } from '@/lib/dates'
-import { createCar, deleteCar, inviteMember, newCarId, removeMember, revokeInvite, updateCar, type CarInput } from '@/lib/db'
+import {
+  createCar,
+  deleteCar,
+  inviteMember,
+  newCarId,
+  removeMember,
+  revokeInvite,
+  transferCar,
+  updateCar,
+  type CarInput,
+} from '@/lib/db'
 import { formatDate, formatKm, parseNumberInput } from '@/lib/format'
 import {
   INVITE_DAYS,
@@ -277,9 +287,11 @@ const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${
  * pendientes (vencen a los `INVITE_DAYS` días; "Compartir", "Copiar link" y "Cancelar") y las rechazadas o vencidas,
  * que se pueden volver a mandar. El tope (`MAX_MEMBERS`) cuenta miembros e invitaciones pendientes. Cada cambio se
  * guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Compartir" abre el menú de
- * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link.
+ * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro por uid se le puede
+ * pasar el auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto.
  */
 function ShareSection({ car }: { car: Car }) {
+  const router = useRouter()
   const confirm = useConfirm()
   const { actor, email, invites } = useData()
   const [value, setValue] = useState('')
@@ -344,6 +356,32 @@ function ShareSection({ car }: { car: Car }) {
       toastSaved(`Ya no lo compartís con ${who}`, status)
     } catch (err) {
       toast.error('No se pudo sacar a esa persona', { description: errorMessage(err) })
+    }
+  }
+
+  async function transfer(member: CarMember) {
+    const who = member.name ?? member.email
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: `¿Pasarle el auto a ${who}?`,
+      description: `${who} pasa a ser el dueño de tu ${name}: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro: seguís viendo el auto y cargando, y tus trabajos esperan su aprobación. Las invitaciones pendientes se cancelan. Para recuperarlo, te lo tiene que pasar de nuevo.`,
+      details: [
+        { label: 'Nuevo dueño', value: who },
+        { label: 'Auto', value: name },
+      ],
+      confirmLabel: 'Sí, pasárselo',
+      icon: KeyRound,
+    })
+    if (!confirmed) return
+    setBusy(true)
+    try {
+      const status = await settle(transferCar(actor, { invites }, car, member, email), 'No se pudo pasar el auto')
+      toastSaved(`${who} es el nuevo dueño`, status, 'Seguís en el auto como miembro.')
+      router.replace(`/autos/${car.id}`)
+    } catch (err) {
+      toast.error('No se pudo pasar el auto', { description: errorMessage(err) })
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -413,6 +451,19 @@ function ShareSection({ car }: { car: Car }) {
                 <p className="truncate text-sm">{m.name ?? m.email}</p>
                 {m.name && <p className="truncate text-xs text-muted-foreground">{m.email}</p>}
               </div>
+              {m.uid && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Pasarle el auto a ${m.name ?? m.email}`}
+                  className="gap-1.5"
+                  disabled={busy}
+                  onClick={() => void transfer(m)}
+                >
+                  <KeyRound /> Pasarle el auto
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
