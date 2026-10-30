@@ -37,6 +37,7 @@ import {
   jobEdit,
   normalizeEmail,
   reviewAlreadyDone,
+  transferPatch,
   type CarMember,
   type ReviewTarget,
 } from './sharing'
@@ -777,6 +778,32 @@ export async function leaveCar(actor: Actor, car: Car, email: string | null) {
       ? { memberUids: arrayRemove(actor.uid), [`memberProfiles.${actor.uid}`]: deleteField(), ...mail }
       : mail,
   )
+  await batch.commit()
+}
+
+/**
+ * El dueño le pasa el auto a un miembro por uid (`to.uid`; uno sólo por el mail viejo no lo puede recibir). En un mismo
+ * batch, el auto cambia de dueño con `transferPatch` (el nuevo dueño sale de `memberUids`, de `memberProfiles` con
+ * `deleteField()` y sus mails viejos de `members`; yo entro como miembro con mi perfil: `myEmail`, el mail de mi login,
+ * y mi nombre) y se cancelan las invitaciones pendientes del auto, vencidas o no (`ctx.invites`: las mías, de
+ * `useData()`). `memberUids` y `members` van como listas enteras, no con arrayUnion/arrayRemove, porque la regla
+ * (`ownerTransfer`) compara los conjuntos.
+ */
+export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car: Car, to: CarMember, myEmail: string | null) {
+  const patch = transferPatch(car, to, { uid: actor.uid, email: myEmail ?? '', name: actor.name })
+  const profiles = Object.fromEntries(Object.entries(patch.memberProfiles).map(([uid, p]) => [`memberProfiles.${uid}`, p]))
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), {
+    ownerUid: patch.ownerUid,
+    ownerName: patch.ownerName,
+    memberUids: patch.memberUids,
+    members: patch.members,
+    ...profiles,
+    [`memberProfiles.${patch.ownerUid}`]: deleteField(),
+  })
+  ctx.invites
+    .filter(i => i.carId === car.id && i.status === 'pending')
+    .forEach(i => batch.update(inviteDoc(i.id), { status: 'revoked' }))
   await batch.commit()
 }
 

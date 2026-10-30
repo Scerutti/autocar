@@ -19,6 +19,7 @@ import {
   mineForAchievements,
   normalizeEmail,
   reviewAlreadyDone,
+  transferPatch,
 } from './sharing'
 import type { Car, FuelLoad, Invite, Job, MaintenanceRule, OdometerReading } from './types'
 
@@ -254,6 +255,48 @@ describe('carMembers', () => {
 
   it('sin los campos nuevos, sólo los mails viejos', () => {
     expect(carMembers(car())).toEqual([{ uid: null, email: 'beto@gmail.com', name: null }])
+  })
+})
+
+describe('transferPatch', () => {
+  const OTHER = 'other-uid'
+  const me = { uid: OWNER, email: ' Ana@Gmail.com ', name: 'Ana' }
+  const shared = (extra: Partial<Car> = {}) =>
+    car({
+      members: ['j.doe@gmail.com', 'beto@gmail.com'],
+      memberUids: [MEMBER, OTHER],
+      memberProfiles: {
+        [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' },
+        [OTHER]: { email: 'caro@gmail.com', name: null },
+      },
+      ...extra,
+    })
+
+  it('el miembro pasa a ser el dueño con el nombre de su perfil, y yo paso a ser miembro con mi perfil', () => {
+    expect(transferPatch(shared(), { uid: MEMBER }, me)).toEqual({
+      ownerUid: MEMBER,
+      ownerName: 'Juan',
+      memberUids: [OTHER, OWNER],
+      memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+      members: ['beto@gmail.com'],
+    })
+  })
+
+  it('sin nombre en el perfil, ownerName null; sólo saca los mails viejos del nuevo dueño', () => {
+    const patch = transferPatch(shared(), { uid: OTHER }, me)
+    expect(patch.ownerName).toBeNull()
+    expect(patch.memberUids).toEqual([MEMBER, OWNER])
+    expect(patch.members).toEqual(['j.doe@gmail.com', 'beto@gmail.com'])
+  })
+
+  it('sin members, la lista queda vacía', () => {
+    expect(transferPatch(shared({ members: undefined }), { uid: MEMBER }, me).members).toEqual([])
+  })
+
+  it('no se le pasa a un miembro sólo por el mail viejo, a alguien que no es miembro ni a mí', () => {
+    expect(() => transferPatch(shared(), { uid: null }, me)).toThrow()
+    expect(() => transferPatch(shared(), { uid: 'stranger-uid' }, me)).toThrow()
+    expect(() => transferPatch(shared({ memberUids: [MEMBER, OWNER] }), { uid: OWNER }, me)).toThrow()
   })
 })
 
