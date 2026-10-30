@@ -56,8 +56,57 @@ export interface Car {
   /** Uid del dueño. Opcional en el tipo porque el cron y los logros arman autos sin él; lib/db.ts siempre lo completa. */
   ownerUid?: string
   ownerName?: string | null
-  /** Mails en minúscula de las personas con las que el dueño compartió el auto (hasta 2). El dueño no figura. */
+  /**
+   * Mails en minúscula de las personas con las que el dueño compartió el auto antes de las invitaciones (hasta 2). El
+   * dueño no figura. Sólo se leen y se sacan: se borra en #66.
+   */
   members?: string[]
+  /** Uids de las personas que aceptaron una invitación al auto (hasta 2). El dueño no figura. */
+  memberUids?: string[]
+  /** Mail y nombre de cada miembro, por uid: para mostrarlos. Tiene las mismas claves que `memberUids`. */
+  memberProfiles?: Record<string, MemberProfile>
+}
+
+/**
+ * Qué puede hacer un miembro en el auto: `editor` carga y sus trabajos esperan la aprobación del dueño; `trusted` carga
+ * y sus trabajos nuevos quedan aprobados; `viewer` sólo mira.
+ */
+export type MemberRole = 'editor' | 'trusted' | 'viewer'
+
+/**
+ * Cómo se muestra un miembro: el mail con el que entró y su nombre de Google (null si no lo tiene), y su rol (sin rol
+ * es `editor`: así entra al aceptar una invitación).
+ */
+export interface MemberProfile {
+  email: string
+  name: string | null
+  role?: MemberRole
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'revoked'
+
+/**
+ * Invitación a compartir un auto (invites/{carId}_{emailKey}): una activa por auto y mail. El auto le aparece al
+ * invitado recién cuando la acepta.
+ */
+export interface Invite {
+  id: string
+  carId: string
+  ownerUid: string
+  ownerName: string | null
+  /** "Ford Ka 2015": lo que el invitado ve antes de aceptar, sin poder leer el auto. */
+  carLabel: string
+  /** Como lo escribió el dueño, en minúscula. */
+  email: string
+  /** canonicalEmail(email): con lo que se compara contra el login. */
+  emailKey: string
+  status: InviteStatus
+  createdAt: Date
+  /** Pasada esta fecha no se puede aceptar ni rechazar: el dueño la puede volver a mandar. */
+  expiresAt: Date
+  respondedAt: Date | null
+  /** Uid de la cuenta que respondió la invitación; null mientras está pendiente o si el dueño la canceló. */
+  acceptedUid: string | null
 }
 
 /**

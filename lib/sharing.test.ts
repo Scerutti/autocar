@@ -2,18 +2,30 @@ import { describe, expect, it } from 'vitest'
 import { carRecords } from './achievements'
 import {
   approvedJobs,
+  approvesOwnJobs,
   authorLabel,
   canEditEntry,
   canEditJob,
+  canWrite,
+  canonicalEmail,
+  carMembers,
+  inviteCarLabel,
+  inviteEmailKey,
+  inviteId,
   isCarOwner,
+  isInviteOpen,
   isSharedCar,
   jobEdit,
+  maskEmail,
   memberError,
+  memberRole,
   mineForAchievements,
   normalizeEmail,
   reviewAlreadyDone,
+  setRolePatch,
+  transferPatch,
 } from './sharing'
-import type { Car, FuelLoad, Job, MaintenanceRule, OdometerReading } from './types'
+import type { Car, FuelLoad, Invite, Job, MaintenanceRule, MemberRole, OdometerReading } from './types'
 
 const OWNER = 'owner-uid'
 const MEMBER = 'member-uid'
@@ -109,6 +121,40 @@ const rule = (extra: Partial<MaintenanceRule> = {}): MaintenanceRule => ({
   ...extra,
 })
 
+const withRole = (role?: MemberRole) =>
+  car({ memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', ...(role ? { role } : {}) } } })
+
+describe('roles', () => {
+  it('sin rol, o sin perfil, el miembro es editor', () => {
+    expect(memberRole(withRole(), MEMBER)).toBe('editor')
+    expect(memberRole(car(), MEMBER)).toBe('editor')
+  })
+
+  it('lee el rol del perfil', () => {
+    expect(memberRole(withRole('trusted'), MEMBER)).toBe('trusted')
+    expect(memberRole(withRole('viewer'), MEMBER)).toBe('viewer')
+  })
+
+  it('el dueño siempre escribe; el miembro, salvo que sea viewer', () => {
+    expect(canWrite(withRole('viewer'), OWNER)).toBe(true)
+    expect(canWrite(withRole(), MEMBER)).toBe(true)
+    expect(canWrite(withRole('trusted'), MEMBER)).toBe(true)
+    expect(canWrite(withRole('viewer'), MEMBER)).toBe(false)
+    expect(canWrite(car(), MEMBER)).toBe(true)
+  })
+
+  it('sólo un trusted crea sus trabajos aprobados', () => {
+    expect(approvesOwnJobs(withRole('trusted'), MEMBER)).toBe(true)
+    expect(approvesOwnJobs(withRole(), MEMBER)).toBe(false)
+    expect(approvesOwnJobs(withRole('viewer'), MEMBER)).toBe(false)
+    expect(approvesOwnJobs(withRole('trusted'), OWNER)).toBe(false)
+  })
+
+  it('cambiar el rol escribe sólo el role del perfil', () => {
+    expect(setRolePatch(MEMBER, 'viewer')).toEqual({ [`memberProfiles.${MEMBER}.role`]: 'viewer' })
+  })
+})
+
 describe('permisos', () => {
   it('el dueño puede editar todo', () => {
     const c = car()
@@ -143,10 +189,30 @@ describe('permisos', () => {
     expect(canEditJob(c, MEMBER, job({ createdBy: OWNER, status: 'pending' }))).toBe(false)
   })
 
+  it('un viewer no edita ni borra nada, tampoco lo que cargó antes', () => {
+    const c = withRole('viewer')
+    expect(canEditEntry(c, MEMBER, fuel({ createdBy: MEMBER }))).toBe(false)
+    expect(canEditEntry(c, MEMBER, reading({ createdBy: MEMBER }))).toBe(false)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'pending' }))).toBe(false)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'rejected' }))).toBe(false)
+  })
+
+  it('un trusted edita lo mismo que un editor: un trabajo suyo aprobado, no', () => {
+    const c = withRole('trusted')
+    expect(canEditEntry(c, MEMBER, fuel({ createdBy: MEMBER }))).toBe(true)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'pending' }))).toBe(true)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'approved' }))).toBe(false)
+  })
+
   it('un auto está compartido si tiene miembros o si me lo compartieron', () => {
     expect(isSharedCar(car(), OWNER)).toBe(true)
     expect(isSharedCar(car({ members: [] }), OWNER)).toBe(false)
     expect(isSharedCar(car({ members: [] }), MEMBER)).toBe(true)
+  })
+
+  it('cuenta los miembros por uid aunque no estén en el mail viejo', () => {
+    expect(isSharedCar(car({ members: [], memberUids: [MEMBER] }), OWNER)).toBe(true)
+    expect(isSharedCar(car({ members: [], memberUids: [] }), OWNER)).toBe(false)
   })
 })
 
@@ -160,35 +226,192 @@ describe('authorLabel', () => {
   })
 })
 
+const NOW = new Date('2026-10-30T12:00:00')
+
+const invite = (extra: Partial<Invite> = {}): Invite => ({
+  id: 'c1_caro@gmail.com',
+  carId: 'c1',
+  ownerUid: OWNER,
+  ownerName: 'Ana',
+  carLabel: 'Fiat Cronos',
+  email: 'caro@gmail.com',
+  emailKey: 'caro@gmail.com',
+  status: 'pending',
+  createdAt: new Date('2026-10-29T12:00:00'),
+  expiresAt: new Date('2026-11-12T12:00:00'),
+  respondedAt: null,
+  acceptedUid: null,
+  ...extra,
+})
+
+describe('canonicalEmail', () => {
+  it('en Gmail saca los puntos y lo que va después de un "+"', () => {
+    expect(canonicalEmail('j.doe@gmail.com')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('jdoe+auto@gmail.com')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('j.d.o.e+auto+otro@gmail.com')).toBe('jdoe@gmail.com')
+  })
+
+  it('trata googlemail.com como gmail.com', () => {
+    expect(canonicalEmail('j.doe@googlemail.com')).toBe('jdoe@gmail.com')
+  })
+
+  it('pasa a minúscula y saca los espacios', () => {
+    expect(canonicalEmail('  J.Doe@Gmail.COM ')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('Juan.Perez@Empresa.com.ar')).toBe('juan.perez@empresa.com.ar')
+  })
+
+  it('en otros dominios deja los puntos y el "+"', () => {
+    expect(canonicalEmail('j.doe+auto@hotmail.com')).toBe('j.doe+auto@hotmail.com')
+    expect(canonicalEmail('j.doe@gmail.com.ar')).toBe('j.doe@gmail.com.ar')
+  })
+})
+
+describe('invitaciones', () => {
+  it('el id es el auto y el mail canónico', () => {
+    expect(inviteId('c1', 'J.Doe+auto@gmail.com')).toBe('c1_jdoe@gmail.com')
+    expect(inviteEmailKey('c1_jdoe@gmail.com')).toBe('jdoe@gmail.com')
+    expect(inviteEmailKey('c1_j_doe@empresa.com')).toBe('j_doe@empresa.com')
+    expect(inviteEmailKey('sin-guion')).toBe('')
+  })
+
+  it('tapa el mail', () => {
+    expect(maskEmail('jdoe@gmail.com')).toBe('j•••@gmail.com')
+    expect(maskEmail('raro')).toBe('•••')
+  })
+
+  it('está abierta si está pendiente y no venció', () => {
+    expect(isInviteOpen(invite(), NOW)).toBe(true)
+    expect(isInviteOpen(invite({ expiresAt: NOW }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'declined' }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'revoked' }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'accepted' }), NOW)).toBe(false)
+  })
+
+  it('el auto se ve como marca, modelo y año', () => {
+    expect(inviteCarLabel({ brand: 'Ford', model: 'Ka', year: 2015 })).toBe('Ford Ka 2015')
+    expect(inviteCarLabel({ brand: 'Ford', model: 'Ka', year: null })).toBe('Ford Ka')
+  })
+})
+
+describe('carMembers', () => {
+  it('lista los miembros por uid y los mails viejos que no son de ninguno', () => {
+    const c = car({
+      members: ['j.doe@gmail.com', 'beto@gmail.com'],
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' } },
+    })
+    expect(carMembers(c)).toEqual([
+      { uid: MEMBER, email: 'jdoe@gmail.com', name: 'Juan' },
+      { uid: null, email: 'beto@gmail.com', name: null },
+    ])
+  })
+
+  it('sin los campos nuevos, sólo los mails viejos', () => {
+    expect(carMembers(car())).toEqual([{ uid: null, email: 'beto@gmail.com', name: null }])
+  })
+})
+
+describe('transferPatch', () => {
+  const OTHER = 'other-uid'
+  const me = { uid: OWNER, email: ' Ana@Gmail.com ', name: 'Ana' }
+  const shared = (extra: Partial<Car> = {}) =>
+    car({
+      members: ['j.doe@gmail.com', 'beto@gmail.com'],
+      memberUids: [MEMBER, OTHER],
+      memberProfiles: {
+        [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' },
+        [OTHER]: { email: 'caro@gmail.com', name: null },
+      },
+      ...extra,
+    })
+
+  it('el miembro pasa a ser el dueño con el nombre de su perfil, y yo paso a ser miembro con mi perfil', () => {
+    expect(transferPatch(shared(), { uid: MEMBER }, me)).toEqual({
+      ownerUid: MEMBER,
+      ownerName: 'Juan',
+      memberUids: [OTHER, OWNER],
+      memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+      members: ['beto@gmail.com'],
+    })
+  })
+
+  it('sin nombre en el perfil, ownerName null; sólo saca los mails viejos del nuevo dueño', () => {
+    const patch = transferPatch(shared(), { uid: OTHER }, me)
+    expect(patch.ownerName).toBeNull()
+    expect(patch.memberUids).toEqual([MEMBER, OWNER])
+    expect(patch.members).toEqual(['j.doe@gmail.com', 'beto@gmail.com'])
+  })
+
+  it('el dueño anterior entra sin rol (editor), aunque el nuevo dueño tuviera uno', () => {
+    const c = shared({
+      memberProfiles: {
+        [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan', role: 'trusted' },
+        [OTHER]: { email: 'caro@gmail.com', name: null, role: 'viewer' },
+      },
+    })
+    expect(transferPatch(c, { uid: MEMBER }, me).memberProfiles).toEqual({ [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } })
+  })
+
+  it('sin members, la lista queda vacía', () => {
+    expect(transferPatch(shared({ members: undefined }), { uid: MEMBER }, me).members).toEqual([])
+  })
+
+  it('no se le pasa a un miembro sólo por el mail viejo, a alguien que no es miembro ni a mí', () => {
+    expect(() => transferPatch(shared(), { uid: null }, me)).toThrow()
+    expect(() => transferPatch(shared(), { uid: 'stranger-uid' }, me)).toThrow()
+    expect(() => transferPatch(shared({ memberUids: [MEMBER, OWNER] }), { uid: OWNER }, me)).toThrow()
+  })
+})
+
 describe('memberError', () => {
-  const input = { ownerEmail: 'ana@gmail.com', members: ['beto@gmail.com'] }
+  const c = car({ members: [], memberUids: [], memberProfiles: {} })
+  const ctx = { ownerEmail: 'ana@gmail.com', now: NOW }
+  const withUid = (email: string) => car({ members: [], memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email, name: null } } })
 
   it('acepta un mail nuevo en minúscula', () => {
-    expect(memberError('caro@gmail.com', input)).toBeNull()
-    expect(memberError(normalizeEmail('  Caro@Gmail.com '), input)).toBeNull()
+    expect(memberError(c, [], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [], normalizeEmail('  Caro@Gmail.com '), ctx)).toBeNull()
   })
 
   it('rechaza un mail inválido', () => {
-    expect(memberError('caro', input)).not.toBeNull()
-    expect(memberError('caro@gmail', input)).not.toBeNull()
-    expect(memberError('caro @gmail.com', input)).not.toBeNull()
+    expect(memberError(c, [], 'caro', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'caro@gmail', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'caro @gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'ca/ro@gmail.com', ctx)).not.toBeNull()
   })
 
   it('rechaza un mail en mayúsculas', () => {
-    expect(memberError('Caro@Gmail.com', input)).not.toBeNull()
+    expect(memberError(c, [], 'Caro@Gmail.com', ctx)).not.toBeNull()
   })
 
-  it('rechaza el mail del dueño', () => {
-    expect(memberError('ana@gmail.com', input)).not.toBeNull()
-    expect(memberError('ana@gmail.com', { ...input, ownerEmail: 'Ana@Gmail.com' })).not.toBeNull()
+  it('rechaza mi propio mail, también escrito de otra forma', () => {
+    expect(memberError(c, [], 'ana@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'a.na+auto@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'ana@gmail.com', { ...ctx, ownerEmail: 'Ana@Gmail.com' })).not.toBeNull()
   })
 
-  it('rechaza un mail repetido', () => {
-    expect(memberError('beto@gmail.com', input)).not.toBeNull()
+  it('rechaza el mail de un miembro, por uid o por el mail viejo', () => {
+    expect(memberError(withUid('caro@gmail.com'), [], 'c.aro@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(car(), [], 'beto@gmail.com', ctx)).not.toBeNull()
   })
 
-  it('rechaza un tercero', () => {
-    expect(memberError('dani@gmail.com', { ...input, members: ['beto@gmail.com', 'caro@gmail.com'] })).not.toBeNull()
+  it('rechaza un mail con una invitación pendiente, pero no una vencida, rechazada o cancelada', () => {
+    expect(memberError(c, [invite()], 'c.aro@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [invite({ expiresAt: NOW })], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [invite({ status: 'declined' })], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [invite({ status: 'revoked' })], 'caro@gmail.com', ctx)).toBeNull()
+  })
+
+  it('no cuenta las invitaciones de otros autos', () => {
+    expect(memberError(c, [invite({ carId: 'c2' })], 'caro@gmail.com', ctx)).toBeNull()
+  })
+
+  it('el tope cuenta los miembros por uid más las invitaciones pendientes que no vencieron', () => {
+    const eva = invite({ id: 'c1_eva@gmail.com', email: 'eva@gmail.com', emailKey: 'eva@gmail.com' })
+    expect(memberError(withUid('beto@gmail.com'), [], 'dani@gmail.com', ctx)).toBeNull()
+    expect(memberError(withUid('beto@gmail.com'), [invite()], 'dani@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [invite(), eva], 'dani@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(withUid('beto@gmail.com'), [invite({ expiresAt: NOW })], 'dani@gmail.com', ctx)).toBeNull()
   })
 })
 

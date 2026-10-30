@@ -32,7 +32,7 @@ import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm, type RuleWithState } from '@/lib/maintenance'
 import { readingOrigin } from '@/lib/odometer'
-import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
+import { approvedJobs, authorLabel, canEditEntry, canWrite, carMembers, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
 import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type MaintenanceRule, type OdometerReading } from '@/lib/types'
 import { removeWithUndo, runInBackground } from '@/lib/use-saver'
@@ -182,19 +182,24 @@ function RulesTab({
   )
 }
 
-/** Trabajos del auto: la lista muestra todos (los sin aprobar, con su etiqueta) y los totales suman sólo los aprobados. */
-function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<string, Car> }) {
+/**
+ * Trabajos del auto: la lista muestra todos (los sin aprobar, con su etiqueta) y los totales suman sólo los aprobados.
+ * Sin `writable` (soy `viewer`) no ofrece agregar.
+ */
+function JobsTab({ car, jobs, carById, writable }: { car: Car; jobs: Job[]; carById: Map<string, Car>; writable: boolean }) {
   const [exporting, setExporting] = useState(false)
   if (!jobs.length) {
     return (
       <EmptyState
         icon={Wrench}
         title="Sin trabajos registrados"
-        description="Registrá lo que le hacés al auto y cuánto salió."
+        description={writable ? 'Registrá lo que le hacés al auto y cuánto salió.' : undefined}
         action={
-          <LinkButton href={`/autos/${car.id}/trabajos/nuevo`} size="lg" className="gap-2">
-            <Plus /> Agregar trabajo
-          </LinkButton>
+          writable ? (
+            <LinkButton href={`/autos/${car.id}/trabajos/nuevo`} size="lg" className="gap-2">
+              <Plus /> Agregar trabajo
+            </LinkButton>
+          ) : undefined
         }
       />
     )
@@ -227,17 +232,22 @@ function JobsTab({ car, jobs, carById }: { car: Car; jobs: Job[]; carById: Map<s
   )
 }
 
-function FuelTab({ car, fuel, carById }: { car: Car; fuel: FuelLoad[]; carById: Map<string, Car> }) {
+/** Cargas de combustible del auto. Sin `writable` (soy `viewer`) no ofrece agregar. */
+function FuelTab({ car, fuel, carById, writable }: { car: Car; fuel: FuelLoad[]; carById: Map<string, Car>; writable: boolean }) {
   if (!fuel.length) {
     return (
       <EmptyState
         icon={Fuel}
         title="Sin cargas de combustible"
-        description={`Registrá cada carga de ${car.fuelTypes.map(t => FUEL_LABELS[t]).join(' o ')} para ver consumo y costo por km.`}
+        description={
+          writable ? `Registrá cada carga de ${car.fuelTypes.map(t => FUEL_LABELS[t]).join(' o ')} para ver consumo y costo por km.` : undefined
+        }
         action={
-          <LinkButton href={`/autos/${car.id}/combustible/nuevo`} size="lg" className="gap-2">
-            <Plus /> Agregar carga
-          </LinkButton>
+          writable ? (
+            <LinkButton href={`/autos/${car.id}/combustible/nuevo`} size="lg" className="gap-2">
+              <Plus /> Agregar carga
+            </LinkButton>
+          ) : undefined
         }
       />
     )
@@ -370,27 +380,27 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
 
 /**
  * Con quién está compartido el auto: al miembro, "Compartido por <dueño>" y "Salir de este auto"; al dueño de un
- * auto compartido, "Compartido con N personas". En un auto sin compartir no muestra nada.
+ * auto compartido, "Compartido con" y los nombres de los miembros (`memberProfiles`; si no tienen nombre, el mail).
+ * En un auto sin compartir no muestra nada.
  */
 function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, email } = useData()
-  const members = car.members ?? []
+  const members = carMembers(car)
   const name = carName(car)
 
   async function leave() {
-    if (!email) return
     const confirmed = await confirm({
       tone: 'danger',
       title: `¿Salir de ${name}?`,
-      description: `Dejás de ver el auto. Lo que cargaste queda en el historial. Para volver, ${car.ownerName ?? 'el dueño'} te tiene que agregar de nuevo.`,
+      description: `Dejás de ver el auto. Lo que cargaste queda en el historial. Para volver, ${car.ownerName ?? 'el dueño'} te tiene que invitar de nuevo.`,
       confirmLabel: 'Sí, salir',
       icon: LogOut,
     })
     if (!confirmed) return
     router.replace('/')
-    runInBackground(leaveCar(actor, car.id, email), `No se pudo salir de ${name}`)
+    runInBackground(leaveCar(actor, car, email), `No se pudo salir de ${name}`)
     toast.success(`Saliste de ${name}`)
   }
 
@@ -399,8 +409,8 @@ function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
     return (
       <Link href={`/autos/${car.id}/editar`} className="flex items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3 text-sm hover:bg-card">
         <Users aria-hidden className="size-4 shrink-0 text-primary" />
-        <span className="min-w-0 flex-1">
-          Compartido con {members.length} {members.length === 1 ? 'persona' : 'personas'}
+        <span className="min-w-0 flex-1 truncate">
+          Compartido con {members.map(m => m.name ?? m.email).join(' y ')}
         </span>
         <ChevronRight className="size-4 text-muted-foreground" />
       </Link>
@@ -434,9 +444,14 @@ function CarDetail() {
 
   if (!car) return <NotFound what="el auto" />
   const owner = isCarOwner(car, uid)
+  const writable = canWrite(car, uid)
   const quickActions = [
-    { href: `/autos/${car.id}/trabajos/nuevo`, icon: Wrench, label: 'Trabajo' },
-    { href: `/autos/${car.id}/combustible/nuevo`, icon: Fuel, label: 'Carga' },
+    ...(writable
+      ? [
+          { href: `/autos/${car.id}/trabajos/nuevo`, icon: Wrench, label: 'Trabajo' },
+          { href: `/autos/${car.id}/combustible/nuevo`, icon: Fuel, label: 'Carga' },
+        ]
+      : []),
     ...(owner ? [{ href: `/autos/${car.id}/mantenimientos/nuevo`, icon: Plus, label: 'Mantenimiento' }] : []),
   ]
 
@@ -472,21 +487,25 @@ function CarDetail() {
                 {car.kmUpdatedAt && <p className="mt-0.5 text-xs text-muted-foreground">Actualizado {timeAgo(car.kmUpdatedAt)}</p>}
               </div>
             </div>
-            <Button onClick={() => setShowKm(true)} className="h-10 gap-2 bg-foreground px-4 text-background hover:bg-foreground/90">
-              <Gauge /> Cargar km
-            </Button>
+            {writable && (
+              <Button onClick={() => setShowKm(true)} className="h-10 gap-2 bg-foreground px-4 text-background hover:bg-foreground/90">
+                <Gauge /> Cargar km
+              </Button>
+            )}
           </div>
-          <div className={`grid border-t border-white/8 ${quickActions.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-            {quickActions.map(({ href, icon: Icon, label }) => (
-              <Link
-                key={href}
-                href={href}
-                className="flex flex-col items-center gap-1.5 border-r border-white/8 py-3.5 text-xs text-muted-foreground transition last:border-r-0 hover:bg-white/[0.03] hover:text-foreground sm:flex-row sm:justify-center sm:text-sm"
-              >
-                <Icon className="size-4 text-primary" />+ {label}
-              </Link>
-            ))}
-          </div>
+          {quickActions.length > 0 && (
+            <div className={`grid border-t border-white/8 ${quickActions.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+              {quickActions.map(({ href, icon: Icon, label }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="flex flex-col items-center gap-1.5 border-r border-white/8 py-3.5 text-xs text-muted-foreground transition last:border-r-0 hover:bg-white/[0.03] hover:text-foreground sm:flex-row sm:justify-center sm:text-sm"
+                >
+                  <Icon className="size-4 text-primary" />+ {label}
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
 
         <Tabs value={tab} onValueChange={v => window.history.replaceState(null, '', `?tab=${v}`)}>
@@ -500,10 +519,10 @@ function CarDetail() {
             <RulesTab car={car} rules={rules} completed={completed} jobs={jobs} owner={owner} />
           </TabsContent>
           <TabsContent value="trabajos" className="pt-4">
-            <JobsTab car={car} jobs={jobs} carById={carById} />
+            <JobsTab car={car} jobs={jobs} carById={carById} writable={writable} />
           </TabsContent>
           <TabsContent value="combustible" className="pt-4">
-            <FuelTab car={car} fuel={fuel} carById={carById} />
+            <FuelTab car={car} fuel={fuel} carById={carById} writable={writable} />
           </TabsContent>
           <TabsContent value="km" className="pt-4">
             <KmTab car={car} readings={readings} fuel={fuel} jobs={jobs} />

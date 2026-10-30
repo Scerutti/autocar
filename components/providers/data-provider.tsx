@@ -5,8 +5,8 @@ import { subscribeUserData, syncCarKm, syncRuleProjection, type UserData } from 
 import { toISODate } from '@/lib/dates'
 import { activeRules, isCompleted, projectionDiff, projectionKey, projectRules, rulesWithState, type RuleWithState } from '@/lib/maintenance'
 import { kmCorrection, topReading } from '@/lib/odometer'
-import { isCarOwner } from '@/lib/sharing'
-import { DEFAULT_SETTINGS, type Actor, type Car, type MaintenanceRule } from '@/lib/types'
+import { canWrite, isCarOwner, isInviteOpen } from '@/lib/sharing'
+import { DEFAULT_SETTINGS, type Actor, type Car, type Invite, type MaintenanceRule } from '@/lib/types'
 import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
@@ -23,13 +23,25 @@ interface DataState extends UserData {
   rules: MaintenanceRule[]
   /** Mantenimientos activos de cada auto (sin los recordatorios cumplidos) con su estado, ordenados por urgencia. */
   rulesByCar: Map<string, RuleWithState[]>
+  /** Las invitaciones para mi mail que puedo responder: pendientes y sin vencer (se filtra al recalcular, con `today`). */
+  myInvites: Invite[]
 }
 
 const DataContext = createContext<DataState | null>(null)
 
-const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer', 'achievements']
+const PARTS: (keyof UserData)[] = ['settings', 'cars', 'rules', 'jobs', 'fuel', 'odometer', 'achievements', 'invites', 'myInvites']
 
-const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [] }
+const EMPTY: UserData = {
+  settings: DEFAULT_SETTINGS,
+  cars: [],
+  rules: [],
+  jobs: [],
+  fuel: [],
+  odometer: [],
+  achievements: [],
+  invites: [],
+  myInvites: [],
+}
 
 /**
  * Datos del usuario en vivo desde Firestore. Si la app queda abierta pasada la medianoche, recalcula los
@@ -43,7 +55,7 @@ const EMPTY: UserData = { settings: DEFAULT_SETTINGS, cars: [], rules: [], jobs:
  * y bajaría el km. `subscribeUserData` publica las lecturas recién cuando todos los autos entregaron las suyas, y
  * las marca como caché si alguna lo es; un auto nuevo que todavía no las entregó aparece sin lecturas y no se toca.
  * Espera un momento a que se asienten los datos (el auto y su lectura llegan en fotos separadas); una corrección que
- * falló no se reintenta.
+ * falló no se reintenta. En los autos donde soy `viewer` no corrige nada: no puedo escribir el km.
  *
  * Mantenimientos: `rules` (y `rulesByCar`) llevan la proyección calculada en memoria con los trabajos aprobados y las
  * lecturas (`projectRules`), así la pantalla está bien antes de que la proyección llegue al servidor. Reconciliación:
@@ -98,6 +110,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     if (!kmReady) return
     const id = setTimeout(() => {
       for (const car of data.cars) {
+        if (!canWrite(car, uid)) continue
         const readings = data.odometer.filter(r => r.carId === car.id)
         const fix = kmCorrection(car, readings)
         if (!fix) continue
@@ -110,7 +123,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, data.odometer, kmReady, actor])
+  }, [data.cars, data.odometer, kmReady, actor, uid])
 
   const projecting = useRef(new Set<string>())
   const projectionReady = kmReady && synced.has('rules') && synced.has('jobs')
@@ -152,6 +165,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       jobs: [...data.jobs].sort(byDateDesc),
       fuel: [...data.fuel].sort(byDateDesc),
       odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
+      myInvites: data.myInvites.filter(i => isInviteOpen(i, new Date())),
       uid,
       email,
       actor,
