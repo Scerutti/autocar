@@ -154,6 +154,30 @@ describe('pendingItems', () => {
     expect(items.map(key)).toEqual([])
   })
 
+  it('a un miembro viewer no se le piden los km; a un editor o trusted, sí', () => {
+    const asMember = (role: 'editor' | 'trusted' | 'viewer') => ({
+      ...car,
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', role } },
+    })
+    const input = { ...base, uid: MEMBER, rulesByCar: new Map(), today: '2026-09-28' }
+    expect(pendingItems({ ...input, cars: [asMember('viewer')] }).map(key)).toEqual([])
+    expect(pendingItems({ ...input, cars: [asMember('editor')] }).map(key)).toEqual(['km'])
+    expect(pendingItems({ ...input, cars: [asMember('trusted')] }).map(key)).toEqual(['km'])
+  })
+
+  it('a un miembro viewer no se le avisan sus trabajos rechazados; a un editor, sí', () => {
+    const asMember = (role: 'editor' | 'viewer') => ({
+      ...car,
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', role } },
+    })
+    const jobs = [job({ id: 'r', status: 'rejected', createdBy: MEMBER })]
+    const input = { ...base, uid: MEMBER, jobs, rulesByCar: new Map(), today: '2026-09-21' }
+    expect(pendingItems({ ...input, cars: [asMember('viewer')] }).map(key)).toEqual([])
+    expect(pendingItems({ ...input, cars: [asMember('editor')] }).map(key)).toEqual(['rejected:r'])
+  })
+
   it('sin autos no hay nada pendiente', () => {
     expect(pendingItems({ ...base, cars: [], rulesByCar, today: '2026-09-28' })).toEqual([])
   })

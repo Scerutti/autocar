@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { carRecords } from './achievements'
 import {
   approvedJobs,
+  approvesOwnJobs,
   authorLabel,
   canEditEntry,
   canEditJob,
+  canWrite,
   canonicalEmail,
   carMembers,
   inviteCarLabel,
@@ -16,12 +18,14 @@ import {
   jobEdit,
   maskEmail,
   memberError,
+  memberRole,
   mineForAchievements,
   normalizeEmail,
   reviewAlreadyDone,
+  setRolePatch,
   transferPatch,
 } from './sharing'
-import type { Car, FuelLoad, Invite, Job, MaintenanceRule, OdometerReading } from './types'
+import type { Car, FuelLoad, Invite, Job, MaintenanceRule, MemberRole, OdometerReading } from './types'
 
 const OWNER = 'owner-uid'
 const MEMBER = 'member-uid'
@@ -117,6 +121,40 @@ const rule = (extra: Partial<MaintenanceRule> = {}): MaintenanceRule => ({
   ...extra,
 })
 
+const withRole = (role?: MemberRole) =>
+  car({ memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', ...(role ? { role } : {}) } } })
+
+describe('roles', () => {
+  it('sin rol, o sin perfil, el miembro es editor', () => {
+    expect(memberRole(withRole(), MEMBER)).toBe('editor')
+    expect(memberRole(car(), MEMBER)).toBe('editor')
+  })
+
+  it('lee el rol del perfil', () => {
+    expect(memberRole(withRole('trusted'), MEMBER)).toBe('trusted')
+    expect(memberRole(withRole('viewer'), MEMBER)).toBe('viewer')
+  })
+
+  it('el dueño siempre escribe; el miembro, salvo que sea viewer', () => {
+    expect(canWrite(withRole('viewer'), OWNER)).toBe(true)
+    expect(canWrite(withRole(), MEMBER)).toBe(true)
+    expect(canWrite(withRole('trusted'), MEMBER)).toBe(true)
+    expect(canWrite(withRole('viewer'), MEMBER)).toBe(false)
+    expect(canWrite(car(), MEMBER)).toBe(true)
+  })
+
+  it('sólo un trusted crea sus trabajos aprobados', () => {
+    expect(approvesOwnJobs(withRole('trusted'), MEMBER)).toBe(true)
+    expect(approvesOwnJobs(withRole(), MEMBER)).toBe(false)
+    expect(approvesOwnJobs(withRole('viewer'), MEMBER)).toBe(false)
+    expect(approvesOwnJobs(withRole('trusted'), OWNER)).toBe(false)
+  })
+
+  it('cambiar el rol escribe sólo el role del perfil', () => {
+    expect(setRolePatch(MEMBER, 'viewer')).toEqual({ [`memberProfiles.${MEMBER}.role`]: 'viewer' })
+  })
+})
+
 describe('permisos', () => {
   it('el dueño puede editar todo', () => {
     const c = car()
@@ -149,6 +187,21 @@ describe('permisos', () => {
     expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'pending' }))).toBe(true)
     expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'rejected' }))).toBe(true)
     expect(canEditJob(c, MEMBER, job({ createdBy: OWNER, status: 'pending' }))).toBe(false)
+  })
+
+  it('un viewer no edita ni borra nada, tampoco lo que cargó antes', () => {
+    const c = withRole('viewer')
+    expect(canEditEntry(c, MEMBER, fuel({ createdBy: MEMBER }))).toBe(false)
+    expect(canEditEntry(c, MEMBER, reading({ createdBy: MEMBER }))).toBe(false)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'pending' }))).toBe(false)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'rejected' }))).toBe(false)
+  })
+
+  it('un trusted edita lo mismo que un editor: un trabajo suyo aprobado, no', () => {
+    const c = withRole('trusted')
+    expect(canEditEntry(c, MEMBER, fuel({ createdBy: MEMBER }))).toBe(true)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'pending' }))).toBe(true)
+    expect(canEditJob(c, MEMBER, job({ createdBy: MEMBER, status: 'approved' }))).toBe(false)
   })
 
   it('un auto está compartido si tiene miembros o si me lo compartieron', () => {
@@ -287,6 +340,16 @@ describe('transferPatch', () => {
     expect(patch.ownerName).toBeNull()
     expect(patch.memberUids).toEqual([MEMBER, OWNER])
     expect(patch.members).toEqual(['j.doe@gmail.com', 'beto@gmail.com'])
+  })
+
+  it('el dueño anterior entra sin rol (editor), aunque el nuevo dueño tuviera uno', () => {
+    const c = shared({
+      memberProfiles: {
+        [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan', role: 'trusted' },
+        [OTHER]: { email: 'caro@gmail.com', name: null, role: 'viewer' },
+      },
+    })
+    expect(transferPatch(c, { uid: MEMBER }, me).memberProfiles).toEqual({ [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } })
   })
 
   it('sin members, la lista queda vacía', () => {

@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { formatToday } from '@/lib/format'
 import { describeRemaining } from '@/lib/maintenance'
 import { kmDueDay, kmDueSince } from '@/lib/pending'
+import { canWrite } from '@/lib/sharing'
 
 function greeting() {
   const h = new Date().getHours()
@@ -25,10 +26,11 @@ function greeting() {
 
 export default function HomePage() {
   const { user } = useAuth()
-  const { cars, rulesByCar, jobs, fuel, carById, settings, today, myInvites } = useData()
+  const { cars, rulesByCar, jobs, fuel, carById, settings, today, myInvites, uid } = useData()
   const [kmCarId, setKmCarId] = useState<string | null>(null)
   const kmCar = kmCarId ? carById.get(kmCarId) : null
   const kmDue = cars.flatMap(car => {
+    if (!canWrite(car, uid)) return []
     const since = kmDueSince(settings, car, today)
     return since ? [{ car, since }] : []
   })

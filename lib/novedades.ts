@@ -36,6 +36,10 @@ export const NOVEDADES: Novedad[] = [
         title: 'Pasarle el auto a otra persona',
         text: 'Si vendés el auto o lo va a manejar otro, en "Editar auto" → Compartir tocá "Pasarle el auto" junto a alguien que aceptó tu invitación. Pasa a ser el dueño: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro y podés salir cuando quieras.',
       },
+      {
+        title: 'Qué puede hacer cada uno',
+        text: 'En "Editar auto" → Compartir elegís para cada persona: "Puede cargar" (sus trabajos esperan tu aprobación, como hasta ahora), "Sin aprobación" (sus trabajos nuevos cuentan al instante) o "Solo mira" (ve el auto y su historial, pero no carga nada).',
+      },
     ],
   },
   {

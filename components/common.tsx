@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, CarFront, MapPinOff } from 'lucide-react'
+import { ArrowLeft, CarFront, Eye, MapPinOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
@@ -208,6 +208,25 @@ export function Loading({ label }: { label?: string }) {
 }
 
 /** Para un auto, trabajo, etc. que ya no existe (p. ej. se borró o viene de una notificación vieja). */
+/**
+ * Lo que ve un miembro `viewer` si llega a una pantalla para cargar algo en el auto (por un link viejo): no puede, y
+ * vuelve al auto.
+ */
+export function ViewerOnly({ car }: { car: Pick<Car, 'id'> }) {
+  return (
+    <EmptyState
+      icon={Eye}
+      title="En este auto solo podés mirar"
+      description="El dueño te dejó ver el auto y su historial, pero no cargar ni cambiar nada."
+      action={
+        <LinkButton href={`/autos/${car.id}`} variant="outline" size="lg">
+          <ArrowLeft /> Volver
+        </LinkButton>
+      }
+    />
+  )
+}
+
 export function NotFound({ what, back = '/' }: { what: string; back?: string }) {
   return (
     <PageBody>

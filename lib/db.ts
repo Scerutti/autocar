@@ -29,6 +29,7 @@ import { defaultWarnings, jobChangeDiff, projectionPatch, projectRule, type Proj
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
 import {
+  approvesOwnJobs,
   canonicalEmail,
   INVITE_DAYS,
   inviteCarLabel,
@@ -37,6 +38,7 @@ import {
   jobEdit,
   normalizeEmail,
   reviewAlreadyDone,
+  setRolePatch,
   transferPatch,
   type CarMember,
   type ReviewTarget,
@@ -55,6 +57,7 @@ import {
   type JobStatus,
   type MaintenanceRule,
   type MemberProfile,
+  type MemberRole,
   type OdometerReading,
   type TimeInterval,
   type UserSettings,
@@ -108,14 +111,18 @@ const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : n
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((m: unknown): m is string => typeof m === 'string') : [])
 
-/** Perfiles de los miembros (`memberProfiles`): se descarta lo que no es un mapa. */
+/** Roles que se leen de un perfil; cualquier otro valor se descarta (el miembro queda `editor`). */
+const MEMBER_ROLES: readonly MemberRole[] = ['editor', 'trusted', 'viewer']
+
+/** Perfiles de los miembros (`memberProfiles`): se descarta lo que no es un mapa, y el rol si no es uno conocido. */
 function profilesFrom(v: unknown): Record<string, MemberProfile> {
   if (!v || typeof v !== 'object') return {}
   const out: Record<string, MemberProfile> = {}
   for (const [uid, p] of Object.entries(v as Record<string, unknown>)) {
     if (!p || typeof p !== 'object') continue
     const x = p as Record<string, unknown>
-    out[uid] = { email: str(x.email) ?? '', name: str(x.name) }
+    const role = MEMBER_ROLES.find(r => r === x.role)
+    out[uid] = { email: str(x.email) ?? '', name: str(x.name), ...(role ? { role } : {}) }
   }
   return out
 }
@@ -782,6 +789,17 @@ export async function leaveCar(actor: Actor, car: Car, email: string | null) {
 }
 
 /**
+ * El dueño le cambia el rol a un miembro por uid (uno sólo por el mail viejo no tiene perfil y es `editor`): `update`
+ * sólo de `memberProfiles.{uid}.role` (`setRolePatch`), y nada más del auto. Lo que el miembro ya cargó no cambia: un
+ * trabajo pendiente sigue esperando la aprobación aunque pase a `trusted`.
+ */
+export async function setMemberRole(actor: Actor, car: Car, uid: string, role: MemberRole) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), setRolePatch(uid, role))
+  await batch.commit()
+}
+
+/**
  * El dueño le pasa el auto a un miembro por uid (`to.uid`; uno sólo por el mail viejo no lo puede recibir). En un mismo
  * batch, el auto cambia de dueño con `transferPatch` (el nuevo dueño sale de `memberUids`, de `memberProfiles` con
  * `deleteField()` y sus mails viejos de `members`; yo entro como miembro con mi perfil: `myEmail`, el mail de mi login,
@@ -962,6 +980,8 @@ type JobContext = KmContext & ProjectionContext & { rules: MaintenanceRule[] }
  * pantalla muestra la proyección en memoria (`DataProvider`), y la reconciliación de `DataProvider` escribe lo que haya
  * faltado o fallado en la próxima carga confirmada por el servidor. La promesa espera sólo el batch del trabajo.
  * Ningún trabajo borra un mantenimiento: los de una sola vez quedan cumplidos (`completedByJobId`).
+ * Si escribe un miembro (un `trusted` que crea un trabajo aprobado) no hay batches de mantenimientos: el plan es del
+ * dueño y las reglas no lo dejan. Los escribe la reconciliación de `DataProvider` cuando el dueño abre la app.
  */
 async function applyJobChange(
   actor: Actor,
@@ -982,7 +1002,10 @@ async function applyJobChange(
   } else if (before && isApproved(before)) {
     readingsAfter = writeLinkedReading(jobBatch, ctx, link, null)
   }
-  const changes = jobChangeDiff({ rules: ctx.rules, jobs: ctx.jobs, readings: ctx.readings, readingsAfter, before, after })
+  const changes =
+    ctx.car.ownerUid === actor.uid
+      ? jobChangeDiff({ rules: ctx.rules, jobs: ctx.jobs, readings: ctx.readings, readingsAfter, before, after })
+      : []
   const saved = jobBatch.commit()
   saved.then(
     () => {
@@ -1001,9 +1024,11 @@ async function applyJobChange(
  * Guarda un trabajo (`applyJobChange` desde `existing`, el trabajo como estaba).
  * - Al crearlo, `set` del documento completo con quién lo cargó y `revision: 0`. Si lo crea el dueño queda aprobado
  *   y sus mantenimientos se recalculan; opcionalmente, agenda la vuelta al taller (`followUp`, sólo al crear). Si lo
- *   crea un miembro queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos y el km
+ *   crea un miembro `editor` queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos y el km
  *   quedan guardados en el trabajo y cuentan al aprobarlo (`approveJob`), así un trabajo rechazado no deja nada mal
- *   cargado.
+ *   cargado. Si lo crea un miembro `trusted` (`approvesOwnJobs`) queda aprobado, con su lectura de km a su nombre y el
+ *   km del auto, pero sin escribir los mantenimientos ni la vuelta al taller (el plan es del dueño): los mantenimientos
+ *   los escribe la reconciliación cuando el dueño abre la app, y mientras tanto la pantalla los muestra calculados.
  * - Al editarlo, `update` sólo de los campos que cambiaron (`changedFields`) contra `existing`, el trabajo como lo
  *   abrió el formulario: así no pisa lo que otro dispositivo cambió mientras tanto en otros campos. Suma el estado y
  *   la revisión que dice `jobEdit` con el trabajo como lo tiene la app ahora (`ctx.jobs`; si no está, `existing`):
@@ -1036,7 +1061,7 @@ export async function saveJob(
     return 'saved'
   }
   const id = newChildId(carId, 'jobs')
-  const status: JobStatus = member ? 'pending' : 'approved'
+  const status: JobStatus = !member || approvesOwnJobs(ctx.car, actor.uid) ? 'approved' : 'pending'
   const now = new Date()
   const after: Job = { ...data, id, status, reviewedAt: null, revision: 0, createdAt: now, createdBy: actor.uid, createdByName: actor.name }
   await applyJobChange(actor, ctx, null, after, batch => {
@@ -1048,7 +1073,7 @@ export async function saveJob(
       createdBy: actor.uid,
       createdByName: actor.name,
     })
-    if (!followUp || status !== 'approved') return
+    if (!followUp || member) return
     batch.set(doc(carCol(carId, 'rules')), {
       carId,
       name: followUp.name,
