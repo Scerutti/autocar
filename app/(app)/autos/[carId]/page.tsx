@@ -32,7 +32,7 @@ import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm, type RuleWithState } from '@/lib/maintenance'
 import { readingOrigin } from '@/lib/odometer'
-import { approvedJobs, authorLabel, canEditEntry, isCarOwner, isSharedCar } from '@/lib/sharing'
+import { approvedJobs, authorLabel, canEditEntry, carMembers, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
 import { FUEL_LABELS, FUEL_UNITS, type Car, type FuelLoad, type Job, type MaintenanceRule, type OdometerReading } from '@/lib/types'
 import { removeWithUndo, runInBackground } from '@/lib/use-saver'
@@ -370,27 +370,27 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
 
 /**
  * Con quién está compartido el auto: al miembro, "Compartido por <dueño>" y "Salir de este auto"; al dueño de un
- * auto compartido, "Compartido con N personas". En un auto sin compartir no muestra nada.
+ * auto compartido, "Compartido con" y los nombres de los miembros (`memberProfiles`; si no tienen nombre, el mail).
+ * En un auto sin compartir no muestra nada.
  */
 function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { actor, email } = useData()
-  const members = car.members ?? []
+  const members = carMembers(car)
   const name = carName(car)
 
   async function leave() {
-    if (!email) return
     const confirmed = await confirm({
       tone: 'danger',
       title: `¿Salir de ${name}?`,
-      description: `Dejás de ver el auto. Lo que cargaste queda en el historial. Para volver, ${car.ownerName ?? 'el dueño'} te tiene que agregar de nuevo.`,
+      description: `Dejás de ver el auto. Lo que cargaste queda en el historial. Para volver, ${car.ownerName ?? 'el dueño'} te tiene que invitar de nuevo.`,
       confirmLabel: 'Sí, salir',
       icon: LogOut,
     })
     if (!confirmed) return
     router.replace('/')
-    runInBackground(leaveCar(actor, car.id, email), `No se pudo salir de ${name}`)
+    runInBackground(leaveCar(actor, car, email), `No se pudo salir de ${name}`)
     toast.success(`Saliste de ${name}`)
   }
 
@@ -399,8 +399,8 @@ function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
     return (
       <Link href={`/autos/${car.id}/editar`} className="flex items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3 text-sm hover:bg-card">
         <Users aria-hidden className="size-4 shrink-0 text-primary" />
-        <span className="min-w-0 flex-1">
-          Compartido con {members.length} {members.length === 1 ? 'persona' : 'personas'}
+        <span className="min-w-0 flex-1 truncate">
+          Compartido con {members.map(m => m.name ?? m.email).join(' y ')}
         </span>
         <ChevronRight className="size-4 text-muted-foreground" />
       </Link>

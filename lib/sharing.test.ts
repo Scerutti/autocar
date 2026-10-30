@@ -5,15 +5,22 @@ import {
   authorLabel,
   canEditEntry,
   canEditJob,
+  canonicalEmail,
+  carMembers,
+  inviteCarLabel,
+  inviteEmailKey,
+  inviteId,
   isCarOwner,
+  isInviteOpen,
   isSharedCar,
   jobEdit,
+  maskEmail,
   memberError,
   mineForAchievements,
   normalizeEmail,
   reviewAlreadyDone,
 } from './sharing'
-import type { Car, FuelLoad, Job, MaintenanceRule, OdometerReading } from './types'
+import type { Car, FuelLoad, Invite, Job, MaintenanceRule, OdometerReading } from './types'
 
 const OWNER = 'owner-uid'
 const MEMBER = 'member-uid'
@@ -148,6 +155,11 @@ describe('permisos', () => {
     expect(isSharedCar(car({ members: [] }), OWNER)).toBe(false)
     expect(isSharedCar(car({ members: [] }), MEMBER)).toBe(true)
   })
+
+  it('cuenta los miembros por uid aunque no estén en el mail viejo', () => {
+    expect(isSharedCar(car({ members: [], memberUids: [MEMBER] }), OWNER)).toBe(true)
+    expect(isSharedCar(car({ members: [], memberUids: [] }), OWNER)).toBe(false)
+  })
 })
 
 describe('authorLabel', () => {
@@ -160,35 +172,140 @@ describe('authorLabel', () => {
   })
 })
 
+const NOW = new Date('2026-10-30T12:00:00')
+
+const invite = (extra: Partial<Invite> = {}): Invite => ({
+  id: 'c1_caro@gmail.com',
+  carId: 'c1',
+  ownerUid: OWNER,
+  ownerName: 'Ana',
+  carLabel: 'Fiat Cronos',
+  email: 'caro@gmail.com',
+  emailKey: 'caro@gmail.com',
+  status: 'pending',
+  createdAt: new Date('2026-10-29T12:00:00'),
+  expiresAt: new Date('2026-11-12T12:00:00'),
+  respondedAt: null,
+  acceptedUid: null,
+  ...extra,
+})
+
+describe('canonicalEmail', () => {
+  it('en Gmail saca los puntos y lo que va después de un "+"', () => {
+    expect(canonicalEmail('j.doe@gmail.com')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('jdoe+auto@gmail.com')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('j.d.o.e+auto+otro@gmail.com')).toBe('jdoe@gmail.com')
+  })
+
+  it('trata googlemail.com como gmail.com', () => {
+    expect(canonicalEmail('j.doe@googlemail.com')).toBe('jdoe@gmail.com')
+  })
+
+  it('pasa a minúscula y saca los espacios', () => {
+    expect(canonicalEmail('  J.Doe@Gmail.COM ')).toBe('jdoe@gmail.com')
+    expect(canonicalEmail('Juan.Perez@Empresa.com.ar')).toBe('juan.perez@empresa.com.ar')
+  })
+
+  it('en otros dominios deja los puntos y el "+"', () => {
+    expect(canonicalEmail('j.doe+auto@hotmail.com')).toBe('j.doe+auto@hotmail.com')
+    expect(canonicalEmail('j.doe@gmail.com.ar')).toBe('j.doe@gmail.com.ar')
+  })
+})
+
+describe('invitaciones', () => {
+  it('el id es el auto y el mail canónico', () => {
+    expect(inviteId('c1', 'J.Doe+auto@gmail.com')).toBe('c1_jdoe@gmail.com')
+    expect(inviteEmailKey('c1_jdoe@gmail.com')).toBe('jdoe@gmail.com')
+    expect(inviteEmailKey('c1_j_doe@empresa.com')).toBe('j_doe@empresa.com')
+    expect(inviteEmailKey('sin-guion')).toBe('')
+  })
+
+  it('tapa el mail', () => {
+    expect(maskEmail('jdoe@gmail.com')).toBe('j•••@gmail.com')
+    expect(maskEmail('raro')).toBe('•••')
+  })
+
+  it('está abierta si está pendiente y no venció', () => {
+    expect(isInviteOpen(invite(), NOW)).toBe(true)
+    expect(isInviteOpen(invite({ expiresAt: NOW }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'declined' }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'revoked' }), NOW)).toBe(false)
+    expect(isInviteOpen(invite({ status: 'accepted' }), NOW)).toBe(false)
+  })
+
+  it('el auto se ve como marca, modelo y año', () => {
+    expect(inviteCarLabel({ brand: 'Ford', model: 'Ka', year: 2015 })).toBe('Ford Ka 2015')
+    expect(inviteCarLabel({ brand: 'Ford', model: 'Ka', year: null })).toBe('Ford Ka')
+  })
+})
+
+describe('carMembers', () => {
+  it('lista los miembros por uid y los mails viejos que no son de ninguno', () => {
+    const c = car({
+      members: ['j.doe@gmail.com', 'beto@gmail.com'],
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' } },
+    })
+    expect(carMembers(c)).toEqual([
+      { uid: MEMBER, email: 'jdoe@gmail.com', name: 'Juan' },
+      { uid: null, email: 'beto@gmail.com', name: null },
+    ])
+  })
+
+  it('sin los campos nuevos, sólo los mails viejos', () => {
+    expect(carMembers(car())).toEqual([{ uid: null, email: 'beto@gmail.com', name: null }])
+  })
+})
+
 describe('memberError', () => {
-  const input = { ownerEmail: 'ana@gmail.com', members: ['beto@gmail.com'] }
+  const c = car({ members: [], memberUids: [], memberProfiles: {} })
+  const ctx = { ownerEmail: 'ana@gmail.com', now: NOW }
+  const withUid = (email: string) => car({ members: [], memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email, name: null } } })
 
   it('acepta un mail nuevo en minúscula', () => {
-    expect(memberError('caro@gmail.com', input)).toBeNull()
-    expect(memberError(normalizeEmail('  Caro@Gmail.com '), input)).toBeNull()
+    expect(memberError(c, [], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [], normalizeEmail('  Caro@Gmail.com '), ctx)).toBeNull()
   })
 
   it('rechaza un mail inválido', () => {
-    expect(memberError('caro', input)).not.toBeNull()
-    expect(memberError('caro@gmail', input)).not.toBeNull()
-    expect(memberError('caro @gmail.com', input)).not.toBeNull()
+    expect(memberError(c, [], 'caro', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'caro@gmail', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'caro @gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'ca/ro@gmail.com', ctx)).not.toBeNull()
   })
 
   it('rechaza un mail en mayúsculas', () => {
-    expect(memberError('Caro@Gmail.com', input)).not.toBeNull()
+    expect(memberError(c, [], 'Caro@Gmail.com', ctx)).not.toBeNull()
   })
 
-  it('rechaza el mail del dueño', () => {
-    expect(memberError('ana@gmail.com', input)).not.toBeNull()
-    expect(memberError('ana@gmail.com', { ...input, ownerEmail: 'Ana@Gmail.com' })).not.toBeNull()
+  it('rechaza mi propio mail, también escrito de otra forma', () => {
+    expect(memberError(c, [], 'ana@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'a.na+auto@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [], 'ana@gmail.com', { ...ctx, ownerEmail: 'Ana@Gmail.com' })).not.toBeNull()
   })
 
-  it('rechaza un mail repetido', () => {
-    expect(memberError('beto@gmail.com', input)).not.toBeNull()
+  it('rechaza el mail de un miembro, por uid o por el mail viejo', () => {
+    expect(memberError(withUid('caro@gmail.com'), [], 'c.aro@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(car(), [], 'beto@gmail.com', ctx)).not.toBeNull()
   })
 
-  it('rechaza un tercero', () => {
-    expect(memberError('dani@gmail.com', { ...input, members: ['beto@gmail.com', 'caro@gmail.com'] })).not.toBeNull()
+  it('rechaza un mail con una invitación pendiente, pero no una vencida, rechazada o cancelada', () => {
+    expect(memberError(c, [invite()], 'c.aro@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [invite({ expiresAt: NOW })], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [invite({ status: 'declined' })], 'caro@gmail.com', ctx)).toBeNull()
+    expect(memberError(c, [invite({ status: 'revoked' })], 'caro@gmail.com', ctx)).toBeNull()
+  })
+
+  it('no cuenta las invitaciones de otros autos', () => {
+    expect(memberError(c, [invite({ carId: 'c2' })], 'caro@gmail.com', ctx)).toBeNull()
+  })
+
+  it('el tope cuenta los miembros por uid más las invitaciones pendientes que no vencieron', () => {
+    const eva = invite({ id: 'c1_eva@gmail.com', email: 'eva@gmail.com', emailKey: 'eva@gmail.com' })
+    expect(memberError(withUid('beto@gmail.com'), [], 'dani@gmail.com', ctx)).toBeNull()
+    expect(memberError(withUid('beto@gmail.com'), [invite()], 'dani@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(c, [invite(), eva], 'dani@gmail.com', ctx)).not.toBeNull()
+    expect(memberError(withUid('beto@gmail.com'), [invite({ expiresAt: NOW })], 'dani@gmail.com', ctx)).toBeNull()
   })
 })
 

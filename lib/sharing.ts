@@ -1,22 +1,88 @@
-import type { Authorship, Car, FuelLoad, Job, JobStatus, MaintenanceRule, OdometerReading } from './types'
+import type { Authorship, Car, FuelLoad, Invite, Job, JobStatus, MaintenanceRule, OdometerReading } from './types'
 
 /** Cuántas personas, además del dueño, pueden tener un auto. */
 export const MAX_MEMBERS = 2
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/** Cuántos días dura una invitación sin responder. Las reglas de Firestore aceptan hasta 15. */
+export const INVITE_DAYS = 14
 
-/** Un mail como se guarda en `members` y como lo compara la regla de Firestore: sin espacios y en minúscula. */
+/** Sin "/": el mail canónico va en el id de la invitación, y un id de Firestore no puede tenerla. */
+const EMAIL_RE = /^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/
+
+/** Dominios de Gmail: Google ignora los puntos y lo que va después de un "+" en la parte de antes de la arroba. */
+const GMAIL_DOMAINS = ['gmail.com', 'googlemail.com']
+
+/** Un mail como lo escribe el dueño y como lo compara la regla de Firestore con `members`: sin espacios y en minúscula. */
 export const normalizeEmail = (email: string) => email.trim().toLowerCase()
+
+/**
+ * Mail con el que se compara una invitación: en minúscula y, en Gmail, sin puntos ni "+algo" (Google los ignora).
+ * `googlemail.com` se trata como `gmail.com`. Los demás dominios, sólo en minúscula y sin espacios. Es el mismo
+ * cálculo que `myEmailKey()` en firestore.rules.
+ */
+export function canonicalEmail(email: string): string {
+  const e = normalizeEmail(email)
+  const at = e.lastIndexOf('@')
+  if (at < 0 || !GMAIL_DOMAINS.includes(e.slice(at + 1))) return e
+  return `${e.slice(0, at).split('+')[0].replaceAll('.', '')}@gmail.com`
+}
+
+/** "j•••@gmail.com": el mail de una invitación para mostrarlo a otra cuenta sin revelarlo entero. */
+export function maskEmail(email: string) {
+  const at = email.lastIndexOf('@')
+  if (at < 1) return '•••'
+  return `${email[0]}•••${email.slice(at)}`
+}
+
+/** Id de la invitación de un mail a un auto: `{carId}_{mail canónico}`. Una activa por auto y mail. */
+export const inviteId = (carId: string, email: string) => `${carId}_${canonicalEmail(email)}`
+
+/** El mail canónico que va en el id de una invitación (los ids de los autos no tienen "_"). */
+export function inviteEmailKey(id: string) {
+  const i = id.indexOf('_')
+  return i < 0 ? '' : id.slice(i + 1)
+}
+
+/** Si la invitación se puede aceptar o rechazar: está pendiente y no venció. */
+export const isInviteOpen = (invite: Pick<Invite, 'status' | 'expiresAt'>, now: Date) =>
+  invite.status === 'pending' && invite.expiresAt.getTime() > now.getTime()
+
+/** "Ford Ka 2015": cómo ve el auto el invitado antes de aceptar, sin poder leerlo. */
+export const inviteCarLabel = (car: Pick<Car, 'brand' | 'model' | 'year'>) =>
+  [car.brand, car.model, car.year].filter(Boolean).join(' ')
+
+/** Un miembro del auto: por uid (aceptó una invitación) o, hasta #66, sólo por el mail viejo de `members` (uid null). */
+export interface CarMember {
+  uid: string | null
+  email: string
+  name: string | null
+}
+
+/**
+ * Los miembros del auto: los de `memberUids` con su perfil y, después, los mails viejos de `members` que no son de
+ * ninguno de ellos (comparados con `canonicalEmail`).
+ */
+export function carMembers(car: Pick<Car, 'members' | 'memberUids' | 'memberProfiles'>): CarMember[] {
+  const byUid: CarMember[] = (car.memberUids ?? []).map(uid => {
+    const profile = car.memberProfiles?.[uid]
+    return { uid, email: profile?.email ?? '', name: profile?.name ?? null }
+  })
+  const known = new Set(byUid.map(m => canonicalEmail(m.email)))
+  const legacy: CarMember[] = (car.members ?? [])
+    .filter(email => !known.has(canonicalEmail(email)))
+    .map(email => ({ uid: null, email, name: null }))
+  return [...byUid, ...legacy]
+}
 
 /** Si soy el dueño del auto. */
 export const isCarOwner = (car: Pick<Car, 'ownerUid'>, uid: string) => car.ownerUid === uid
 
 /**
- * Si el auto está compartido desde mi lado: lo compartí con alguien o me lo compartieron. Sólo en esos autos
- * se muestra quién cargó cada cosa.
+ * Si el auto está compartido desde mi lado: lo compartí con alguien (por uid o, hasta #66, por el mail viejo) o me lo
+ * compartieron. Sólo en esos autos se muestra quién cargó cada cosa.
  */
-export const isSharedCar = (car: Pick<Car, 'ownerUid' | 'members'>, uid: string) =>
-  !isCarOwner(car, uid) || (car.members?.length ?? 0) > 0
+export const isSharedCar = (car: Pick<Car, 'ownerUid' | 'members' | 'memberUids'>, uid: string) =>
+  !isCarOwner(car, uid) || (car.memberUids?.length ?? 0) > 0 || (car.members?.length ?? 0) > 0
 
 /** Uid de quien cargó un registro. Uno sin autoría (anterior a la migración) cuenta como del dueño del auto. */
 export const authorOf = (record: Authorship, car: Pick<Car, 'ownerUid'>) => record.createdBy ?? car.ownerUid ?? null
@@ -77,15 +143,27 @@ export function authorLabel(record: Authorship, car: Pick<Car, 'ownerUid' | 'own
 }
 
 /**
- * Error para mostrar si el mail no se puede sumar al auto, o null si está bien. Espera el mail ya normalizado
- * (`normalizeEmail`): uno con mayúsculas no coincidiría con el del login en las reglas.
+ * Error para mostrar si no se puede invitar a ese mail al auto, o null si está bien. Espera el mail ya normalizado
+ * (`normalizeEmail`). Compara con `canonicalEmail`, así "j.doe@gmail.com" y "jdoe@gmail.com" son el mismo. Rechaza mi
+ * propio mail (`ownerEmail`), el de un miembro (por uid o por el mail viejo) y el de una invitación pendiente que no
+ * venció. El tope (`MAX_MEMBERS`) cuenta los miembros por uid más las invitaciones pendientes del auto que no vencieron.
  */
-export function memberError(email: string, input: { ownerEmail: string | null; members: string[] }) {
+export function memberError(
+  car: Pick<Car, 'id' | 'members' | 'memberUids' | 'memberProfiles'>,
+  invites: Invite[],
+  email: string,
+  ctx: { ownerEmail: string | null; now: Date },
+) {
   if (!EMAIL_RE.test(email)) return 'Ese mail no es válido.'
   if (email !== normalizeEmail(email)) return 'El mail tiene que estar en minúscula y sin espacios.'
-  if (input.ownerEmail && email === normalizeEmail(input.ownerEmail)) return 'Ese es tu mail: el auto ya es tuyo.'
-  if (input.members.includes(email)) return 'Ya lo compartiste con ese mail.'
-  if (input.members.length >= MAX_MEMBERS) return `Podés compartir el auto con hasta ${MAX_MEMBERS} personas.`
+  const key = canonicalEmail(email)
+  if (ctx.ownerEmail && key === canonicalEmail(ctx.ownerEmail)) return 'Ese es tu mail: el auto ya es tuyo.'
+  if (carMembers(car).some(m => canonicalEmail(m.email) === key)) return 'Ya compartiste el auto con ese mail.'
+  const open = invites.filter(i => i.carId === car.id && isInviteOpen(i, ctx.now))
+  if (open.some(i => i.emailKey === key)) return 'Ya invitaste a ese mail. Esperá que responda o cancelá la invitación.'
+  if ((car.memberUids?.length ?? 0) + open.length >= MAX_MEMBERS) {
+    return `Podés compartir el auto con hasta ${MAX_MEMBERS} personas, contando las invitaciones pendientes.`
+  }
   return null
 }
 

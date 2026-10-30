@@ -8,6 +8,7 @@ import { ActivityList, mergeActivity } from '@/components/activity'
 import { CarCard } from '@/components/car-card'
 import { BrandMark } from '@/components/brand'
 import { EmptyState, LinkButton, PageBody, PageHeader, SectionTitle, StatusBadge, carName } from '@/components/common'
+import { InviteCard } from '@/components/invites/invite-card'
 import { KmDialog } from '@/components/km-form'
 import { PendingBell } from '@/components/pending/pending-bell'
 import { useAuth } from '@/components/providers/auth-provider'
@@ -24,7 +25,7 @@ function greeting() {
 
 export default function HomePage() {
   const { user } = useAuth()
-  const { cars, rulesByCar, jobs, fuel, carById, settings, today } = useData()
+  const { cars, rulesByCar, jobs, fuel, carById, settings, today, myInvites } = useData()
   const [kmCarId, setKmCarId] = useState<string | null>(null)
   const kmCar = kmCarId ? carById.get(kmCarId) : null
   const kmDue = cars.flatMap(car => {
@@ -56,6 +57,13 @@ export default function HomePage() {
         }
       />
       <PageBody>
+        {myInvites.length > 0 && (
+          <section aria-label="Invitaciones" className="mb-8 space-y-3">
+            {myInvites.map(invite => (
+              <InviteCard key={invite.id} invite={invite} />
+            ))}
+          </section>
+        )}
         {cars.length === 0 ? (
           <EmptyState
             icon={CarFront}

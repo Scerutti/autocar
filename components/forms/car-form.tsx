@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Camera, CarFront, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { Camera, CarFront, Copy, MailX, RotateCw, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
 import { carName } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
@@ -13,10 +13,20 @@ import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
-import { addMember, createCar, deleteCar, newCarId, removeMember, updateCar, type CarInput } from '@/lib/db'
-import { formatKm, parseNumberInput } from '@/lib/format'
-import { MAX_MEMBERS, isCarOwner, memberError, normalizeEmail } from '@/lib/sharing'
-import type { Car, FuelType } from '@/lib/types'
+import { toISODate } from '@/lib/dates'
+import { createCar, deleteCar, inviteMember, newCarId, removeMember, revokeInvite, updateCar, type CarInput } from '@/lib/db'
+import { formatDate, formatKm, parseNumberInput } from '@/lib/format'
+import {
+  INVITE_DAYS,
+  MAX_MEMBERS,
+  carMembers,
+  isCarOwner,
+  isInviteOpen,
+  memberError,
+  normalizeEmail,
+  type CarMember,
+} from '@/lib/sharing'
+import type { Car, FuelType, Invite } from '@/lib/types'
 import { errorMessage, toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
@@ -258,70 +268,106 @@ export function CarForm({ car }: { car?: Car }) {
   )
 }
 
+/** Link de una invitación: la página `/invitaciones/{id}` de esta app. */
+const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${encodeURIComponent(invite.id)}`
+
 /**
- * Compartir el auto (sólo el dueño, al editarlo): hasta 2 mails, cada uno con su botón para sacarlo. Cada cambio
- * se guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Avisarle" abre el menú
- * de compartir del celular y, si el navegador no lo tiene, copia el mensaje.
+ * Compartir el auto (sólo el dueño, al editarlo). Se invita por mail y la otra persona tiene que aceptar: hasta
+ * entonces no ve nada del auto. La lista muestra los miembros (nombre y mail, con "Sacar"), las invitaciones
+ * pendientes (vencen a los `INVITE_DAYS` días; "Compartir", "Copiar link" y "Cancelar") y las rechazadas o vencidas,
+ * que se pueden volver a mandar. El tope (`MAX_MEMBERS`) cuenta miembros e invitaciones pendientes. Cada cambio se
+ * guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Compartir" abre el menú de
+ * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link.
  */
 function ShareSection({ car }: { car: Car }) {
   const confirm = useConfirm()
-  const { actor, email } = useData()
+  const { actor, email, invites } = useData()
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const members = car.members ?? []
-  const full = members.length >= MAX_MEMBERS
   const name = carName(car)
+  const now = new Date()
+  const members = carMembers(car)
+  const carInvites = invites.filter(i => i.carId === car.id).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+  const open = carInvites.filter(i => isInviteOpen(i, now))
+  const closed = carInvites.filter(i => i.status === 'declined' || (i.status === 'pending' && !isInviteOpen(i, now)))
+  const full = (car.memberUids?.length ?? 0) + open.length >= MAX_MEMBERS
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault()
-    const mail = normalizeEmail(value)
-    const problem = memberError(mail, { ownerEmail: email, members })
-    if (problem) return setError(problem)
+  async function invite(mail: string) {
+    const problem = memberError(car, invites, mail, { ownerEmail: email, now: new Date() })
+    if (problem) {
+      setError(problem)
+      return false
+    }
     setError(null)
     const confirmed = await confirm({
-      title: '¿Compartir el auto con este mail?',
-      description: 'Va a ver todo el auto apenas entre a la app con ese mail, y va a poder cargar combustible, km y trabajos. Los trabajos que cargue esperan tu aprobación.',
+      title: '¿Invitar a este mail?',
+      description: `Le llega una invitación que tiene que aceptar entrando a la app con ese mail. Hasta que acepte no ve nada del auto. Si no la responde, vence en ${INVITE_DAYS} días.`,
       details: [
         { label: 'Mail', value: mail },
         { label: 'Auto', value: name },
       ],
-      confirmLabel: 'Sí, compartir',
+      confirmLabel: 'Sí, invitar',
       icon: UserPlus,
     })
-    if (!confirmed) return
+    if (!confirmed) return false
     setBusy(true)
     try {
-      const status = await settle(addMember(actor, car.id, mail))
-      setValue('')
-      toastSaved('Auto compartido', status, `Avisale a ${mail} que ya lo puede ver.`)
+      const status = await settle(inviteMember(actor, car, mail), 'No se pudo invitar')
+      toastSaved('Invitación creada', status, `Mandale el link a ${mail} para que la acepte.`)
+      return true
     } catch (err) {
       setError(errorMessage(err))
+      return false
     } finally {
       setBusy(false)
     }
   }
 
-  async function remove(mail: string) {
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (await invite(normalizeEmail(value))) setValue('')
+  }
+
+  async function remove(member: CarMember) {
+    const who = member.name ?? member.email
     const confirmed = await confirm({
       tone: 'danger',
-      title: `¿Dejar de compartir el auto con ${mail}?`,
-      description: `Deja de ver tu ${name}. Lo que cargó queda en el historial.`,
+      title: `¿Sacar a ${who} del auto?`,
+      description: `Deja de ver tu ${name}. Lo que cargó queda en el historial. Para volver, lo tenés que invitar de nuevo.`,
       confirmLabel: 'Sí, sacar',
       icon: UserMinus,
     })
     if (!confirmed) return
     try {
-      const status = await settle(removeMember(actor, car.id, mail))
-      toastSaved(`Ya no lo compartís con ${mail}`, status)
+      const status = await settle(removeMember(actor, car, member))
+      toastSaved(`Ya no lo compartís con ${who}`, status)
     } catch (err) {
-      toast.error('No se pudo sacar el mail', { description: errorMessage(err) })
+      toast.error('No se pudo sacar a esa persona', { description: errorMessage(err) })
     }
   }
 
-  async function notify() {
-    const text = `Te compartí mi ${name} en AutoCar. Entrá con tu cuenta de Google:`
-    const url = window.location.origin
+  async function revoke(target: Invite) {
+    const confirmed = await confirm({
+      tone: 'danger',
+      title: '¿Cancelar la invitación?',
+      description: `El link deja de servir y ${target.email} no va a poder aceptarla. Lo podés volver a invitar cuando quieras.`,
+      confirmLabel: 'Sí, cancelar',
+      cancelLabel: 'No',
+      icon: MailX,
+    })
+    if (!confirmed) return
+    try {
+      const status = await settle(revokeInvite(actor, target))
+      toastSaved('Invitación cancelada', status)
+    } catch (err) {
+      toast.error('No se pudo cancelar la invitación', { description: errorMessage(err) })
+    }
+  }
+
+  async function share(target: Invite) {
+    const text = `Te invito a compartir mi ${name} en AutoCar. Entrá con tu cuenta de Google (${target.email}) y aceptá la invitación:`
+    const url = inviteUrl(target)
     if (typeof navigator.share === 'function') {
       try {
         await navigator.share({ title: 'AutoCar', text, url })
@@ -338,37 +384,98 @@ function ShareSection({ car }: { car: Car }) {
     }
   }
 
+  async function copy(target: Invite) {
+    try {
+      await navigator.clipboard.writeText(inviteUrl(target))
+      toast.success('Copiamos el link', { description: 'Pegalo en WhatsApp o donde quieras.' })
+    } catch (err) {
+      toast.error('No se pudo copiar el link', { description: errorMessage(err) })
+    }
+  }
+
+  const rows = members.length + open.length + closed.length
+
   return (
     <section className="rounded-2xl border border-white/8 bg-card/60 p-4">
       <p className="flex items-center gap-2 text-sm font-medium">
         <Users aria-hidden className="size-4 text-primary" /> Compartir
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Hasta {MAX_MEMBERS} personas ven el auto y cargan combustible, km y trabajos. Los trabajos esperan tu aprobación.
+        Invitá hasta {MAX_MEMBERS} personas. Cuando aceptan, ven el auto y cargan combustible, km y trabajos. Los trabajos
+        esperan tu aprobación.
       </p>
 
-      {members.length > 0 && (
+      {rows > 0 && (
         <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
           {members.map(m => (
-            <li key={m} className="flex items-center gap-3 px-3.5 py-2.5">
-              <span className="min-w-0 flex-1 truncate text-sm">{m}</span>
+            <li key={m.uid ?? m.email} className="flex items-center gap-3 px-3.5 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm">{m.name ?? m.email}</p>
+                {m.name && <p className="truncate text-xs text-muted-foreground">{m.email}</p>}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`Sacar a ${m.name ?? m.email}`}
+                className="gap-1.5 text-muted-foreground hover:text-destructive"
+                onClick={() => void remove(m)}
+              >
+                <UserMinus /> Sacar
+              </Button>
+            </li>
+          ))}
+          {open.map(i => (
+            <li key={i.id} className="flex items-center gap-3 px-3.5 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm">{i.email}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  Invitación pendiente · vence el {formatDate(toISODate(i.expiresAt))}
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={`Compartir la invitación de ${i.email}`} onClick={() => void share(i)}>
+                <Send />
+              </Button>
+              <Button type="button" variant="ghost" size="icon-sm" aria-label={`Copiar el link de la invitación de ${i.email}`} onClick={() => void copy(i)}>
+                <Copy />
+              </Button>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                aria-label={`Dejar de compartir con ${m}`}
+                aria-label={`Cancelar la invitación de ${i.email}`}
                 className="text-muted-foreground hover:text-destructive"
-                onClick={() => remove(m)}
+                onClick={() => void revoke(i)}
               >
                 <X />
+              </Button>
+            </li>
+          ))}
+          {closed.map(i => (
+            <li key={i.id} className="flex items-center gap-3 px-3.5 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-muted-foreground">{i.email}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {i.status === 'declined' ? 'Rechazó la invitación' : 'La invitación venció'}
+                </p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" className="gap-1.5" disabled={full || busy} onClick={() => void invite(i.email)}>
+                <RotateCw /> Invitar de nuevo
               </Button>
             </li>
           ))}
         </ul>
       )}
 
-      <form onSubmit={add} className="mt-3 space-y-3" noValidate>
-        <Field label="Mail" hint={full ? `Ya lo compartiste con ${MAX_MEMBERS} personas.` : 'Tiene que ser el mail con el que la persona entra con Google.'}>
+      <form onSubmit={submit} className="mt-3 space-y-3" noValidate>
+        <Field
+          label="Mail"
+          hint={
+            full
+              ? `Ya compartiste el auto o mandaste invitaciones a ${MAX_MEMBERS} personas.`
+              : 'El mail con el que la persona entra con Google. Tiene que aceptar la invitación.'
+          }
+        >
           <Input
             type="email"
             value={value}
@@ -380,16 +487,9 @@ function ShareSection({ car }: { car: Car }) {
           />
         </Field>
         <FormError>{error}</FormError>
-        <div className="flex flex-wrap gap-2">
-          <Button type="submit" size="sm" className="gap-1.5" disabled={full || busy || !value.trim()}>
-            <UserPlus /> {busy ? 'Compartiendo…' : 'Compartir'}
-          </Button>
-          {members.length > 0 && (
-            <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => void notify()}>
-              <Send /> Avisarle
-            </Button>
-          )}
-        </div>
+        <Button type="submit" size="sm" className="gap-1.5" disabled={full || busy || !value.trim()}>
+          <UserPlus /> {busy ? 'Invitando…' : 'Invitar'}
+        </Button>
       </form>
     </section>
   )
