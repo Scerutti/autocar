@@ -32,6 +32,10 @@ export const NOVEDADES: Novedad[] = [
         title: 'Quién está y quién falta',
         text: 'En "Editar auto" ves a cada persona con su nombre, y las invitaciones pendientes con "vence el …", para mandar el link de nuevo o cancelarlas. Si alguien rechaza o deja vencer la invitación, la podés volver a mandar.',
       },
+      {
+        title: 'Pasarle el auto a otra persona',
+        text: 'Si vendés el auto o lo va a manejar otro, en "Editar auto" → Compartir tocá "Pasarle el auto" junto a alguien que aceptó tu invitación. Pasa a ser el dueño: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro y podés salir cuando quieras.',
+      },
     ],
   },
   {
