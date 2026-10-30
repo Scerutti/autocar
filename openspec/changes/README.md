@@ -6,6 +6,7 @@
 | share-cars-with-family | El dueño puede compartir un auto con hasta 2 personas | P1 | L | move-cars-to-shareable-structure | DONE (revisado 2026-10-24; faltan CI, simulador de reglas, publicar reglas y prueba con dos cuentas) |
 | invite-members-by-uid | Compartir con invitación que se acepta, y miembros por uid (#54, E2) | P1 | L | share-cars-with-family | IN PROGRESS (implementado en `feat/54-invitations`; faltan CI, simulador de reglas, publicar reglas, deploy, migración y prueba con dos cuentas) |
 | transfer-car-ownership | El dueño le pasa el auto a un miembro (#65, E2) | P3 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/65-transfer-car`; faltan CI, simulador de reglas y publicar reglas) |
+| member-roles | Roles por miembro: aprobación automática o solo lectura (#71, E2) | P4 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/71-member-roles`; faltan CI, simulador de reglas y publicar reglas) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale) | ARCHIVED.
 
