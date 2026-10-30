@@ -785,9 +785,10 @@ export async function leaveCar(actor: Actor, car: Car, email: string | null) {
  * El dueño le pasa el auto a un miembro por uid (`to.uid`; uno sólo por el mail viejo no lo puede recibir). En un mismo
  * batch, el auto cambia de dueño con `transferPatch` (el nuevo dueño sale de `memberUids`, de `memberProfiles` con
  * `deleteField()` y sus mails viejos de `members`; yo entro como miembro con mi perfil: `myEmail`, el mail de mi login,
- * y mi nombre) y se cancelan las invitaciones pendientes del auto, vencidas o no (`ctx.invites`: las mías, de
- * `useData()`). `memberUids` y `members` van como listas enteras, no con arrayUnion/arrayRemove, porque la regla
- * (`ownerTransfer`) compara los conjuntos.
+ * y mi nombre) y se borran todas las invitaciones del auto, con cualquier estado (`ctx.invites`: las mías, de
+ * `useData()`): el id de una invitación es fijo y sólo la puede volver a mandar o borrar su dueño, así que el nuevo
+ * dueño no podría invitar a esos mails ni borrarlas con el auto. `memberUids` y `members` van como listas enteras, no
+ * con arrayUnion/arrayRemove, porque la regla (`ownerTransfer`) compara los conjuntos.
  */
 export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car: Car, to: CarMember, myEmail: string | null) {
   const patch = transferPatch(car, to, { uid: actor.uid, email: myEmail ?? '', name: actor.name })
@@ -801,9 +802,7 @@ export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car:
     ...profiles,
     [`memberProfiles.${patch.ownerUid}`]: deleteField(),
   })
-  ctx.invites
-    .filter(i => i.carId === car.id && i.status === 'pending')
-    .forEach(i => batch.update(inviteDoc(i.id), { status: 'revoked' }))
+  ctx.invites.filter(i => i.carId === car.id).forEach(i => batch.delete(inviteDoc(i.id)))
   await batch.commit()
 }
 

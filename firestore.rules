@@ -382,7 +382,7 @@ service cloud.firestore {
     // El dueño le pasa el auto a un miembro por uid (transferCar): ownerUid pasa a ser un uid de memberUids que no es
     // el mío; en memberUids y memberProfiles sale el nuevo dueño y entro yo, con un perfil válido (paso a ser
     // miembro, con 2 como mucho); ownerName es el nombre del perfil del nuevo dueño; de members sólo se sacan mails, y
-    // no cambia nada más del auto. Las invitaciones pendientes se cancelan en el mismo batch (ownerRevoke). Quien
+    // no cambia nada más del auto. Las invitaciones del auto se borran en el mismo batch (las borra su dueño). Quien
     // pide ya es el dueño según el documento antes del pedido (lo revisa el match).
     function ownerTransfer() {
       let before = resource.data;

@@ -364,7 +364,7 @@ function ShareSection({ car }: { car: Car }) {
     const confirmed = await confirm({
       tone: 'danger',
       title: `¿Pasarle el auto a ${who}?`,
-      description: `${who} pasa a ser el dueño de tu ${name}: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro: seguís viendo el auto y cargando, y tus trabajos esperan su aprobación. Las invitaciones pendientes se cancelan. Para recuperarlo, te lo tiene que pasar de nuevo.`,
+      description: `${who} pasa a ser el dueño de tu ${name}: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro: seguís viendo el auto y cargando, y tus trabajos esperan su aprobación. Se cancelan las invitaciones. Para recuperarlo, te lo tiene que pasar de nuevo.`,
       details: [
         { label: 'Nuevo dueño', value: who },
         { label: 'Auto', value: name },
