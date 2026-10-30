@@ -39,7 +39,7 @@ export function kmDueDay(since: ISODate, today: ISODate) {
  * los miembros, en mis autos), km que faltan cargar, mis trabajos rechazados (en autos de otros), las invitaciones
  * que me mandaron (`invites`: sólo las pendientes que no vencieron a `now`) y mantenimientos por vencer. Los
  * recordatorios cumplidos no cuentan (`rulesByCar` ya viene sin ellos; se filtran igual). A un miembro `viewer` no se
- * le piden los km (`canWrite`): no los puede cargar.
+ * le piden los km ni se le avisan sus trabajos rechazados (`canWrite`): no los puede cargar ni corregir.
  */
 export function pendingItems(input: {
   settings: UserSettings
@@ -67,7 +67,7 @@ export function pendingItems(input: {
     const car = carById.get(job.carId)
     if (!car) continue
     if (job.status === 'pending' && isCarOwner(car, uid)) review.push({ kind: 'review', car, job })
-    if (job.status === 'rejected' && !isCarOwner(car, uid) && authorOf(job, car) === uid) {
+    if (job.status === 'rejected' && !isCarOwner(car, uid) && authorOf(job, car) === uid && canWrite(car, uid)) {
       rejected.push({ kind: 'rejected', car, job })
     }
   }
