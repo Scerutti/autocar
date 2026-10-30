@@ -6,14 +6,9 @@
 
 ## Decisions
 
-1. **Pending invites:** `transferCar` revokes every invite of the car with `status == 'pending'`, expired or not, in the same batch as the car (`status: 'revoked'`, the existing `ownerRevoke` rule). The invites come from `useData()` (the owner's invites).
+1. **Invites:** `transferCar` deletes every invite of the car, with any status, in the same batch as the car (the existing `allow delete: if isOwner(resource.data.ownerUid)` rule lets the outgoing owner do it). An invite id is fixed (`{carId}_{emailKey}`) and only its `ownerUid` can resend or delete it, so leaving them would stop the new owner from inviting those mails again and from deleting them with the car. The invites come from `useData()` (the owner's invites, `where ownerUid == uid`).
 2. **The new owner's old mail:** the same `update` removes from `members` every mail whose `canonicalEmail` equals that of the new owner's profile email.
-3. **The photo can be deleted by the car's owner even if someone else uploaded it:**
-   - `POST /api/cloudinary/delete` accepts `{ publicId, carId? }`.
-   - If `publicId` is not the caller's (`isOwnPublicId`), it is accepted only when `carId` is given, `cars/{carId}` (Admin SDK) has `ownerUid == uid`, and its `photoPublicId == publicId`.
-   - The character check on `publicId` (`[A-Za-z0-9/_-]`, prefix `autocar/`) stays for both paths.
-   - `deleteImage(publicId, idToken, carId?)` passes it on. `car-form` passes `car.id` when it replaces or removes the photo of an existing car.
-   - Keep the order the form uses today (update the car, then delete the old photo), so the check reads the car before it changes. If it does not work that way, read the code and report it rather than change the order on a guess.
+3. **Photo: no change.** A photo uploaded by someone else (the previous owner) stays orphaned in Cloudinary when the new owner replaces, removes or deletes it: `POST /api/cloudinary/delete` only accepts the caller's own `publicId`, as today. The delete API, `deleteImage` and `car-form` do not change. Reason: `car-form` deletes the old photo after the server confirms the car update, when the car already points to the new photo (or to none), and `deleteCar` deletes the car before the photo; so the API cannot confirm that the old `publicId` belonged to the car.
 4. **Rules:** add a new owner branch, `ownerTransfer()`, as an alternative to `ownerUid == before && ownerMembersUpdate()`. It holds when:
    - the caller is `before.ownerUid`;
    - `after.ownerUid` is in `before.memberUids` and is not the caller;
@@ -36,10 +31,10 @@
 1. `lib/sharing.ts`: pure function `transferPatch(car, to, me)` that returns the new `ownerUid`, `ownerName`, `memberUids`, `memberProfiles` (without the `deleteField`, which `lib/db.ts` adds) and `members`. Add tests in `lib/sharing.test.ts`.
 2. `lib/db.ts`: add `transferCar` (decisions 1, 2, 5).
 3. `firestore.rules`: add `ownerTransfer()` (decision 4), with a comment above it.
-4. `app/api/cloudinary/delete/route.ts`, `lib/cloudinary-client.ts` and `car-form`: decision 3. If the ownership check is extracted as a pure helper (for example in `lib/cloudinary-server.ts`), test it.
+4. Photo: nothing to do (decision 3).
 5. UI: decision 6.
 6. `lib/novedades.ts`: add the user-facing text to the existing draft entry from #54 (do not create a new version). `CHANGELOG.md`: add to the "Próxima versión" draft.
-7. `SYSTEM_MAP.md`: `transferCar`, the new rule branch, and the new delete input. Copy this file to `openspec/changes/transfer-car-ownership/` and add it to `openspec/changes/README.md`.
+7. `SYSTEM_MAP.md`: `transferCar` and the new rule branch. Copy this file to `openspec/changes/transfer-car-ownership/` and add it to `openspec/changes/README.md`.
 
 ## Out of scope
 
@@ -50,7 +45,7 @@ Roles (#71), removing `members` (#66), notifications (#61).
 - Commits in English, conventional format, no attribution.
 - No inline comments: only `/** */` above declarations. In `firestore.rules`, the comment goes above each function.
 - Do not run build, typecheck, tests or lint.
-- PR assigned to `Scerutti`, labels `enhancement, firestore, cloudinary, api, prioridad: baja`. The body follows `.github/pull_request_template.md`.
+- PR assigned to `Scerutti`, labels `enhancement, firestore, prioridad: baja`. The body follows `.github/pull_request_template.md`.
 
 ## Manual steps (user)
 
@@ -59,5 +54,7 @@ Roles (#71), removing `members` (#66), notifications (#61).
   - handing it to a non-member is denied;
   - handing it to myself is denied;
   - extra fields in the same `update` are denied;
-  - the previous owner ends up as a member and can leave.
+  - in the same batch, the outgoing owner deletes the car's invites (pending, accepted, declined, revoked);
+  - the previous owner ends up as a member and can leave;
+  - afterwards, the new owner can invite a mail the previous owner had invited.
 - Publish the rules with the rest of E2.
