@@ -41,7 +41,7 @@ UI (app/(app)/**/page.tsx, 'use client')
 | `app/api/` | Route Handlers (ver §2.1) |
 | `components/forms/` | `car-form`, `job-form`, `fuel-form`, `rule-form` (crear y editar) |
 | `components/providers/` | `AuthProvider`, `DataProvider`, `Providers` (toasts, confirm, SW) |
-| `components/achievements/`, `novedades/`, `pending/`, `report/` | Features transversales |
+| `components/achievements/`, `invites/`, `novedades/`, `pending/`, `report/` | Features transversales |
 | `lib/` | Data layer (`db.ts`), dominio puro, helpers de servidor (`*-server.ts`, `firebase/admin.ts`, `import 'server-only'`) |
 | `lib/types.ts` | Todas las entidades, enums y presets |
 | `scripts/` | Migración `users/{uid}/…` → `cars/…`, íconos, manual PDF |
@@ -116,23 +116,34 @@ Leyenda Auth: **O** = dueño del auto (`car.ownerUid == uid`), **M** = miembro (
 
 | Función | Input | Output / efecto |
 |---|---|---|
-| `subscribeUserData(uid, email, onChange, onError)` | `email` en minúscula o null | Listeners: `users/{uid}`, `users/{uid}/achievements`, `cars where ownerUid==uid` ∪ `cars where members array-contains email`, y por auto `rules`, `jobs`, `fuel`, `odometer`. Emite `Partial<UserData>` por parte. Crea `users/{uid}` con `DEFAULT_SETTINGS` si no existe. Auto revocado (`permission-denied`) → se quita sin error. |
-| `useData()` | — | `UserData` + `{ uid, email, actor, loading, error, today, carById: Map, rulesByCar: Map<carId, RuleWithState[]> }`. `rules` son todos los mantenimientos (también los cumplidos) con la proyección calculada en memoria (`projectRules` con los trabajos y las lecturas), así la UI no espera a que se guarde; `rulesByCar`, sólo los activos (`activeRules`). Jobs/fuel ordenados por fecha desc. `car.currentKm`/`kmUpdatedAt` = los de la lectura más alta (`topReading`) aunque el guardado sea mayor o menor; sin lecturas, lo guardado. |
+| `subscribeUserData(uid, email, onChange, onError)` | `email` en minúscula o null | Listeners: `users/{uid}`, `users/{uid}/achievements`, `cars where ownerUid==uid` ∪ `cars where memberUids array-contains uid` ∪ `cars where members array-contains email` (la vieja, hasta #66), y por auto `rules`, `jobs`, `fuel`, `odometer`; `invites where ownerUid==uid` (parte `invites`) y `invites where emailKey==canonicalEmail(email) and status=='pending'` (parte `myInvites`). Emite `Partial<UserData>` por parte. Crea `users/{uid}` con `DEFAULT_SETTINGS` si no existe. Auto revocado (`permission-denied`) → se quita sin error. Una consulta de compartidos o de invitaciones con `permission-denied` (reglas sin publicar) cuenta como vacía. |
+| `useData()` | — | `UserData` + `{ uid, email, actor, loading, error, today, carById: Map, rulesByCar: Map<carId, RuleWithState[]> }`. `invites`: las que mandé como dueño (todos los estados); `myInvites`: las pendientes para mi mail, sin las vencidas (`isInviteOpen` al recalcular). `rules` son todos los mantenimientos (también los cumplidos) con la proyección calculada en memoria (`projectRules` con los trabajos y las lecturas), así la UI no espera a que se guarde; `rulesByCar`, sólo los activos (`activeRules`). Jobs/fuel ordenados por fecha desc. `car.currentKm`/`kmUpdatedAt` = los de la lectura más alta (`topReading`) aunque el guardado sea mayor o menor; sin lecturas, lo guardado. |
 | `useCar(carId)` | — | `{ car: Car \| null, rules: RuleWithState[] (activos), completed: MaintenanceRule[] (cumplidos), allRules: MaintenanceRule[] (todos), jobs, fuel, readings }` |
 
-`UserData = { settings: UserSettings, cars: Car[], rules: MaintenanceRule[], jobs: Job[], fuel: FuelLoad[], odometer: OdometerReading[], achievements: AchievementRecord[] }`
+`UserData = { settings: UserSettings, cars: Car[], rules: MaintenanceRule[], jobs: Job[], fuel: FuelLoad[], odometer: OdometerReading[], achievements: AchievementRecord[], invites: Invite[], myInvites: Invite[] }`
 
 #### Autos — `cars/{carId}`
 
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
 | `newCarId()` | — | — | `string` (id antes de crear, para la foto) |
-| `createCar(actor, data: CarInput, initialKm, carId?)` | U (queda O) | `CarInput = { brand, model, version, year, plate, fuelTypes, photoUrl?, photoPublicId? }` | batch: `cars/{id}` (`ownerUid`, `ownerName`, `members: []`, `currentKm`, `kmUpdatedAt`, `avgKmPerDay: null`, `createdAt`) + `odometer` `source:'initial'`, `sourceId: null`, `createdAt`. → `carId` |
+| `createCar(actor, data: CarInput, initialKm, carId?)` | U (queda O) | `CarInput = { brand, model, version, year, plate, fuelTypes, photoUrl?, photoPublicId? }` | batch: `cars/{id}` (`ownerUid`, `ownerName`, `members: []`, `memberUids: []`, `memberProfiles: {}`, `currentKm`, `kmUpdatedAt`, `avgKmPerDay: null`, `createdAt`) + `odometer` `source:'initial'`, `sourceId: null`, `createdAt`. → `carId` |
 | `updateCar(actor, carId, Partial<CarInput>)` | O | — | `cars/{id}` |
-| `deleteCar(actor, carId, known?)` | O | `known: { rules?, jobs?, fuel?, odometer?: string[] }` | Borra hijos (tandas de 450) y al final el auto. Las reglas dejan al dueño borrar lecturas sin consultar su registro, por el tope de llamadas por pedido |
-| `addMember(actor, carId, email)` | O | email normalizado; validar antes con `memberError()` (`lib/sharing.ts`) | `members: arrayUnion` (máx. 2) |
-| `removeMember(actor, carId, email)` | O | — | `members: arrayRemove` |
-| `leaveCar(actor, carId, email)` | M | su propio email | `members: arrayRemove` |
+| `deleteCar(actor, carId, known?)` | O | `known: { rules?, jobs?, fuel?, odometer?: string[] }` | Borra hijos (tandas de 450), las invitaciones del auto (`invites where ownerUid==uid and carId==carId`) y al final el auto. Las reglas dejan al dueño borrar lecturas sin consultar su registro, por el tope de llamadas por pedido |
+| `removeMember(actor, car, member: CarMember)` | O | `CarMember = { uid \| null, email, name }` de `carMembers(car)` | Con uid: `memberUids: arrayRemove(uid)`, `memberProfiles.{uid}: deleteField()` y `members: arrayRemove` de sus mails viejos (por `canonicalEmail`). Sin uid (sólo el mail viejo): `members: arrayRemove` |
+| `leaveCar(actor, car, email)` | M | `email`: el del login, en minúscula | Si mi uid está en `memberUids`: lo saca, `memberProfiles.{uid}: deleteField()` y `members: arrayRemove(email)`. Si no (miembro sólo por mail): `members: arrayRemove(email)` |
+
+#### Invitaciones — `invites/{carId}_{emailKey}`
+
+Una por auto y mail canónico (`inviteId(carId, email)`); volver a invitar pisa la misma. El auto le aparece al invitado recién cuando acepta (`memberUids`).
+
+| Función | Auth | Input clave | Escribe |
+|---|---|---|---|
+| `inviteMember(actor, car, email)` | O | validar antes con `memberError(car, invites, email, { ownerEmail, now })` (`lib/sharing.ts`) | `set` `{ carId, ownerUid, ownerName, carLabel, email, emailKey, status:'pending', createdAt, expiresAt: +14 días, respondedAt: null, acceptedUid: null }` |
+| `revokeInvite(actor, invite)` | O | pendiente | `status:'revoked'` |
+| `getInvite(id)` | O, invitado | — | Lee (`getDoc`). `null` si no existe; de otra cuenta (o inexistente, para quien no es el dueño) → `permission-denied` |
+| `acceptInvite(actor, invite, email)` | invitado | pendiente sin vencer; `email`: el del login | batch: invitación `{ status:'accepted', acceptedUid: uid, respondedAt: serverTimestamp() }` + auto `{ memberUids: arrayUnion(uid), memberProfiles.{uid}: { email, name } }` |
+| `declineInvite(actor, invite)` | invitado | pendiente sin vencer | `{ status:'declined', acceptedUid: uid, respondedAt: serverTimestamp() }` |
 
 #### Km — `cars/{carId}/odometer/{id}`
 
@@ -216,8 +227,8 @@ Wrappers de cliente: `enablePush(uid)` / `disablePush(uid)` / `pushSupport()` en
 | `/login` | Login Google | `?next=/ruta` |
 | `/` | Inicio: autos y pendientes | — |
 | `/autos/nuevo` | Alta de auto (`car-form`) | — |
-| `/autos/[carId]` | Detalle del auto; salir de un auto compartido (`leaveCar`) | `?tab=estado\|trabajos\|combustible\|km` |
-| `/autos/[carId]/editar` | Editar auto (`car-form`), compartir: `addMember`/`removeMember` | — |
+| `/autos/[carId]` | Detalle del auto; salir de un auto compartido (`leaveCar`); al dueño, con quién lo comparte (nombres de `memberProfiles`) | `?tab=estado\|trabajos\|combustible\|km` |
+| `/autos/[carId]/editar` | Editar auto (`car-form`), compartir: miembros (`removeMember`) e invitaciones (`inviteMember`, `revokeInvite`; compartir o copiar el link; volver a invitar las rechazadas o vencidas) | — |
 | `/autos/[carId]/km` | Cargar km (`km-form`, también como diálogo): fecha opcional, hoy por defecto | — |
 | `/autos/[carId]/mantenimientos/nuevo` · `/[ruleId]` | Alta / edición de mantenimiento | — |
 | `/autos/[carId]/trabajos/nuevo` · `/[jobId]` | Alta / edición de trabajo | `?regla=<ruleId>` (precarga) |
@@ -225,6 +236,7 @@ Wrappers de cliente: `enablePush(uid)` / `disablePush(uid)` / `pushSupport()` en
 | `/trabajos` | Historial de trabajos (todos los autos) | — |
 | `/gastos` | Resumen de gastos por año/mes | `?auto=<carId>` |
 | `/logros` | Logros | — |
+| `/invitaciones/[inviteId]` | Link de una invitación (`getInvite`): Aceptar / Rechazar con confirmación (`useInviteResponse`, `components/invites/invite-card.tsx`); al aceptar va a `/autos/{carId}`. Vencida, cancelada o respondida: lo dice. De otra cuenta (`permission-denied`): "Esta invitación es para j•••@gmail.com…" (`maskEmail` del id) | `inviteId` = `{carId}_{emailKey}` (URL-encoded) |
 | `/novedades` | Changelog para usuarios (`lib/novedades.ts`). Entrar marca todo como visto. Fuera de esta pantalla, `NovedadesHost` anuncia con una ventana todas las versiones sin ver (después de los logros por festejar) | — |
 | `/ajustes` | Recordatorio semanal, zona horaria, push, versión | — |
 
@@ -247,11 +259,12 @@ Layout: `PageHeader`, `PageBody`, `SectionTitle`, `EmptyState`, `Loading`, `NotF
 ```
 allowlist/{emailLower}            { uid, createdAt }                      sólo Admin SDK
 usage/{uid}                       { day: ISODate, photos: number }        sólo Admin SDK
+invites/{carId}_{emailKey}        Invite                                  O crea/reenvía/cancela/borra · invitado lee y responde
 users/{uid}                       UserSettings + createdAt                U
   ├─ pushSubscriptions/{sha256}   { endpoint, keys, userAgent, createdAt } U
   ├─ achievements/{achievementId} { carId, unlockedAt, celebratedAt }     U
   └─ cars|rules|jobs|fuel|odometer  LEGADO (pre-migración 1.1.2), sólo lectura/limpieza; la app no los usa
-cars/{carId}                      Car                                     O rw · M read + update km/salir
+cars/{carId}                      Car                                     O rw (miembros: sólo sacar) · M read + update km/salir · invitado: sumarse
   ├─ rules/{id}                   MaintenanceRule                         O rw · M read
   ├─ jobs/{id}                    Job                                     O rw (revisar: ver reglas) · M ver §2.2
   ├─ fuel/{id}                    FuelLoad                                O rw · M propias
@@ -259,7 +272,8 @@ cars/{carId}                      Car                                     O rw �
 ```
 
 Relaciones:
-- User 1:N Car (owner, `cars.ownerUid`). User N:M Car (member, `cars.members[]` por email, máx. 2).
+- User 1:N Car (owner, `cars.ownerUid`). User N:M Car (member, `cars.memberUids[]` por uid, máx. 2, con `memberProfiles`; hasta #66 también `cars.members[]` por email).
+- Car 1:N Invite (`invites.carId`, una por mail canónico). Aceptar una invitación suma `acceptedUid` a `memberUids`.
 - Car 1:N MaintenanceRule / Job / FuelLoad / OdometerReading (subcolecciones; cada hijo repite `carId`).
 - Job N:M MaintenanceRule vía `job.ruleIds[]`: el estado de cada mantenimiento se deriva de sus trabajos aprobados (`projectRule`); `rule.lastDoneJobId` / `rule.completedByJobId` apuntan al trabajo que manda.
 - FuelLoad / Job aprobado 1:0..1 OdometerReading vía `odometer/{fuel|job}-{id}` con `sourceId` (sólo si el registro tiene km).
@@ -269,7 +283,8 @@ Relaciones:
 
 | Entidad | Campos (tipo app; en Firestore `Date`→`Timestamp`) |
 |---|---|
-| `Car` | `id, brand, model, version?, year?, plate?, fuelTypes: ('nafta'\|'gasoil'\|'gnc')[], currentKm, kmUpdatedAt?, avgKmPerDay?, photoUrl?, photoPublicId?, createdAt, ownerUid, ownerName?, members: string[]` |
+| `Car` | `id, brand, model, version?, year?, plate?, fuelTypes: ('nafta'\|'gasoil'\|'gnc')[], currentKm, kmUpdatedAt?, avgKmPerDay?, photoUrl?, photoPublicId?, createdAt, ownerUid, ownerName?, members: string[] (mails viejos, hasta #66), memberUids: string[], memberProfiles: { [uid]: { email, name } }` |
+| `Invite` | `id ({carId}_{emailKey}), carId, ownerUid, ownerName?, carLabel ("Ford Ka 2015"), email (como lo escribió el dueño, en minúscula), emailKey (canonicalEmail), status: 'pending'\|'accepted'\|'declined'\|'revoked', createdAt, expiresAt (+14 días), respondedAt?, acceptedUid? (uid de quien respondió)` |
 | `MaintenanceRule` | `id, carId, name, intervalKm?, intervalTime?: { amount, unit: 'day'\|'week'\|'month'\|'year' }, repeat: bool`; declarado: `baseKm?, baseDate?: ISODate` (la "última vez" a mano; sin los campos = `lastDone*`, ver lectura tolerante); proyección (caché de `projectRule`): `lastDoneKm?, lastDoneKmEstimated: bool (lastDoneKm salió de las lecturas; falta = false), lastDoneDate?: ISODate, lastDoneJobId?, completedByJobId?` (de una vez cumplido); `warnKm (500), warnDays (30), lastNotifiedAt?, lastNotifiedStatus?: 'soon'\|'overdue'` |
 | `Job` | `id, carId, date: ISODate, km?, title, category: JobCategory, cost, workshop?, notes?, ruleIds: string[], status: 'approved'\|'pending'\|'rejected' (falta = approved), reviewedAt?, revision: number (falta = 0; M la sube en 1 al editar, O aprueba/rechaza con la que vio), createdBy?, createdByName?, createdAt` |
 | `FuelLoad` | `id, carId, date: ISODate, km?, fuelType, grade?: 'super'\|'premium' (null en GNC), quantity (L o m³), unitPrice, total, fullTank, station?, createdBy?, createdByName?, createdAt` |
@@ -282,12 +297,13 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 
 ### Validación en `firestore.rules`
 
-- Cada colección tiene una **allowlist de campos** (`validCar`, `validRule`, `validJob`, `validFuel`, `validReading`, `validSettings`, `validPushSubscription`, `validAchievement`) con tipos y topes de largo.
+- Cada colección tiene una **allowlist de campos** (`validCar`, `validRule`, `validJob`, `validFuel`, `validReading`, `validSettings`, `validPushSubscription`, `validAchievement`, `validInvite`) con tipos y topes de largo.
 - **Campo nuevo ⇒** agregarlo en `lib/types.ts`, en el mapper `xxxFrom` de `lib/db.ts` (y en `app/api/cron/daily` si el cron lo lee), en la función `validXxx` de `firestore.rules`, y **publicar las reglas a mano** (paso manual del usuario) antes de deployar la app.
 - Colección o ruta nueva ⇒ `match` nuevo; cualquier ruta no listada se deniega.
 - `validRule` acepta `lastDoneKmEstimated` (`optBool`) y `validReading` acepta `createdAt` (`optTime`); los dos pueden faltar (lo que escribe la 1.3.0).
 - `validRule` acepta `baseKm` (`optNum`), `baseDate` (`optText` 30), `lastDoneJobId` (`optText` 100) y `completedByJobId` (`optText` 100); pueden faltar (lo que escribe la 1.4.1). Los permisos no cambian: sólo el dueño escribe `rules`.
 - **Trabajos** (`jobs`): `validJob` acepta `revision` (`optNum`; falta en lo que escribe la 1.4.1). `update` del dueño: `ownerJobUpdate()` — editar sin revisar (mismo `status` y mismo `reviewedAt`) no tiene condiciones extra; revisar (cambia `status` o `reviewedAt`) sólo vale `pending` → `approved`/`rejected` o `approved` → `rejected`, con `revision` igual a la guardada (falta = 0). Así no se aprueba una versión vieja, ni algo ya aprobado o rechazado, ni un rechazado sin que el miembro lo vuelva a mandar. `update` del miembro: además de lo de antes (suyo, `pending`/`rejected` → `pending`, `reviewedAt` igual), `memberJobRevision()`: `revision` = anterior + 1 (la 1.4.1 no la manda: un miembro con esa versión no edita hasta recargar la app). Crear y borrar no cambian.
+- **Miembros e invitaciones** (`cars`, `invites`): `validCar` acepta `memberUids` (hasta 2, distintos) y `memberProfiles` (`validMembers`: un perfil `{ email, name }` por uid, con las mismas claves). `isMember(car)` = mi uid en `memberUids` o, hasta #66, `myEmail()` en `members`. `update` del dueño: `ownerMembersUpdate()`, de los miembros sólo saca (no suma mails a `members`, ni uids, ni perfiles). Miembro: km, `memberLeave()` (saca su uid, su perfil y su mail viejo) o `legacyMemberLeave()` (la PWA vieja saca sólo su mail; vale sólo si su uid no está en `memberUids`). Invitado: `memberJoin(carId)` (agrega sólo su uid al final, `size() <= 2`, y su perfil; la invitación `carId + '_' + myEmailKey()` está `pending` antes y `accepted` con su uid después). `invites`: leen el dueño o el invitado (`emailKey == myEmailKey()`); `create` = `freshInvite()` (dueño del auto, id = `carId + '_' + emailKey`, `emailKey == canonicalEmail(email)`, `pending`, `expiresAt <= request.time + 15d`, no a su propio mail, sin respuesta); `update`: `ownerResend()` (lo mismo que crear, mismo auto, dueño y mail, si estaba `declined`/`revoked`, `pending` vencida o `accepted` y `acceptedUid` ya no está en `memberUids`), `ownerRevoke()` (sólo `pending` → `revoked`) o `inviteeResponse()` (para mi `emailKey`, `pending` sin vencer → `accepted`/`declined`, `respondedAt == request.time`, `acceptedUid == uid`; si acepta, `getAfter` del auto tiene su uid); `delete`: el dueño. `myEmailKey()` / `canonicalEmail(e)` usan `let`, ternario, `split` y `replace` (verificar en el simulador).
 - **Lecturas vinculadas** (`odometer`): `linkedOk` exige, si viene `sourceId`, `source` en `fuel`\|`job`, id = `{source}-{sourceId}` y que el registro exista después del batch (`existsAfter(linkedParent)`; la ruta usa `jobs` si `source == 'job'`). `sourceId` no cambia al editar. Borrar: el dueño, cualquier lectura sin consultar el registro (`deleteCar`); el miembro, una que no existe (`resource == null`) o una suya sin `sourceId` o cuyo registro ya no existe o no tiene km (`linkedReleased`).
 
 ### Lógica de dominio pura (sin I/O)
@@ -298,9 +314,9 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | `odometer.ts` | `computeAvgKmPerDay`, `topReading`, `carKmFrom` (km del auto desde sus lecturas), `kmCorrection(car, readings)` (`carKmFrom` si el `currentKm` guardado no es el de la lectura más alta, en los dos sentidos; null si coincide o no hay lecturas), `carKmForNotifications(car, top)` (el auto con `currentKm`/`kmUpdatedAt` de la lectura más alta, para el cron), `linkedReadingId`, `readingDateOf`, `withLinkedReading`, `readingOrigin` (texto y link de la pestaña Km), `kmAtDate(readings, date)` (km a una fecha: el del día, interpolado o el de la última; `estimated`), `neighborsAt(readings, date)` (lectura de más km de ese día o antes / de menos km después, por día local), `validateKmReading(km, date, readings)`, `entryKmWarning(entry, car, readings)` (salto, km del último registro en fecha anterior y coherencia con la serie, sin la lectura propia `entry.readingId`) |
 | `fuel.ts` | `resolveFuelAmounts`, `computeFuelStats`, `computeCostPerKm`, `lastPrices` |
 | `expenses.ts` | `summarizeExpenses(jobs, fuel, year, today)`, `expenseYears` |
-| `pending.ts` | `pendingItems()` → `PendingItem` (`km`\|`rule`\|`review`\|`rejected`\|`shared`; sin los recordatorios cumplidos), `urgentCount` |
+| `pending.ts` | `pendingItems({ ..., invites, now })` → `PendingItem` (`km`\|`rule`\|`review`\|`rejected`\|`invite`; `invite` = una invitación pendiente sin vencer de `myInvites`; sin los recordatorios cumplidos), `urgentCount` |
 | `achievements.ts` | `ACHIEVEMENTS`, `evaluateAchievements`, `pendingUnlocks`, `pendingCelebrations`. Rachas y seguimiento usan la fecha en que se cargó cada lectura: `createdAt` del registro en las vinculadas, el de la lectura en las demás, o `date` si falta |
-| `sharing.ts` | `isCarOwner`, `isSharedCar`, `canEditEntry`, `canEditJob`, `approvedJobs`, `memberError`, `authorLabel`, `mineForAchievements` (sin mantenimientos de autos ajenos ni recordatorios cumplidos), `jobEdit(job, changes, member)` (el `update` de un trabajo editado: cambios + `status:'pending'` y `revision + 1` del miembro; null = nada que escribir), `reviewAlreadyDone(target, current)` (una revisión denegada que ya quedó hecha), `MAX_MEMBERS = 2` |
+| `sharing.ts` | `isCarOwner`, `isSharedCar` (miembros por `memberUids` o `members`), `canEditEntry`, `canEditJob`, `approvedJobs`, `memberError(car, invites, email, { ownerEmail, now })` (mail válido, no el mío ni el de un miembro ni el de una invitación pendiente, comparando con `canonicalEmail`; el tope cuenta `memberUids` + invitaciones pendientes sin vencer), `canonicalEmail` (minúscula; en Gmail/googlemail sin puntos ni "+algo"), `maskEmail`, `inviteId(carId, email)`, `inviteEmailKey(id)`, `isInviteOpen(invite, now)`, `inviteCarLabel`, `carMembers(car)` (`CarMember[]`: los de `memberUids` con su perfil y los mails viejos que no son de ninguno), `INVITE_DAYS = 14`, `authorLabel`, `mineForAchievements` (sin mantenimientos de autos ajenos ni recordatorios cumplidos), `jobEdit(job, changes, member)` (el `update` de un trabajo editado: cambios + `status:'pending'` y `revision + 1` del miembro; null = nada que escribir), `reviewAlreadyDone(target, current)` (una revisión denegada que ya quedó hecha), `MAX_MEMBERS = 2` |
 | `utils.ts` | `changedFields(original, draft)` (los campos del borrador que cambiaron: null = undefined, listas en orden, mapas por contenido), `isUnchanged`, `safeNextPath`, `cn` |
 | `report.ts` | `buildServiceReport` (PDF de historial), `reportFileName` |
 | `notifications.ts` | `planDailyNotifications` (saltea los recordatorios cumplidos), `updatesToPersist`, `isPushEndpoint` |
@@ -326,4 +342,5 @@ Seguridad HTTP: CSP y headers en `next.config.mjs`. Un dominio externo nuevo (im
 Sin webhooks entrantes ni colas. Scripts manuales (Admin SDK, los corre el usuario; sin `--apply` son un simulacro):
 - `scripts/migrate-cars.mjs [--apply]`: `users/{uid}/…` → `cars/…` (1.1.2).
 - `scripts/link-readings.mjs [--apply]` (lógica pura en `scripts/link-readings-plan.mjs`): crea `baseline-{carId}` (`source:'initial'`) en los autos sin lecturas o con `currentKm` mayor que sus lecturas, vincula las lecturas viejas de cargas y trabajos con un solo candidato del mismo km (copia a `{source}-{id}` y borra la vieja), completa las que faltan e informa las ambiguas y las sin candidato. Idempotente. Orden: publicar las reglas → simulacro → `--apply` → deploy de la app → `--apply` otra vez (vincula lo que escribió la PWA vieja; una tercera corrida da 0 cambios). Va antes del deploy porque la app nueva recalcula el km desde las lecturas y un auto viejo bajaría sin su baseline.
+- `scripts/members-to-uids.mjs [--apply]` (lógica pura en `scripts/members-to-uids-plan.mjs`): por cada mail de `members` busca la cuenta (`getUserByEmail`). Con cuenta: suma su uid a `memberUids` y su perfil (mail y `displayName`) a `memberProfiles`; el mail queda en `members` para la PWA vieja. Sin cuenta (nunca vio el auto): crea la invitación pendiente (`create`, si no existe) y saca el mail de `members`. Ambiguos (la cuenta del dueño, una lectura de Auth que falló, más de 2 miembros por uid): no se tocan y se informan. Un batch por auto. Idempotente. Orden: publicar las reglas → deploy de la app → simulacro → `--apply` (una segunda corrida da 0 cambios). Mientras tanto nadie pierde el acceso: las reglas y la app siguen leyendo `members`.
 - `scripts/rebase-rules.mjs [--apply]` (lógica pura en `scripts/rebase-rules-plan.mjs`): a cada mantenimiento sin `baseKm`/`baseDate` (ausentes, no null) le escribe la base con `update`: null si su `lastDoneDate` es la de un trabajo aprobado del auto que lo tiene en `ruleIds` (la "última vez" la puso el trabajo), y si no, `baseKm = lastDoneKm`, `baseDate = lastDoneDate`. No escribe la proyección (`lastDoneJobId`, `completedByJobId`): la guarda la reconciliación de la app cuando el dueño la abre; mientras tanto el cron sigue con los `lastDone*` guardados, que no cambian. Informa por auto cuántos quedaron con base propia y cuántos con base null. Idempotente. Orden: publicar las reglas → simulacro → `--apply` → deploy de la app → `--apply` otra vez (completa lo que creó o editó la PWA vieja, que reescribe el documento sin la base; una tercera corrida da 0 cambios). Va antes del deploy porque la app nueva, sin base, usa la "última vez" guardada como base, y borrar o corregir el trabajo que la puso no la haría volver atrás.

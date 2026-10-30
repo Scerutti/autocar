@@ -2,6 +2,38 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+Compartir un auto pasa a ser una invitación que la otra persona acepta, y los miembros pasan a identificarse por su cuenta (uid) y no por el mail. Antes de publicar hay que subir las reglas de Firestore; después del deploy, correr una migración de datos (ver "Mantenimiento").
+
+### Seguridad
+
+- **Un mail mal escrito ya no expone el auto**: el dueño invita y el auto le aparece a la otra persona recién cuando acepta. La invitación vence a los 14 días. Antes, el auto aparecía en el acto en cualquier cuenta con ese mail.
+- **La versión anterior de la app ya no puede compartir**: las reglas no dejan sumar mails a `members`; sólo sacarlos.
+
+### Novedades
+
+- **Invitar** (Editar auto → Compartir): la lista muestra los miembros con su nombre y mail ("Sacar"), las invitaciones pendientes ("vence el …", compartir el link, copiarlo, cancelarla) y las rechazadas o vencidas, que se pueden volver a mandar. El tope de 2 cuenta miembros e invitaciones pendientes.
+- **Aceptar o rechazar**: la invitación aparece en el Inicio y en la campanita, con Aceptar y Rechazar (los dos con confirmación). Reemplaza al aviso de "te compartieron un auto".
+- **Link de la invitación** (`/invitaciones/{id}`): muestra la invitación con Aceptar y Rechazar, o por qué no se puede (venció, la cancelaron, ya se respondió). Si es para otra cuenta, dice para qué mail es, tapado ("j•••@gmail.com").
+- **Gmail con puntos o "+"**: una invitación a `jdoe@gmail.com` la acepta `j.doe@gmail.com` o `jdoe+auto@gmail.com` (`googlemail.com` cuenta como `gmail.com`).
+- **Salir de un auto** saca tu cuenta, tu perfil y tu mail viejo. En el detalle del auto, el dueño ve los nombres de con quién lo comparte.
+
+### Mantenimiento
+
+- **Colección nueva `invites/{carId}_{emailKey}`** (`Invite`: `carId`, `ownerUid`, `ownerName`, `carLabel`, `email`, `emailKey`, `status` `pending|accepted|declined|revoked`, `createdAt`, `expiresAt`, `respondedAt`, `acceptedUid`). Una por auto y mail canónico; volver a invitar pisa la misma.
+- **`Car`** suma `memberUids` (hasta 2) y `memberProfiles` (`{ [uid]: { email, name } }`). `members` (mails) sigue durante la transición: se lee, se saca y se borra en #66.
+- **Lógica pura** (`lib/sharing.ts`, con pruebas): `canonicalEmail`, `maskEmail`, `inviteId`, `inviteEmailKey`, `isInviteOpen`, `inviteCarLabel`, `carMembers`; `memberError(car, invites, email, { ownerEmail, now })` cuenta `memberUids` más las invitaciones pendientes sin vencer; `isSharedCar` mira `memberUids` y `members`.
+- **Pendientes** (`lib/pending.ts`, con pruebas): sale el tipo `shared` (y `sharedSeenKey`, `parseSeenCars`, `unseenSharedCars`); entra `invite`, uno por invitación pendiente sin vencer.
+- **Escrituras** (`lib/db.ts`): `inviteMember`, `revokeInvite`, `getInvite`, `acceptInvite` (un batch: la invitación y el auto), `declineInvite`; `removeMember(actor, car, member)` y `leaveCar(actor, car, email)` sacan el uid, el perfil y el mail viejo; sale `addMember`. `deleteCar` borra también las invitaciones del auto. `subscribeUserData` escucha los autos con tres consultas (dueño, `memberUids`, `members`) y las invitaciones (`invites` del dueño y `myInvites` pendientes para mi mail canónico).
+- **Reglas de Firestore**: `match /invites/{inviteId}` (lee el dueño o el invitado por `emailKey`; crea y vuelve a mandar el dueño; cancela sólo las pendientes; responde el invitado, sin vencer, y si acepta el auto tiene que quedar con su uid); `memberJoin()` en `cars` (sumarse sólo con una invitación pendiente que pasa a aceptada en el mismo batch, con tope de 2); `isMember` por uid o por mail; salir saca uid, perfil y mail viejo, y la salida vieja (sólo el mail) vale sólo si el uid no está en `memberUids`; el dueño sólo saca miembros (no suma mails, uids ni perfiles); `validCar` acepta `memberUids` y `memberProfiles`. Usan `let`, el ternario, `split` y `replace` para el mail canónico: hay que probarlas en el simulador antes de publicarlas.
+- **Migración** `scripts/members-to-uids.mjs` (lógica en `scripts/members-to-uids-plan.mjs`, con pruebas): por cada mail de `members`, si la cuenta existe suma su uid y su perfil (el mail queda en `members`); si no existe, crea la invitación pendiente y saca el mail. Informa por auto los migrados, los convertidos en invitación y los ambiguos. Simulacro por defecto, `--apply` para escribir; se puede volver a correr.
+- **Pasos manuales, en orden**:
+  1. Probar los casos en el simulador de reglas y publicarlas.
+  2. Deploy de la app.
+  3. `node --env-file=.env.local scripts/members-to-uids.mjs` (simulacro) y después con `--apply`.
+  4. Prueba con dos cuentas reales: invitar → aceptar → cargar una carga → salir.
+
 ## 1.5.0
 
 Cierra la epic de integridad de km y mantenimientos. El estado de cada mantenimiento sale de los trabajos aprobados, así que corregir o borrar un trabajo lo corrige; aprobar un trabajo aprueba la versión que viste, y editar guarda sólo lo que cambiaste. Antes de publicar hay que subir las reglas de Firestore y correr una migración de datos (ver "Mantenimiento").
