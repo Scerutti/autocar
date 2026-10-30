@@ -15,7 +15,7 @@ import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp, t
 import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
-import { authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
+import { approvesOwnJobs, authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type MaintenanceRule, type OdometerReading, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
@@ -188,7 +188,8 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
  * la confirmación dice cómo quedan los mantenimientos que cambian (`jobChangeDiff`).
  * "Volver al taller en…" sólo aparece al cargar un trabajo nuevo, y sólo al dueño: crea un
  * mantenimiento, y el plan es del dueño. Lo que carga o corrige un miembro queda pendiente hasta que el dueño lo
- * aprueba; al dueño, un trabajo pendiente le muestra Aprobar y Rechazar.
+ * aprueba, salvo un trabajo nuevo de un miembro `trusted` (`approvesOwnJobs`), que queda aprobado al guardarlo; al
+ * dueño, un trabajo pendiente le muestra Aprobar y Rechazar.
  * El km arranca vacío (no se inventa el de hoy). Si se marca un mantenimiento por km y queda vacío, el campo muestra
  * el km estimado a la fecha (`jobDoneKm`) como sugerencia: el trabajo se guarda sin km y el mantenimiento toma ese
  * estimado marcado como tal. Sin estimación (fecha anterior a la primera lectura), el km es
@@ -203,6 +204,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const { rules, allRules, jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
   const owner = isCarOwner(car, uid)
+  const autoApproved = !job && approvesOwnJobs(car, uid)
   const ownerName = car.ownerName ?? 'el dueño'
   const ctx = { car, rules: allRules, jobs, readings: odometer }
   const completedHere = job ? allRules.filter(r => r.completedByJobId === job.id) : []
@@ -264,7 +266,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     const done = selectable.filter(r => ruleIds.includes(r.id))
     const reset = done.filter(r => r.repeat).map(r => r.name)
     const completed = done.filter(r => !r.repeat).map(r => r.name)
-    const applies = owner && (!job || isApproved(job))
+    const applies = (owner && (!job || isApproved(job))) || autoApproved
     const changes =
       owner && job && isApproved(job)
         ? ruleChangeLines(allRules, jobChangeDiff({ rules: allRules, jobs, readings: odometer, before: job, after: { ...job, ...input } }))
@@ -274,12 +276,16 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         ? job
           ? '¿Guardar los cambios del trabajo?'
           : '¿Guardar este trabajo?'
-        : job
-          ? '¿Volver a mandar el trabajo?'
-          : '¿Mandar este trabajo?',
+        : autoApproved
+          ? '¿Guardar este trabajo?'
+          : job
+            ? '¿Volver a mandar el trabajo?'
+            : '¿Mandar este trabajo?',
       description: owner
         ? 'Revisá que los datos estén bien.'
-        : `Queda pendiente hasta que ${ownerName} lo apruebe: recién ahí cuenta en gastos y marca los mantenimientos.`,
+        : autoApproved
+          ? `Cuenta en gastos y marca los mantenimientos al instante, sin esperar que ${ownerName} lo apruebe. Después solo ${ownerName} lo puede corregir o borrar.`
+          : `Queda pendiente hasta que ${ownerName} lo apruebe: recién ahí cuenta en gastos y marca los mantenimientos.`,
       details: [
         { label: 'Qué se hizo', value: title.trim() },
         { label: 'Categoría', value: JOB_CATEGORY_LABELS[category] },
@@ -304,7 +310,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
           : []),
       ],
       warning: entryKmWarning({ date, km: kmNum, isNew: !job, readingId: job ? linkedReadingId('job', job.id) : null }, car, readings),
-      confirmLabel: owner ? 'Sí, guardar' : 'Sí, mandar',
+      confirmLabel: owner || autoApproved ? 'Sí, guardar' : 'Sí, mandar',
       icon: Wrench,
     })
     if (!confirmed) return
@@ -326,7 +332,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
       : owner
         ? 'Sigue esperando tu aprobación.'
         : `Queda pendiente hasta que ${ownerName} lo apruebe.`
-    toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : 'Trabajo enviado', status, note)
+    toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : autoApproved ? 'Trabajo guardado' : 'Trabajo enviado', status, note)
     router.replace(`/autos/${car.id}?tab=trabajos`)
   }
 

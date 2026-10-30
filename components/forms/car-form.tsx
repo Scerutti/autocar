@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Camera, CarFront, Copy, KeyRound, MailX, RotateCw, Send, Trash2, UserMinus, UserPlus, Users, X } from 'lucide-react'
+import { Camera, CarFront, Copy, KeyRound, MailX, RotateCw, Send, Trash2, UserCog, UserMinus, UserPlus, Users, X } from 'lucide-react'
 import { carName } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,7 @@ import {
   newCarId,
   removeMember,
   revokeInvite,
+  setMemberRole,
   transferCar,
   updateCar,
   type CarInput,
@@ -33,10 +34,11 @@ import {
   isCarOwner,
   isInviteOpen,
   memberError,
+  memberRole,
   normalizeEmail,
   type CarMember,
 } from '@/lib/sharing'
-import type { Car, FuelType, Invite } from '@/lib/types'
+import type { Car, FuelType, Invite, MemberRole } from '@/lib/types'
 import { errorMessage, toast } from '@/lib/toast'
 import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
@@ -278,6 +280,15 @@ export function CarForm({ car }: { car?: Car }) {
   )
 }
 
+/** Cómo se llama cada rol en Compartir y qué puede hacer el miembro con ese rol. */
+const ROLES: Record<MemberRole, { label: string; help: string }> = {
+  editor: { label: 'Puede cargar', help: 'Carga combustible, km y trabajos. Sus trabajos esperan tu aprobación.' },
+  trusted: { label: 'Sin aprobación', help: 'Carga combustible, km y trabajos. Sus trabajos nuevos cuentan sin esperar tu aprobación.' },
+  viewer: { label: 'Solo mira', help: 'Ve el auto y su historial, pero no puede cargar ni cambiar nada.' },
+}
+
+const ROLE_OPTIONS = (Object.keys(ROLES) as MemberRole[]).map(r => ({ value: r, label: ROLES[r].label }))
+
 /** Link de una invitación: la página `/invitaciones/{id}` de esta app. */
 const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${encodeURIComponent(invite.id)}`
 
@@ -288,7 +299,9 @@ const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${
  * que se pueden volver a mandar. El tope (`MAX_MEMBERS`) cuenta miembros e invitaciones pendientes. Cada cambio se
  * guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Compartir" abre el menú de
  * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro por uid se le puede
- * pasar el auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto.
+ * pasar el auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto. A un miembro por uid también se
+ * le elige el rol (`ROLES`), con un control segmentado que se aplica al confirmar; uno sólo por el mail viejo no tiene
+ * perfil, es `editor` y no muestra el control.
  */
 function ShareSection({ car }: { car: Car }) {
   const router = useRouter()
@@ -385,6 +398,31 @@ function ShareSection({ car }: { car: Car }) {
     }
   }
 
+  async function changeRole(member: CarMember, role: MemberRole) {
+    if (!member.uid || role === memberRole(car, member.uid)) return
+    const who = member.name ?? member.email
+    const confirmed = await confirm({
+      title: `¿Cambiar lo que puede hacer ${who}?`,
+      description: ROLES[role].help,
+      details: [
+        { label: 'Persona', value: who },
+        { label: 'Ahora', value: ROLES[role].label },
+      ],
+      confirmLabel: 'Sí, cambiar',
+      icon: UserCog,
+    })
+    if (!confirmed) return
+    setBusy(true)
+    try {
+      const status = await settle(setMemberRole(actor, car, member.uid, role), 'No se pudo cambiar el rol')
+      toastSaved(`${who}: ${ROLES[role].label.toLowerCase()}`, status)
+    } catch (err) {
+      toast.error('No se pudo cambiar el rol', { description: errorMessage(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function revoke(target: Invite) {
     const confirmed = await confirm({
       tone: 'danger',
@@ -440,13 +478,13 @@ function ShareSection({ car }: { car: Car }) {
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
         Invitá hasta {MAX_MEMBERS} personas. Cuando aceptan, ven el auto y cargan combustible, km y trabajos. Los trabajos
-        esperan tu aprobación.
+        esperan tu aprobación. Después podés cambiar qué puede hacer cada uno.
       </p>
 
       {rows > 0 && (
         <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
           {members.map(m => (
-            <li key={m.uid ?? m.email} className="flex items-center gap-3 px-3.5 py-2.5">
+            <li key={m.uid ?? m.email} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm">{m.name ?? m.email}</p>
                 {m.name && <p className="truncate text-xs text-muted-foreground">{m.email}</p>}
@@ -474,6 +512,16 @@ function ShareSection({ car }: { car: Car }) {
               >
                 <UserMinus /> Sacar
               </Button>
+              {m.uid && (
+                <Segmented
+                  value={memberRole(car, m.uid)}
+                  onChange={role => void changeRole(m, role)}
+                  options={ROLE_OPTIONS}
+                  aria-label={`Qué puede hacer ${m.name ?? m.email}`}
+                  disabled={busy}
+                  className="w-full"
+                />
+              )}
             </li>
           ))}
           {open.map(i => (
