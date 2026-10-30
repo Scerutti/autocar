@@ -1,7 +1,7 @@
 import { addDays, toISODate, weekdayOf } from './dates'
 import { WEEKDAYS } from './format'
 import { isCompleted, type RuleState, type RuleWithState } from './maintenance'
-import { authorOf, isCarOwner, isInviteOpen } from './sharing'
+import { authorOf, canWrite, isCarOwner, isInviteOpen } from './sharing'
 import type { Car, ISODate, Invite, Job, MaintenanceRule, UserSettings } from './types'
 
 /**
@@ -38,7 +38,8 @@ export function kmDueDay(since: ISODate, today: ISODate) {
  * Lo pendiente de todos los autos, lo más urgente primero: mantenimientos vencidos, trabajos para revisar (de
  * los miembros, en mis autos), km que faltan cargar, mis trabajos rechazados (en autos de otros), las invitaciones
  * que me mandaron (`invites`: sólo las pendientes que no vencieron a `now`) y mantenimientos por vencer. Los
- * recordatorios cumplidos no cuentan (`rulesByCar` ya viene sin ellos; se filtran igual).
+ * recordatorios cumplidos no cuentan (`rulesByCar` ya viene sin ellos; se filtran igual). A un miembro `viewer` no se
+ * le piden los km (`canWrite`): no los puede cargar.
  */
 export function pendingItems(input: {
   settings: UserSettings
@@ -56,6 +57,7 @@ export function pendingItems(input: {
     (rulesByCar.get(car.id) ?? []).filter(r => !isCompleted(r.rule)).map(r => ({ kind: 'rule' as const, car, ...r })),
   )
   const km = cars.flatMap(car => {
+    if (!canWrite(car, uid)) return []
     const since = kmDueSince(settings, car, today)
     return since ? [{ kind: 'km' as const, car, since }] : []
   })

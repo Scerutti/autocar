@@ -67,10 +67,20 @@ export interface Car {
   memberProfiles?: Record<string, MemberProfile>
 }
 
-/** Cómo se muestra un miembro: el mail con el que entró y su nombre de Google (null si no lo tiene). */
+/**
+ * Qué puede hacer un miembro en el auto: `editor` carga y sus trabajos esperan la aprobación del dueño; `trusted` carga
+ * y sus trabajos nuevos quedan aprobados; `viewer` sólo mira.
+ */
+export type MemberRole = 'editor' | 'trusted' | 'viewer'
+
+/**
+ * Cómo se muestra un miembro: el mail con el que entró y su nombre de Google (null si no lo tiene), y su rol (sin rol
+ * es `editor`: así entra al aceptar una invitación).
+ */
 export interface MemberProfile {
   email: string
   name: string | null
+  role?: MemberRole
 }
 
 export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'revoked'

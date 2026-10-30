@@ -1,4 +1,4 @@
-import type { Authorship, Car, FuelLoad, Invite, Job, JobStatus, MaintenanceRule, MemberProfile, OdometerReading } from './types'
+import type { Authorship, Car, FuelLoad, Invite, Job, JobStatus, MaintenanceRule, MemberProfile, MemberRole, OdometerReading } from './types'
 
 /** Cuántas personas, además del dueño, pueden tener un auto. */
 export const MAX_MEMBERS = 2
@@ -132,14 +132,43 @@ export const isApproved = (job: Pick<Job, 'status'>) => (job.status ?? 'approved
 /** Los trabajos que cuentan en gastos, reportes y totales: sólo los aprobados. */
 export const approvedJobs = <T extends Pick<Job, 'status'>>(jobs: T[]) => jobs.filter(isApproved)
 
-/** Si puedo editar o borrar una carga o una lectura de km: el dueño siempre, el miembro sólo lo que cargó él. */
-export function canEditEntry(car: Pick<Car, 'ownerUid'>, uid: string, record: Authorship) {
+/**
+ * Rol de un miembro en el auto (`memberProfiles[uid].role`). Sin rol, o sin perfil (un miembro sólo por el mail viejo
+ * de `members`), es `editor`. Para el dueño no dice nada: el dueño puede todo.
+ */
+export const memberRole = (car: Pick<Car, 'memberProfiles'>, uid: string): MemberRole =>
+  car.memberProfiles?.[uid]?.role ?? 'editor'
+
+/** Si puedo cargar, editar o borrar algo en el auto: el dueño siempre, el miembro si no es `viewer`. */
+export const canWrite = (car: Pick<Car, 'ownerUid' | 'memberProfiles'>, uid: string) =>
+  isCarOwner(car, uid) || memberRole(car, uid) !== 'viewer'
+
+/**
+ * Si un trabajo nuevo de un miembro queda aprobado sin pasar por el dueño: sólo si es `trusted`. Lo que edita sigue
+ * esperando la aprobación.
+ */
+export const approvesOwnJobs = (car: Pick<Car, 'ownerUid' | 'memberProfiles'>, uid: string) =>
+  !isCarOwner(car, uid) && memberRole(car, uid) === 'trusted'
+
+/** Lo que se escribe en el auto para cambiarle el rol a un miembro por uid (`setMemberRole`): sólo su `role`. */
+export const setRolePatch = (uid: string, role: MemberRole) => ({ [`memberProfiles.${uid}.role`]: role })
+
+/**
+ * Si puedo editar o borrar una carga o una lectura de km: el dueño siempre; el miembro sólo lo que cargó él, y no si
+ * es `viewer` (`canWrite`).
+ */
+export function canEditEntry(car: Pick<Car, 'ownerUid' | 'memberProfiles'>, uid: string, record: Authorship) {
+  if (!canWrite(car, uid)) return false
   return isCarOwner(car, uid) || authorOf(record, car) === uid
 }
 
-/** Si puedo editar o borrar un trabajo: el dueño siempre, el miembro sólo uno suyo que esté pendiente o rechazado. */
-export function canEditJob(car: Pick<Car, 'ownerUid'>, uid: string, job: Pick<Job, 'status' | 'createdBy'>) {
+/**
+ * Si puedo editar o borrar un trabajo: el dueño siempre; el miembro sólo uno suyo que esté pendiente o rechazado (uno
+ * aprobado, aunque lo haya aprobado su rol `trusted`, sólo el dueño), y no si es `viewer` (`canWrite`).
+ */
+export function canEditJob(car: Pick<Car, 'ownerUid' | 'memberProfiles'>, uid: string, job: Pick<Job, 'status' | 'createdBy'>) {
   if (isCarOwner(car, uid)) return true
+  if (!canWrite(car, uid)) return false
   return authorOf(job, car) === uid && !isApproved(job)
 }
 
