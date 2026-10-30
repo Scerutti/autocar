@@ -379,6 +379,30 @@ service cloud.firestore {
         && profiles.addedKeys().size() == 0 && profiles.changedKeys().size() == 0;
     }
 
+    // El dueño le pasa el auto a un miembro por uid (transferCar): ownerUid pasa a ser un uid de memberUids que no es
+    // el mío; en memberUids y memberProfiles sale el nuevo dueño y entro yo, con un perfil válido (paso a ser
+    // miembro, con 2 como mucho); ownerName es el nombre del perfil del nuevo dueño; de members sólo se sacan mails, y
+    // no cambia nada más del auto. Las invitaciones pendientes se cancelan en el mismo batch (ownerRevoke). Quien
+    // pide ya es el dueño según el documento antes del pedido (lo revisa el match).
+    function ownerTransfer() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let to = after.ownerUid;
+      let uids = before.get('memberUids', []);
+      let profiles = after.get('memberProfiles', {}).diff(before.get('memberProfiles', {}));
+      return to in uids && to != request.auth.uid
+        && after.diff(before).affectedKeys().hasOnly(['ownerUid', 'ownerName', 'memberUids', 'memberProfiles', 'members'])
+        && after.get('memberUids', []).toSet()
+          == uids.toSet().difference([to].toSet()).union([request.auth.uid].toSet())
+        && after.get('memberUids', []).size() <= 2
+        && profiles.removedKeys() == [to].toSet()
+        && profiles.addedKeys() == [request.auth.uid].toSet()
+        && profiles.changedKeys().size() == 0
+        && validProfile(after.memberProfiles[request.auth.uid])
+        && after.get('ownerName', null) == before.memberProfiles[to].get('name', null)
+        && before.get('members', []).toSet().hasAll(after.get('members', []));
+    }
+
     // Lo que el dueño cambia de un trabajo. Editar sin revisarlo (mismo estado y mismo reviewedAt) no tiene condiciones
     // extra. Revisarlo (aprobar o rechazar: cambia el estado o reviewedAt) sólo vale para pasar un trabajo pendiente a
     // approved o rejected, o uno aprobado a rejected, y con la revisión que vio el dueño: si el miembro lo editó
@@ -407,16 +431,17 @@ service cloud.firestore {
     // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
     // Los autos son documentos de primer nivel con dueño y hasta 2 miembros. Leen el dueño y los miembros: el
     // cliente pide los suyos por ownerUid y los compartidos por memberUids y, hasta #66, por members, que es lo que
-    // piden estas reglas. El dueño crea, borra y edita el auto, y de los miembros sólo saca (ownerMembersUpdate); el
-    // miembro sólo cambia el km o sale (memberCarUpdate), y un invitado se suma aceptando (memberJoin). Los hijos
-    // guardan el carId de la ruta, y createdBy no cambia al editar.
+    // piden estas reglas. El dueño crea, borra y edita el auto, de los miembros sólo saca (ownerMembersUpdate) y le
+    // puede pasar el auto a un miembro por uid (ownerTransfer); el miembro sólo cambia el km o sale (memberCarUpdate),
+    // y un invitado se suma aceptando (memberJoin). Los hijos guardan el carId de la ruta, y createdBy no cambia al
+    // editar.
     match /cars/{carId} {
       allow read: if isOwner(resource.data.ownerUid) || isMember(resource.data);
       allow delete: if isOwner(resource.data.ownerUid);
       allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
       allow update: if validCar(request.resource.data)
-        && ((isOwner(resource.data.ownerUid) && request.resource.data.ownerUid == resource.data.ownerUid
-            && ownerMembersUpdate())
+        && ((isOwner(resource.data.ownerUid)
+            && ((request.resource.data.ownerUid == resource.data.ownerUid && ownerMembersUpdate()) || ownerTransfer()))
           || (isMember(resource.data) && memberCarUpdate())
           || memberJoin(carId));
 
