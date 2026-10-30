@@ -1,4 +1,4 @@
-import type { Authorship, Car, FuelLoad, Invite, Job, JobStatus, MaintenanceRule, OdometerReading } from './types'
+import type { Authorship, Car, FuelLoad, Invite, Job, JobStatus, MaintenanceRule, MemberProfile, OdometerReading } from './types'
 
 /** Cuántas personas, además del dueño, pueden tener un auto. */
 export const MAX_MEMBERS = 2
@@ -72,6 +72,45 @@ export function carMembers(car: Pick<Car, 'members' | 'memberUids' | 'memberProf
     .filter(email => !known.has(canonicalEmail(email)))
     .map(email => ({ uid: null, email, name: null }))
   return [...byUid, ...legacy]
+}
+
+/** Lo que cambia del auto cuando el dueño se lo pasa a un miembro (`transferCar`). */
+export interface TransferPatch {
+  ownerUid: string
+  /** El nombre del perfil del nuevo dueño. */
+  ownerName: string | null
+  /** Los miembros por uid sin el nuevo dueño y con el dueño anterior al final. */
+  memberUids: string[]
+  /** Los perfiles que se suman: el del dueño anterior. El del nuevo dueño lo saca lib/db.ts con `deleteField()`. */
+  memberProfiles: Record<string, MemberProfile>
+  /** Los mails viejos sin los del nuevo dueño (comparados con `canonicalEmail`). */
+  members: string[]
+}
+
+/**
+ * El auto pasado a `to`, un miembro por uid: `to` es el dueño (con el nombre de su perfil) y yo (`me`, el dueño
+ * anterior, con el mail de mi login) paso a ser miembro. Tira un error si `to` no está en `memberUids` (un miembro sólo
+ * por el mail viejo no puede recibir el auto) o si soy yo.
+ */
+export function transferPatch(
+  car: Pick<Car, 'members' | 'memberUids' | 'memberProfiles'>,
+  to: Pick<CarMember, 'uid'>,
+  me: { uid: string; email: string; name: string | null },
+): TransferPatch {
+  const uids = car.memberUids ?? []
+  const target = to.uid
+  if (!target || !uids.includes(target) || target === me.uid) {
+    throw new Error('Sólo le podés pasar el auto a alguien que aceptó una invitación.')
+  }
+  const profile = car.memberProfiles?.[target]
+  const key = canonicalEmail(profile?.email ?? '')
+  return {
+    ownerUid: target,
+    ownerName: profile?.name ?? null,
+    memberUids: [...uids.filter(u => u !== target), me.uid],
+    memberProfiles: { [me.uid]: { email: normalizeEmail(me.email), name: me.name } },
+    members: (car.members ?? []).filter(m => canonicalEmail(m) !== key),
+  }
 }
 
 /** Si soy el dueño del auto. */
