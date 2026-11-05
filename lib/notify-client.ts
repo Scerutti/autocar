@@ -134,7 +134,7 @@ export function readingsWithLinked(
   return [
     ...readings.filter(r => r.carId !== carId),
     ...withLinkedReading(
-      readings.filter(r => r.carId === car.id),
+      readings.filter(r => r.carId === carId),
       id,
       next,
     ),

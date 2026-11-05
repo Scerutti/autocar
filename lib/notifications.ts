@@ -115,6 +115,16 @@ export function didRuleEscalate(
 }
 
 /**
+ * A quiénes avisa `POST /api/notify/rules`: el dueño y los miembros (`memberUids`) del auto, sin quien hizo la carga y
+ * sin repetir. null si quien llama no es el dueño ni un miembro (403).
+ */
+export function ruleAlertRecipients(car: Pick<Car, 'ownerUid' | 'memberUids'>, callerUid: string): string[] | null {
+  const group = [car.ownerUid, ...(car.memberUids ?? [])].filter((u): u is string => Boolean(u))
+  if (!group.includes(callerUid)) return null
+  return [...new Set(group)].filter(u => u !== callerUid)
+}
+
+/**
  * Qué mantenimientos activos de un auto subieron de estado respecto del "avisado" de un destinatario (`notices`), sin
  * el re-aviso de los 7 días ni el tope del resumen diario: lo usa `POST /api/notify/rules` para avisar al momento a
  * cada integrante del auto (salvo quien cargó).

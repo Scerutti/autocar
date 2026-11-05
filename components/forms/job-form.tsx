@@ -375,11 +375,9 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         : `Queda pendiente hasta que ${ownerName} lo apruebe.`
     toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : autoApproved ? 'Trabajo guardado' : 'Trabajo enviado', status, note)
     if (status === 'saved' && applies) {
-      const afterJob: Job = {
-        ...(job ?? { id: jobId, createdBy: uid, createdByName: actor.name, createdAt: null }),
-        ...input,
-        status: 'approved',
-      }
+      const afterJob: Job = job
+        ? { ...job, ...input, status: 'approved' }
+        : { ...input, id: jobId, status: 'approved', reviewedAt: null, revision: 0, createdAt: new Date(), createdBy: uid, createdByName: actor.name }
       checkCarRuleEscalations({
         car,
         rawRules: allRules,
@@ -552,7 +550,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
             description="Por ejemplo, si te dijeron que vuelvas en 3 semanas para un control. Te lo recordamos."
           />
           {comeBack && (
-            <FieldGroup label="¿En cuánto tiempo?" hint={comeBackIn ? `Te avisamos para volver el ${formatDate(addInterval(date, followUp.intervalTime))}.` : undefined}>
+            <FieldGroup label="¿En cuánto tiempo?" hint={comeBackIn ? `Te avisamos para volver el ${formatDate(addInterval(date, comeBackIn))}.` : undefined}>
               <IntervalPicker value={comeBackIn} onChange={setComeBackIn} presets={INTERVAL_PRESETS.once} aria-label="En cuánto tiempo volver" />
             </FieldGroup>
           )}

@@ -12,6 +12,7 @@ import {
   planJobNotification,
   planRuleAlerts,
   REVIEW_TAG,
+  ruleAlertRecipients,
   ruleTag,
   updatesToPersist,
 } from './notifications'
@@ -386,6 +387,23 @@ describe('planRuleAlerts y escalatedRules', () => {
       today: '2026-09-21',
     })
     expect(toOverdue.map(e => e.status)).toEqual(['overdue'])
+  })
+})
+
+describe('ruleAlertRecipients', () => {
+  const sharedCar: Car = { ...car, ownerUid: 'owner', memberUids: ['m1', 'm2'] }
+
+  it('avisa al resto del grupo sin quien hizo la carga', () => {
+    expect(ruleAlertRecipients(sharedCar, 'm1')).toEqual(['owner', 'm2'])
+    expect(ruleAlertRecipients(sharedCar, 'owner')).toEqual(['m1', 'm2'])
+  })
+
+  it('un auto sin miembros no tiene a quién avisar', () => {
+    expect(ruleAlertRecipients({ ownerUid: 'owner', memberUids: [] }, 'owner')).toEqual([])
+  })
+
+  it('quien no es del grupo no puede pedir avisos', () => {
+    expect(ruleAlertRecipients(sharedCar, 'otro')).toBeNull()
   })
 })
 
