@@ -40,6 +40,15 @@ export const NOVEDADES: Novedad[] = [
         title: 'Qué puede hacer cada uno',
         text: 'En "Editar auto" → Compartir elegís para cada persona: "Puede cargar" (sus trabajos esperan tu aprobación, como hasta ahora), "Sin aprobación" (sus trabajos nuevos cuentan al instante) o "Solo mira" (ve el auto y su historial, pero no carga nada).',
       },
+      {
+        title: 'Avisos también en los autos compartidos',
+        text: 'Si te compartieron un auto, ahora te llegan los avisos de mantenimientos por vencer y el recordatorio semanal de km igual que al dueño. Si preferís no recibirlos, los podés silenciar desde Ajustes → Notificaciones ("Avisos de autos compartidos").',
+      },
+      {
+        title: 'Avisos al instante cuando cargan o revisan un trabajo',
+        text: 'Cuando alguien carga un trabajo para revisar, al dueño le llega una notificación en el momento (y un recordatorio a la mañana si quedaron pendientes). Cuando el dueño lo aprueba o lo rechaza, le avisa en el acto a quien lo cargó. Y si al cargar km, combustible o un trabajo se vence un mantenimiento, te avisa enseguida en pantalla y por notificación al resto del auto.',
+      },
+      },
     ],
   },
   {
