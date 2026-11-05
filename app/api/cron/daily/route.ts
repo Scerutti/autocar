@@ -1,6 +1,18 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { Timestamp, type DocumentData, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
+import { FieldValue, Timestamp, type DocumentData, type DocumentSnapshot, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
 import { adminDb } from '@/lib/firebase/admin'
+import {
+  candidateUids,
+  perCarLimit,
+  queueFrom,
+  runDateOf,
+  runIsDone,
+  summarizeRun,
+  tally,
+  type CronFailure,
+  type CronRunState,
+  type CronUserReport,
+} from '@/lib/cron-run'
 import { todayInTimeZone } from '@/lib/dates'
 import { planDailyNotifications, updatesToPersist } from '@/lib/notifications'
 import { carKmForNotifications } from '@/lib/odometer'
@@ -74,6 +86,19 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
   }
 }
 
+/** El registro del día (`cronRuns/{fecha}`) como lo usa `lib/cron-run.ts`. Lo que falta cuenta como cero o vacío. */
+function runStateFrom(x: DocumentData): CronRunState {
+  return {
+    finishedAt: toDate(x.finishedAt),
+    processed: num(x.processed) ?? 0,
+    skipped: num(x.skipped) ?? 0,
+    errors: num(x.errors) ?? 0,
+    sent: num(x.sent) ?? 0,
+    cursor: typeof x.cursor === 'string' ? x.cursor : null,
+    failures: Array.isArray(x.failures) ? (x.failures as CronFailure[]) : [],
+  }
+}
+
 /**
  * La lectura de más km de un auto: la primera ordenando por km de mayor a menor, que usa el índice simple
  * automático. null si no tiene lecturas (las que no tienen km no entran en la consulta).
@@ -85,16 +110,14 @@ async function topReadingOf(carDoc: QueryDocumentSnapshot) {
   return km == null ? null : { km, date: toDate(x?.date) }
 }
 
-/** Los mantenimientos de los autos, uno tras otro hasta llenar el tope de `MAX_DOCS_PER_USER`. */
+/**
+ * Los mantenimientos de todos los autos a la vez. Cada auto lee su parte del tope (`perCarLimit`), así entre todos
+ * no se pasan de `MAX_DOCS_PER_USER`.
+ */
 async function rulesOf(carDocs: QueryDocumentSnapshot[]) {
-  const rules: MaintenanceRule[] = []
-  for (const carDoc of carDocs) {
-    const remaining = MAX_DOCS_PER_USER - rules.length
-    if (remaining <= 0) break
-    const rulesSnap = await carDoc.ref.collection('rules').limit(remaining).get()
-    rules.push(...rulesSnap.docs.map(d => ruleFrom(d.id, d.data())))
-  }
-  return rules
+  const limit = perCarLimit(carDocs.length, MAX_DOCS_PER_USER)
+  const snaps = await Promise.all(carDocs.map(carDoc => carDoc.ref.collection('rules').limit(limit).get()))
+  return snaps.flatMap(snap => snap.docs.map(d => ruleFrom(d.id, d.data())))
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest()
@@ -106,29 +129,19 @@ function authorized(header: string | null) {
   return timingSafeEqual(sha256(header ?? ''), sha256(`Bearer ${secret}`))
 }
 
-/** Mezcla los usuarios en cada corrida: si no alcanza el tiempo, no quedan afuera siempre los mismos. */
-function shuffled<T>(items: T[]) {
-  const a = [...items]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
-}
-
-type UserReport = { uid: string; messages: number; sent: number; error?: string }
-
 /**
  * Manda los avisos del día a un usuario y guarda cuáles se avisaron. Los recordatorios cumplidos (`completedByJobId`)
  * no se avisan (`planDailyNotifications` los saltea). El km de cada auto es el de su lectura más alta
- * (`carKmForNotifications`), no el `currentKm` guardado, que sólo se corrige cuando alguien abre la app. Las lecturas
- * de todos los autos se piden a la vez, mientras se leen los mantenimientos. Las escrituras son independientes (no
+ * (`carKmForNotifications`), no el `currentKm` guardado, que sólo se corrige cuando alguien abre la app. Los
+ * mantenimientos y las lecturas de todos los autos se piden a la vez. Las escrituras son independientes (no
  * un batch): si se borró un mantenimiento, los demás se guardan igual. El código 5 (NOT_FOUND) es un mantenimiento
- * que se borró mientras corría el cron: no hay nada que guardar.
+ * que se borró mientras corría el cron: no hay nada que guardar. Un uid con suscripciones pero sin `users/{uid}` no
+ * tiene ajustes: cuenta como procesado sin mensajes.
  */
-async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<UserReport> {
+async function processUser(userDoc: DocumentSnapshot, now: Date): Promise<CronUserReport> {
   const db = adminDb()
   const x = userDoc.data()
+  if (!x) return { uid: userDoc.id, messages: 0, sent: 0 }
   const settings: UserSettings = {
     reminder: { ...DEFAULT_SETTINGS.reminder, ...(x.reminder ?? {}) },
     timezone: x.timezone ?? DEFAULT_SETTINGS.timezone,
@@ -165,9 +178,11 @@ async function processUser(userDoc: QueryDocumentSnapshot, now: Date): Promise<U
 }
 
 /**
- * Vercel Cron la llama una vez por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET".
- * Cada worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de un usuario no corta a
- * los demás.
+ * Vercel Cron la llama dos veces por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET". Qué hace sale
+ * de `cronRuns/{fecha}`: sin registro procesa a todos; si una corrida ya terminó sin dejar a nadie afuera, no hace
+ * nada; si no, sigue después del cursor. Solo se procesan los usuarios con suscripción push, en orden de uid. Cada
+ * worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de un usuario no corta a los
+ * demás. Si quedan usuarios afuera o hay errores, va un `console.error` para que salte en los logs de Vercel.
  */
 export async function GET(request: Request) {
   const startedAt = Date.now()
@@ -175,9 +190,25 @@ export async function GET(request: Request) {
     return Response.json({ error: 'No autorizado' }, { status: 401 })
   }
 
+  const db = adminDb()
   const now = new Date()
-  const users = shuffled((await adminDb().collection('users').get()).docs)
-  const report: UserReport[] = []
+  const date = runDateOf(now)
+  const runRef = db.collection('cronRuns').doc(date)
+  const runSnap = await runRef.get()
+  const runData = runSnap.data()
+  const previous = runData ? runStateFrom(runData) : null
+  if (runIsDone(previous)) return Response.json({ ok: true, date, alreadyDone: true })
+
+  await runRef.set(
+    { ...(runSnap.exists ? {} : { startedAt: Timestamp.fromDate(now) }), finishedAt: null, runs: FieldValue.increment(1) },
+    { merge: true },
+  )
+
+  const subs = await db.collectionGroup('pushSubscriptions').select().get()
+  const uids = candidateUids(subs.docs.map(d => d.ref.path))
+  const queue = queueFrom(uids, previous)
+  const users = queue.length ? await db.getAll(...queue.map(uid => db.collection('users').doc(uid))) : []
+  const report: CronUserReport[] = []
 
   let next = 0
   const worker = async () => {
@@ -193,7 +224,26 @@ export async function GET(request: Request) {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
-  const skipped = users.length - next
-  if (skipped) console.warn(`Cron: se acabó el tiempo, quedaron ${skipped} de ${users.length} usuarios sin procesar`)
-  return Response.json({ ok: true, users: report.length, skipped, report })
+  const summary = summarizeRun({ queue, next, reports: report, candidates: uids.length, previous })
+  const run = tally(report)
+  await runRef
+    .set({ ...summary, finishedAt: Timestamp.fromDate(new Date()) }, { merge: true })
+    .catch(e => console.error('Cron: no se guardó el registro de la corrida', date, e))
+
+  if (summary.skipped || run.errors) {
+    console.error(
+      `Cron ${date}: quedaron ${summary.skipped} de ${queue.length} usuarios sin procesar y ${run.errors} con error`,
+      summary.failures,
+    )
+  }
+  return Response.json({
+    ok: true,
+    date,
+    candidates: uids.length,
+    processed: run.processed,
+    skipped: summary.skipped,
+    errors: run.errors,
+    sent: run.sent,
+    report,
+  })
 }
