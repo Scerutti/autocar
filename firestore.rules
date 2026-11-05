@@ -51,11 +51,12 @@ service cloud.firestore {
 
     // Ajustes (users/{uid}): lo crea la app la primera vez con DEFAULT_SETTINGS.
     function validSettings(d) {
-      return d.keys().hasOnly(['reminder', 'timezone', 'createdAt'])
+      return d.keys().hasOnly(['reminder', 'timezone', 'sharedCars', 'createdAt'])
         && (d.get('reminder', null) == null
           || (d.reminder is map && d.reminder.keys().hasOnly(['enabled', 'weekday'])
             && optBool(d.reminder, 'enabled') && optNum(d.reminder, 'weekday')))
         && optText(d, 'timezone', 100)
+        && optBool(d, 'sharedCars')
         && optTime(d, 'createdAt');
     }
 
@@ -620,6 +621,11 @@ service cloud.firestore {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid) && achievementId.size() <= 100
           && validAchievement(request.resource.data);
+      }
+
+      // Avisos por mantenimiento enviados a este usuario (los escribe sólo el servidor con Admin SDK).
+      match /ruleNotices/{ruleId} {
+        allow read: if isOwner(uid);
       }
     }
   }
