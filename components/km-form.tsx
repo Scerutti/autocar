@@ -5,11 +5,13 @@ import { Gauge, Pencil, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FormError, Input } from '@/components/ui/form'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
 import { recordKm } from '@/lib/db'
 import { formatDate, formatKm, formatNumber, parseNumberInput, timeAgo } from '@/lib/format'
 import { rulesWithState, summarizeRule } from '@/lib/maintenance'
-import { validateKmReading } from '@/lib/odometer'
+import { checkCarRuleEscalations } from '@/lib/notify-client'
+import { readingDateOf, validateKmReading } from '@/lib/odometer'
 import type { Car } from '@/lib/types'
 import { settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { carName } from './common'
@@ -34,7 +36,8 @@ export function KmForm({
   inputRef?: React.RefObject<HTMLInputElement | null>
   autoFocus?: boolean
 }) {
-  const { actor, odometer, rulesByCar, today } = useData()
+  const { getToken } = useAuth()
+  const { actor, odometer, rules: allRules, jobs, rulesByCar, today } = useData()
   const [value, setValue] = useState('')
   const [date, setDate] = useState(today)
   const [step, setStep] = useState<'enter' | 'confirm'>('enter')
@@ -74,6 +77,27 @@ export function KmForm({
     const active = (rulesByCar.get(car.id) ?? []).map(r => r.rule)
     const next = rulesWithState(active, { ...car, currentKm: Math.max(km, car.currentKm) }, today)[0]
     toastSaved(`${formatKm(km)} guardados`, status, next ? summarizeRule(next.rule.name, next.state) : carName(car))
+    if (status === 'saved') {
+      const added = {
+        id: 'new',
+        carId: car.id,
+        km,
+        date: day === today ? new Date() : readingDateOf(day),
+        source: 'manual' as const,
+        sourceId: null,
+        createdAt: new Date(),
+      }
+      checkCarRuleEscalations({
+        car,
+        rawRules: allRules,
+        jobsBefore: jobs,
+        jobsAfter: jobs,
+        readingsBefore: odometer,
+        readingsAfter: [...odometer, added],
+        today,
+        getToken,
+      })
+    }
     onDone()
   }
 

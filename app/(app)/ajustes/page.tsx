@@ -35,7 +35,7 @@ function Section({ title, description, children }: { title: string; description?
 }
 
 /**
- * Notificaciones push del dispositivo y recordatorio semanal de km.
+ * Notificaciones push del dispositivo, recordatorio semanal de km y avisos de autos compartidos.
  * Si el servidor falla, la prueba puede no responder JSON (p. ej. una página de error de Vercel).
  * El toast del recordatorio usa un id fijo para reemplazarse en vez de apilarse.
  */
@@ -48,6 +48,7 @@ function Notifications() {
   const [busy, setBusy] = useState(false)
 
   const reminder = settings.reminder
+  const sharedCars = settings.sharedCars !== false
 
   useEffect(() => {
     const s = pushSupport()
@@ -150,6 +151,27 @@ function Notifications() {
     saveReminder({ ...reminder, weekday }, `Te vamos a pedir los km ${everyWeekday(weekday)}`)
   }
 
+  async function toggleSharedCars(enabled: boolean) {
+    const confirmed = await confirm(
+      enabled
+        ? {
+            title: '¿Recibir avisos de los autos que te compartieron?',
+            description: 'Te vamos a avisar de sus vencimientos y recordatorios igual que en tus autos.',
+            confirmLabel: 'Sí, activar',
+            icon: Bell,
+          }
+        : {
+            title: '¿Silenciar los autos que te compartieron?',
+            description: 'No te van a llegar avisos de vencimientos ni recordatorios de esos autos. Los de tus propios autos siguen llegando.',
+            confirmLabel: 'Sí, silenciar',
+            icon: BellOff,
+          },
+    )
+    if (!confirmed) return
+    saveSettings(uid, { sharedCars: enabled }).catch(e => toast.error('No se pudo guardar el ajuste', { description: errorMessage(e) }))
+    toast.success(enabled ? 'Avisos de autos compartidos activados' : 'Autos compartidos silenciados', { id: 'shared-cars' })
+  }
+
   return (
     <Section title="Notificaciones" description="Te avisamos de mantenimientos por vencer y te pedimos los km una vez por semana.">
       <div className="space-y-6">
@@ -193,6 +215,13 @@ function Notifications() {
             />
           </FieldGroup>
         )}
+
+        <Checkbox
+          checked={sharedCars}
+          onChange={e => void toggleSharedCars(e.target.checked)}
+          label="Avisos de autos compartidos"
+          description="Vencimientos y recordatorios de los autos que otra persona compartió con vos."
+        />
       </div>
     </Section>
   )

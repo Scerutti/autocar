@@ -9,11 +9,13 @@ import { IntervalPicker } from '@/components/interval-picker'
 import { Button } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
 import { Checkbox, Field, FormError, Input, Textarea } from '@/components/ui/form'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { addInterval, toISODate } from '@/lib/dates'
-import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp, type JobInput } from '@/lib/db'
+import { approveJob, deleteJob, newChildId, rejectJob, restoreJob, saveJob, type FollowUp, type JobInput } from '@/lib/db'
 import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
+import { checkCarRuleEscalations, notifyJobInBackground, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
 import { approvesOwnJobs, authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
@@ -69,7 +71,8 @@ function ruleChangeLines(rules: MaintenanceRule[], changes: ReturnType<typeof jo
  */
 export function useJobReview() {
   const confirm = useConfirm()
-  const { actor, uid, rules: allRules, jobs, odometer } = useData()
+  const { getToken } = useAuth()
+  const { actor, uid, rules: allRules, jobs, odometer, today } = useData()
 
   async function approve(car: Car, job: Job) {
     const ctx = jobContext(car, allRules, jobs, odometer)
@@ -97,6 +100,20 @@ export function useJobReview() {
     try {
       const status = await settle(approveJob(actor, ctx, job), 'No se pudo aprobar')
       toastSaved('Trabajo aprobado', status, job.title)
+      if (status === 'saved') {
+        notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'approved' }, getToken)
+        const afterJob: Job = { ...job, status: 'approved' }
+        checkCarRuleEscalations({
+          car,
+          rawRules: allRules,
+          jobsBefore: jobs,
+          jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
+          readingsBefore: odometer,
+          readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, { date: job.date, km: job.km }),
+          today,
+          getToken,
+        })
+      }
       return true
     } catch (e) {
       toast.error('No se pudo aprobar', { description: errorMessage(e) })
@@ -116,6 +133,22 @@ export function useJobReview() {
     try {
       const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job), 'No se pudo rechazar')
       toastSaved('Trabajo rechazado', status, job.title)
+      if (status === 'saved') {
+        notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'rejected' }, getToken)
+        if (isApproved(job)) {
+          const afterJob: Job = { ...job, status: 'rejected' }
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
+            readingsBefore: odometer,
+            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+            today,
+            getToken,
+          })
+        }
+      }
       return true
     } catch (e) {
       toast.error('No se pudo rechazar', { description: errorMessage(e) })
@@ -200,6 +233,7 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
 function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
+  const { getToken } = useAuth()
   const { actor, uid, today, odometer } = useData()
   const { rules, allRules, jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
@@ -315,9 +349,10 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     })
     if (!confirmed) return
 
+    const jobId = job?.id ?? newChildId(car.id, 'jobs')
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveJob(actor, ctx, input, original, followUp))
+      status = await settle(saveJob(actor, ctx, input, original, followUp, jobId))
     })
     if (!ok) return
     const note = applies
@@ -333,6 +368,28 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         ? 'Sigue esperando tu aprobación.'
         : `Queda pendiente hasta que ${ownerName} lo apruebe.`
     toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : autoApproved ? 'Trabajo guardado' : 'Trabajo enviado', status, note)
+    if (status === 'saved') {
+      if (!owner && !autoApproved) {
+        notifyJobInBackground({ carId: car.id, jobId, event: 'submitted' }, getToken)
+      }
+      if (applies) {
+        const afterJob: Job = {
+          ...(job ?? { id: jobId, createdBy: uid, createdByName: actor.name, createdAt: null }),
+          ...input,
+          status: 'approved',
+        }
+        checkCarRuleEscalations({
+          car,
+          rawRules: allRules,
+          jobsBefore: jobs,
+          jobsAfter: [...jobs.filter(j => j.id !== jobId), afterJob],
+          readingsBefore: odometer,
+          readingsAfter: readingsWithLinked(odometer, car.id, 'job', jobId, { date, km: kmNum }),
+          today,
+          getToken,
+        })
+      }
+    }
     router.replace(`/autos/${car.id}?tab=trabajos`)
   }
 
@@ -352,8 +409,36 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     router.replace(`/autos/${car.id}?tab=trabajos`)
     removeWithUndo({
       message: 'Trabajo borrado',
-      remove: () => deleteJob(actor, ctx, job),
-      restore: () => restoreJob(actor, ctx, job),
+      remove: async () => {
+        await deleteJob(actor, ctx, job)
+        if (isApproved(job)) {
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs.filter(j => j.id !== job.id),
+            readingsBefore: odometer,
+            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+            today,
+            getToken,
+          })
+        }
+      },
+      restore: async () => {
+        await restoreJob(actor, ctx, job)
+        if (isApproved(job)) {
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules.map(r => (r.completedByJobId === job.id ? { ...r, completedAt: null, completedByJobId: null } : r)),
+            jobsBefore: jobs.filter(j => j.id !== job.id),
+            jobsAfter: [...jobs.filter(j => j.id !== job.id), job],
+            readingsBefore: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, { date: job.date, km: job.km }),
+            today,
+            getToken,
+          })
+        }
+      },
     })
   }
 
