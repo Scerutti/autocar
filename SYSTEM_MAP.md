@@ -19,7 +19,7 @@ Relevado sobre `develop` @ v1.2.1 (2026-10-25).
 | Fotos | Cloudinary, subida firmada directa desde el navegador | `lib/cloudinary-*.ts` |
 | Push | Web Push (VAPID, `web-push`), service worker `public/sw.js` | `lib/push-*.ts` |
 | PDF | `@react-pdf/renderer` en el cliente | `components/report/` |
-| Hosting | Vercel + Vercel Cron (1/día) + Analytics + Speed Insights | `vercel.json` |
+| Hosting | Vercel + Vercel Cron (2/día, la segunda retoma) + Analytics + Speed Insights | `vercel.json` |
 | Tests | Vitest, sólo lógica pura de `lib/*.test.ts` | — |
 
 **Patrón:** SPA client-side sobre Firestore (BaaS). No hay capa de API para CRUD: las pantallas llaman funciones de `lib/db.ts`, que escriben en Firestore, y las reglas validan. Las API routes existen sólo para lo que necesita un secreto (Admin SDK, Cloudinary, VAPID, cron).
@@ -100,9 +100,11 @@ Auth:
 #### `GET /api/cron/daily`
 - Propósito: avisos push diarios de mantenimientos por vencer/vencidos y recordatorio semanal de km.
 - Auth: `Authorization: Bearer $CRON_SECRET` (comparación en tiempo constante). Si no → 401.
-- Schedule: `0 12 * * *` UTC (`vercel.json`). `maxDuration = 60`, presupuesto 40 s, 5 usuarios en paralelo, orden aleatorio.
-- 200: `{ ok: true, users: number, skipped: number, report: { uid, messages, sent, error? }[] }`
-- Interno: por cada `users/{uid}` → `cars where ownerUid == uid` → `cars/{id}/rules` (tope 1000 docs) y, en paralelo, la lectura de más km de cada auto (`cars/{id}/odometer` `orderBy('km', 'desc').limit(1)`, índice simple automático; una por auto, dentro del tope) → el km de cada auto para los avisos es esa lectura (`carKmForNotifications`: `currentKm` y `kmUpdatedAt` de la lectura, o lo guardado si no tiene; `avgKmPerDay` del auto), no el `currentKm` guardado → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes; saltea los recordatorios cumplidos, `completedByJobId != null`) → `sendToUser()` → `bulkWriter` actualiza `rules.lastNotifiedAt/lastNotifiedStatus` sólo de lo entregado (`updatesToPersist`). **Sólo avisa al dueño**, no a los miembros. Usa la proyección guardada de cada mantenimiento (`lastDone*`, `completedByJobId`), sin leer trabajos: si una escritura falló y el dueño no volvió a abrir la app, trabaja con la proyección vieja (lo mismo que el km). `ruleFrom` del cron tiene la misma lectura tolerante de la base que el de `lib/db.ts`.
+- Schedule: `0 12 * * *` y `0 14 * * *` UTC (`vercel.json`, misma ruta; en Hobby cada una corre una vez por día en cualquier minuto de esa hora). `maxDuration = 60`, presupuesto 40 s, 5 usuarios en paralelo, en orden de uid.
+- Qué hace cada llamada sale de `cronRuns/{YYYY-MM-DD}` (fecha UTC), no del schedule: sin registro procesa a todos; con una corrida que terminó sin dejar a nadie afuera (`finishedAt` y `skipped == 0`) responde `{ ok: true, date, alreadyDone: true }` con una sola lectura; si no (quedaron usuarios afuera, o la anterior se cortó con `finishedAt == null`), sigue con los uids `> cursor`. Los usuarios con error no se reintentan (quedan en `failures`). Para repetir una corrida completa el mismo día: borrar `cronRuns/{fecha}` en la consola.
+- 200: `{ ok: true, date, candidates, processed, skipped, errors, sent, report: { uid, messages, sent, error? }[] }` (los números son de esta corrida; los del día quedan en `cronRuns`). Si `skipped > 0` o hay errores, `console.error` con el resumen y `failures` (para la alerta en los logs de Vercel).
+- Candidatos: `collectionGroup('pushSubscriptions').select()` → uids de `users/{uid}/pushSubscriptions/{id}` sin repetir y ordenados (`candidateUids`, `lib/cron-run.ts`) → `getAll()` de esos `users/{uid}`. Un usuario sin suscripciones no genera ninguna lectura de autos, mantenimientos ni lecturas de km (consecuencia aceptada: a quien no tiene push no se le limpia `lastNotifiedStatus` cuando un mantenimiento vuelve a estar al día; se limpia en la primera corrida después de suscribirse). Un uid con suscripciones sin `users/{uid}` cuenta como procesado sin mensajes. Dos corridas completas el mismo día (sólo si la primera se cortó): los mantenimientos ya avisados se saltean por `lastNotified*` y el pedido de km se repite, pero el `tag` lo reemplaza en el dispositivo.
+- Interno: por cada candidato → `cars where ownerUid == uid` → `cars/{id}/rules` de todos los autos a la vez (cada auto lee `perCarLimit(autos, 1000)`, así entre todos no pasan de 1000 docs) y, en paralelo, la lectura de más km de cada auto (`cars/{id}/odometer` `orderBy('km', 'desc').limit(1)`, índice simple automático; una por auto, dentro del tope) → el km de cada auto para los avisos es esa lectura (`carKmForNotifications`: `currentKm` y `kmUpdatedAt` de la lectura, o lo guardado si no tiene; `avgKmPerDay` del auto), no el `currentKm` guardado → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes; saltea los recordatorios cumplidos, `completedByJobId != null`) → `sendToUser()` → `bulkWriter` actualiza `rules.lastNotifiedAt/lastNotifiedStatus` sólo de lo entregado (`updatesToPersist`). **Sólo avisa al dueño**, no a los miembros. Usa la proyección guardada de cada mantenimiento (`lastDone*`, `completedByJobId`), sin leer trabajos: si una escritura falló y el dueño no volvió a abrir la app, trabaja con la proyección vieja (lo mismo que el km). `ruleFrom` del cron tiene la misma lectura tolerante de la base que el de `lib/db.ts`.
 
 ### 2.2 Data layer (Firestore desde el cliente, `lib/db.ts`)
 
@@ -263,6 +265,7 @@ Layout: `PageHeader`, `PageBody`, `SectionTitle`, `EmptyState`, `Loading`, `NotF
 ```
 allowlist/{emailLower}            { uid, createdAt }                      sólo Admin SDK
 usage/{uid}                       { day: ISODate, photos: number }        sólo Admin SDK
+cronRuns/{YYYY-MM-DD}             { startedAt, finishedAt, runs, candidates, processed, skipped, errors, sent, cursor, failures[≤20] }  sólo Admin SDK (sin match)
 invites/{carId}_{emailKey}        Invite                                  O crea/reenvía/cancela/borra · invitado lee y responde
 users/{uid}                       UserSettings + createdAt                U
   ├─ pushSubscriptions/{sha256}   { endpoint, keys, userAgent, createdAt } U
@@ -325,6 +328,7 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | `utils.ts` | `changedFields(original, draft)` (los campos del borrador que cambiaron: null = undefined, listas en orden, mapas por contenido), `isUnchanged`, `safeNextPath`, `cn` |
 | `report.ts` | `buildServiceReport` (PDF de historial), `reportFileName` |
 | `notifications.ts` | `planDailyNotifications` (saltea los recordatorios cumplidos), `updatesToPersist`, `isPushEndpoint` |
+| `cron-run.ts` | Corridas del cron: `runDateOf(now)` (id de `cronRuns`, fecha UTC), `candidateUids(paths)`, `runIsDone(previous)`, `queueFrom(uids, previous)` (los uids después del cursor), `tally(reports)`, `summarizeRun({ queue, next, reports, candidates, previous })` (métricas acumuladas del día y cursor), `perCarLimit(carCount, maxDocs)`, `MAX_FAILURES = 20` |
 | `dates.ts` / `format.ts` | `ISODate` helpers / formato es-AR (`formatKm`, `formatMoney`, `formatDate`, `formatDayMonth`) |
 
 ---
@@ -338,7 +342,7 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | Firebase Admin | API routes y cron (no pasa por las reglas) | `FIREBASE_ADMIN_PROJECT_ID`, `_CLIENT_EMAIL`, `_PRIVATE_KEY` |
 | Cloudinary | Fotos de autos en `autocar/{uid}/{uuid}`, 1600 px, 10 fotos/día; URLs con `cloudinaryUrl(url, transform)` | `CLOUDINARY_CLOUD_NAME`, `_API_KEY`, `_API_SECRET` |
 | Web Push | VAPID; payload `{ title, body, url, tag }`; `public/sw.js` abre `url` al tocar | `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` |
-| Vercel Cron | `GET /api/cron/daily` 12:00 UTC | `CRON_SECRET` |
+| Vercel Cron | `GET /api/cron/daily` 12:00 UTC y 14:00 UTC (la segunda retoma lo que quedó, ver `cronRuns`) | `CRON_SECRET` |
 | Vercel Analytics / Speed Insights | Métricas | — |
 | GitHub Actions | `ci.yml`: `next typegen` + typecheck + tests | — |
 
