@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_FAILURES,
+  RUN_LOCK_MS,
   candidateUids,
-  perCarLimit,
   queueFrom,
   runDateOf,
+  runIsBusy,
   runIsDone,
   summarizeRun,
   tally,
@@ -13,6 +14,7 @@ import {
 } from './cron-run'
 
 const state = (over: Partial<CronRunState> = {}): CronRunState => ({
+  runningSince: null,
   finishedAt: new Date('2026-11-05T12:00:40Z'),
   processed: 0,
   skipped: 0,
@@ -73,6 +75,24 @@ describe('runIsDone', () => {
 
   it('si la anterior se cortó sin terminar hay que seguir', () => {
     expect(runIsDone(state({ finishedAt: null }))).toBe(false)
+  })
+})
+
+describe('runIsBusy', () => {
+  const now = new Date('2026-11-05T12:00:30Z')
+
+  it('sin registro o con una corrida terminada no está ocupada', () => {
+    expect(runIsBusy(null, now)).toBe(false)
+    expect(runIsBusy(state({ runningSince: new Date('2026-11-05T12:00:00Z') }), now)).toBe(false)
+  })
+
+  it('una corrida en curso dentro de RUN_LOCK_MS bloquea a otra llamada', () => {
+    expect(runIsBusy(state({ finishedAt: null, runningSince: new Date('2026-11-05T12:00:00Z') }), now)).toBe(true)
+  })
+
+  it('pasado RUN_LOCK_MS sin terminar se considera cortada y deja retomar', () => {
+    const started = new Date(now.getTime() - RUN_LOCK_MS)
+    expect(runIsBusy(state({ finishedAt: null, runningSince: started }), now)).toBe(false)
   })
 })
 
@@ -161,24 +181,5 @@ describe('summarizeRun', () => {
     expect(out.errors).toBe(MAX_FAILURES + 5)
     expect(out.failures).toHaveLength(MAX_FAILURES)
     expect(out.failures[0].uid).toBe('u00')
-  })
-})
-
-describe('perCarLimit', () => {
-  it('un auto se lleva todo el tope', () => {
-    expect(perCarLimit(1, 1000)).toBe(1000)
-  })
-
-  it('reparte el tope en partes iguales sin pasarse', () => {
-    expect(perCarLimit(3, 1000)).toBe(333)
-    expect(perCarLimit(3, 1000) * 3).toBeLessThanOrEqual(1000)
-  })
-
-  it('al menos un mantenimiento por auto', () => {
-    expect(perCarLimit(1000, 1000)).toBe(1)
-  })
-
-  it('sin autos no se lee nada', () => {
-    expect(perCarLimit(0, 1000)).toBe(0)
   })
 })

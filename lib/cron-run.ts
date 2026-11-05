@@ -1,12 +1,16 @@
 /** Tope de usuarios con error que se guardan en `cronRuns/{fecha}.failures`, sumando todas las corridas del día. */
 export const MAX_FAILURES = 20
 
+/** Tiempo que una corrida sin terminar bloquea a otra llamada al cron (`maxDuration` de la ruta en ms). */
+export const RUN_LOCK_MS = 60_000
+
 export type CronFailure = { uid: string; message: string }
 
 export type CronUserReport = { uid: string; messages: number; sent: number; error?: string }
 
 /** Lo que importa de `cronRuns/{fecha}` para decidir qué hace la corrida y para acumular las métricas del día. */
 export type CronRunState = {
+  runningSince: Date | null
   finishedAt: Date | null
   processed: number
   skipped: number
@@ -49,6 +53,16 @@ export function candidateUids(paths: string[]) {
 /** El día ya está hecho: una corrida terminó sin dejar usuarios afuera. */
 export function runIsDone(previous: CronRunState | null) {
   return previous != null && previous.finishedAt != null && previous.skipped === 0
+}
+
+/**
+ * Otra corrida está en curso: tiene `runningSince` de hace menos de `RUN_LOCK_MS` y todavía no escribió `finishedAt`.
+ * Evita que una entrega duplicada de Vercel o dos corridas superpuestas procesen a los mismos usuarios.
+ */
+export function runIsBusy(previous: CronRunState | null, now: Date) {
+  if (!previous || previous.finishedAt != null || !previous.runningSince) return false
+  const elapsed = now.getTime() - previous.runningSince.getTime()
+  return elapsed >= 0 && elapsed < RUN_LOCK_MS
 }
 
 /**
@@ -96,13 +110,4 @@ export function summarizeRun(input: {
     cursor,
     failures: [...(previous?.failures ?? []), ...failures].slice(0, MAX_FAILURES),
   }
-}
-
-/**
- * Cuántos mantenimientos se leen de cada auto: el tope por usuario repartido en partes iguales (al menos uno), así
- * las lecturas en paralelo no se pasan del tope entre todos los autos.
- */
-export function perCarLimit(carCount: number, maxDocs: number) {
-  if (carCount <= 0) return 0
-  return Math.max(1, Math.floor(maxDocs / carCount))
 }

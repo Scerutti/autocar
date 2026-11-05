@@ -1,16 +1,17 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { FieldValue, Timestamp, type DocumentData, type DocumentSnapshot, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
 import { adminDb } from '@/lib/firebase/admin'
 import {
   candidateUids,
-  perCarLimit,
   queueFrom,
   runDateOf,
+  runIsBusy,
   runIsDone,
   summarizeRun,
   tally,
   type CronFailure,
   type CronRunState,
+  type CronRunSummary,
   type CronUserReport,
 } from '@/lib/cron-run'
 import { todayInTimeZone } from '@/lib/dates'
@@ -89,6 +90,7 @@ function ruleFrom(id: string, x: DocumentData): MaintenanceRule {
 /** El registro del día (`cronRuns/{fecha}`) como lo usa `lib/cron-run.ts`. Lo que falta cuenta como cero o vacío. */
 function runStateFrom(x: DocumentData): CronRunState {
   return {
+    runningSince: toDate(x.runningSince),
     finishedAt: toDate(x.finishedAt),
     processed: num(x.processed) ?? 0,
     skipped: num(x.skipped) ?? 0,
@@ -111,13 +113,14 @@ async function topReadingOf(carDoc: QueryDocumentSnapshot) {
 }
 
 /**
- * Los mantenimientos de todos los autos a la vez. Cada auto lee su parte del tope (`perCarLimit`), así entre todos
- * no se pasan de `MAX_DOCS_PER_USER`.
+ * Los mantenimientos de todos los autos a la vez, con tope `MAX_DOCS_PER_USER` por auto y sobre el total, así un auto
+ * con muchos mantenimientos aprovecha el cupo libre de los demás.
  */
 async function rulesOf(carDocs: QueryDocumentSnapshot[]) {
-  const limit = perCarLimit(carDocs.length, MAX_DOCS_PER_USER)
-  const snaps = await Promise.all(carDocs.map(carDoc => carDoc.ref.collection('rules').limit(limit).get()))
-  return snaps.flatMap(snap => snap.docs.map(d => ruleFrom(d.id, d.data())))
+  const snaps = await Promise.all(carDocs.map(carDoc => carDoc.ref.collection('rules').limit(MAX_DOCS_PER_USER).get()))
+  return snaps
+    .flatMap(snap => snap.docs.map(d => ruleFrom(d.id, d.data())))
+    .slice(0, MAX_DOCS_PER_USER)
 }
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest()
@@ -130,6 +133,49 @@ function authorized(header: string | null) {
 }
 
 /**
+ * Toma el turno del día en `cronRuns/{fecha}` de forma atómica. Si el día ya terminó, o hay otra corrida en curso
+ * dentro de `RUN_LOCK_MS`, no escribe nada; si no, marca `runningSince` y deja `finishedAt: null`.
+ */
+async function claimRun(runRef: DocumentReference, now: Date) {
+  return adminDb().runTransaction(async tx => {
+    const snap = await tx.get(runRef)
+    const data = snap.data()
+    const previous = data ? runStateFrom(data) : null
+    if (runIsDone(previous)) return { status: 'done' as const }
+    if (runIsBusy(previous, now)) return { status: 'busy' as const }
+    const started = Timestamp.fromDate(now)
+    tx.set(
+      runRef,
+      {
+        ...(snap.exists ? {} : { startedAt: started }),
+        runningSince: started,
+        finishedAt: null,
+        runs: FieldValue.increment(1),
+      },
+      { merge: true },
+    )
+    return { status: 'claimed' as const, previous }
+  })
+}
+
+/**
+ * Guarda el cierre de la corrida en `cronRuns/{fecha}` con un reintento. Si no se guarda, la próxima corrida volvería
+ * a ver `finishedAt: null` con el cursor viejo: devuelve `false` para que la respuesta no marque `ok: true`.
+ */
+async function saveRunSummary(runRef: DocumentReference, date: string, summary: CronRunSummary) {
+  const data = { ...summary, finishedAt: Timestamp.fromDate(new Date()) }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await runRef.set(data, { merge: true })
+      return true
+    } catch (e) {
+      if (attempt === 1) console.error('Cron: no se guardó el registro de la corrida', date, e)
+    }
+  }
+  return false
+}
+
+/**
  * Manda los avisos del día a un usuario y guarda cuáles se avisaron. Los recordatorios cumplidos (`completedByJobId`)
  * no se avisan (`planDailyNotifications` los saltea). El km de cada auto es el de su lectura más alta
  * (`carKmForNotifications`), no el `currentKm` guardado, que sólo se corrige cuando alguien abre la app. Los
@@ -138,15 +184,16 @@ function authorized(header: string | null) {
  * que se borró mientras corría el cron: no hay nada que guardar. Un uid con suscripciones pero sin `users/{uid}` no
  * tiene ajustes: cuenta como procesado sin mensajes.
  */
-async function processUser(userDoc: DocumentSnapshot, now: Date): Promise<CronUserReport> {
+async function processUser(uid: string, now: Date): Promise<CronUserReport> {
   const db = adminDb()
+  const userDoc = await db.collection('users').doc(uid).get()
   const x = userDoc.data()
-  if (!x) return { uid: userDoc.id, messages: 0, sent: 0 }
+  if (!x) return { uid, messages: 0, sent: 0 }
   const settings: UserSettings = {
     reminder: { ...DEFAULT_SETTINGS.reminder, ...(x.reminder ?? {}) },
     timezone: x.timezone ?? DEFAULT_SETTINGS.timezone,
   }
-  const carsSnap = await db.collection('cars').where('ownerUid', '==', userDoc.id).limit(MAX_DOCS_PER_USER).get()
+  const carsSnap = await db.collection('cars').where('ownerUid', '==', uid).limit(MAX_DOCS_PER_USER).get()
   const [rules, tops] = await Promise.all([rulesOf(carsSnap.docs), Promise.all(carsSnap.docs.map(topReadingOf))])
   const carIdByRule = new Map(rules.map(r => [r.id, r.carId]))
   const { messages, ruleUpdates } = planDailyNotifications({
@@ -157,7 +204,7 @@ async function processUser(userDoc: DocumentSnapshot, now: Date): Promise<CronUs
     now,
   })
 
-  const { sent, delivered } = await sendToUser(userDoc.id, messages)
+  const { sent, delivered } = await sendToUser(uid, messages)
   const updates = updatesToPersist(ruleUpdates, delivered)
   if (updates.length) {
     const writer = db.bulkWriter()
@@ -169,20 +216,22 @@ async function processUser(userDoc: DocumentSnapshot, now: Date): Promise<CronUs
           lastNotifiedAt: u.notified ? Timestamp.fromDate(now) : null,
         })
         .catch(e => {
-          if (e.code !== 5) console.error('Cron: no se guardó el aviso', userDoc.id, u.ruleId, e)
+          if (e.code !== 5) console.error('Cron: no se guardó el aviso', uid, u.ruleId, e)
         })
     }
     await writer.close()
   }
-  return { uid: userDoc.id, messages: messages.length, sent }
+  return { uid, messages: messages.length, sent }
 }
 
 /**
- * Vercel Cron la llama dos veces por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET". Qué hace sale
- * de `cronRuns/{fecha}`: sin registro procesa a todos; si una corrida ya terminó sin dejar a nadie afuera, no hace
- * nada; si no, sigue después del cursor. Solo se procesan los usuarios con suscripción push, en orden de uid. Cada
- * worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de un usuario no corta a los
- * demás. Si quedan usuarios afuera o hay errores, va un `console.error` para que salte en los logs de Vercel.
+ * Vercel Cron la llama dos veces por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET". Toma el turno en
+ * `cronRuns/{fecha}` con una transacción: sin registro procesa a todos; si ya terminó sin dejar a nadie afuera,
+ * responde `alreadyDone`; si otra llamada está corriendo dentro de `RUN_LOCK_MS`, responde `busy`; si no, sigue
+ * después del cursor. Solo se procesan los usuarios con suscripción push, en orden de uid, leyendo `users/{uid}` por
+ * cada uno que se procesa. Cada worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de
+ * un usuario no corta a los demás. Si quedan usuarios afuera o hay errores, va un `console.error` para que salte en
+ * los logs de Vercel.
  */
 export async function GET(request: Request) {
   const startedAt = Date.now()
@@ -194,31 +243,25 @@ export async function GET(request: Request) {
   const now = new Date()
   const date = runDateOf(now)
   const runRef = db.collection('cronRuns').doc(date)
-  const runSnap = await runRef.get()
-  const runData = runSnap.data()
-  const previous = runData ? runStateFrom(runData) : null
-  if (runIsDone(previous)) return Response.json({ ok: true, date, alreadyDone: true })
-
-  await runRef.set(
-    { ...(runSnap.exists ? {} : { startedAt: Timestamp.fromDate(now) }), finishedAt: null, runs: FieldValue.increment(1) },
-    { merge: true },
-  )
+  const claim = await claimRun(runRef, now)
+  if (claim.status === 'done') return Response.json({ ok: true, date, alreadyDone: true })
+  if (claim.status === 'busy') return Response.json({ ok: true, date, busy: true })
+  const { previous } = claim
 
   const subs = await db.collectionGroup('pushSubscriptions').select().get()
   const uids = candidateUids(subs.docs.map(d => d.ref.path))
   const queue = queueFrom(uids, previous)
-  const users = queue.length ? await db.getAll(...queue.map(uid => db.collection('users').doc(uid))) : []
   const report: CronUserReport[] = []
 
   let next = 0
   const worker = async () => {
-    while (next < users.length && Date.now() - startedAt < TIME_BUDGET_MS) {
-      const userDoc = users[next++]
+    while (next < queue.length && Date.now() - startedAt < TIME_BUDGET_MS) {
+      const uid = queue[next++]
       try {
-        report.push(await processUser(userDoc, now))
+        report.push(await processUser(uid, now))
       } catch (e) {
-        console.error('Cron: error con usuario', userDoc.id, e)
-        report.push({ uid: userDoc.id, messages: 0, sent: 0, error: (e as Error).message })
+        console.error('Cron: error con usuario', uid, e)
+        report.push({ uid, messages: 0, sent: 0, error: (e as Error).message })
       }
     }
   }
@@ -226,9 +269,7 @@ export async function GET(request: Request) {
 
   const summary = summarizeRun({ queue, next, reports: report, candidates: uids.length, previous })
   const run = tally(report)
-  await runRef
-    .set({ ...summary, finishedAt: Timestamp.fromDate(new Date()) }, { merge: true })
-    .catch(e => console.error('Cron: no se guardó el registro de la corrida', date, e))
+  const logged = await saveRunSummary(runRef, date, summary)
 
   if (summary.skipped || run.errors) {
     console.error(
@@ -236,14 +277,17 @@ export async function GET(request: Request) {
       summary.failures,
     )
   }
-  return Response.json({
-    ok: true,
-    date,
-    candidates: uids.length,
-    processed: run.processed,
-    skipped: summary.skipped,
-    errors: run.errors,
-    sent: run.sent,
-    report,
-  })
+  return Response.json(
+    {
+      ok: logged,
+      date,
+      candidates: uids.length,
+      processed: run.processed,
+      skipped: summary.skipped,
+      errors: run.errors,
+      sent: run.sent,
+      report,
+    },
+    logged ? undefined : { status: 500 },
+  )
 }
