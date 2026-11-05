@@ -7,6 +7,7 @@
 | invite-members-by-uid | Compartir con invitación que se acepta, y miembros por uid (#54, E2) | P1 | L | share-cars-with-family | IN PROGRESS (implementado en `feat/54-invitations`; faltan CI, simulador de reglas, publicar reglas, deploy, migración y prueba con dos cuentas) |
 | transfer-car-ownership | El dueño le pasa el auto a un miembro (#65, E2) | P3 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/65-transfer-car`; faltan CI, simulador de reglas y publicar reglas) |
 | member-roles | Roles por miembro: aprobación automática o solo lectura (#71, E2) | P4 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/71-member-roles`; faltan CI, simulador de reglas y publicar reglas) |
+| cron-push-users-and-run-log | El cron recorre solo usuarios con push, lee en paralelo y registra cada corrida (#58, E3) | P2 | M | — | IN PROGRESS (implementado en `feat/58-cron-push-users`; faltan CI y una semana de `cronRuns` sin salteados) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale) | ARCHIVED.
 
