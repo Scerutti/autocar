@@ -40,7 +40,7 @@
        - `url: pendingReview.carId ? \`/autos/\${pendingReview.carId}?tab=trabajos\` : '/'`,
        - `tag: REVIEW_TAG` (`'review'`).
        - Reserved slot just like `km`: never dropped by rule alerts (`ruleSlots = MAX_MESSAGES_PER_RUN - km.length - (reviewMessage ? 1 : 0)`).
-   - Persisting updates: `bulkWriter` writes `db.collection('users').doc(uid).collection('ruleNotices').doc(u.ruleId).set({ status: u.lastNotifiedStatus, at: u.notified ? Timestamp.fromDate(now) : null })`.
+   - Persisting updates: `bulkWriter` writes `db.collection('users').doc(uid).collection('ruleNotices').doc(u.ruleId).set({ status: u.lastNotifiedStatus, at: u.notified ? Timestamp.fromDate(now) : null })` and, when `settings.sharedCars !== false` and neither cars nor rules reached `MAX_DOCS_PER_USER`, deletes orphan `ruleNotices` (`orphanNoticeIds(notices, rules)`).
 
 4. **Instant job notifications (`POST /api/notify/job`):**
    - Body: `{ carId: string, jobId: string, event: 'submitted' | 'approved' | 'rejected' }`.
@@ -57,8 +57,8 @@
    - Calls `sendToUser(recipientUid, [message])` and returns `200 { sent }`.
 
 5. **Instant rule-escalation notifications (`POST /api/notify/rules`):**
-   - Body: `{ carId: string }`.
-   - `authorize(request)` → reads `cars/{carId}`, its `rules` (`limit(MAX_DOCS_PER_USER)`) and `topReadingOf(carDoc)` in parallel.
+   - Body: `{ carId: string, ruleIds?: string[] }`.
+   - `authorize(request)` → reads `cars/{carId}`, its `rules`, `jobs` and `odometer` (`limit(MAX_DOCS_PER_USER)`) in parallel, projects the rules in memory (`projectRules(rawRules, jobs, readings)` filtered by `ruleIds` when provided) and computes the car km with `carKmFrom(readings)`.
    - Authorization: caller `uid` must be `car.ownerUid === uid` or `(car.memberUids ?? []).includes(uid)` (else 403; missing car → 404).
    - Effective car km: `carKmForNotifications(car, top)`.
    - Recipients: `[car.ownerUid, ...(car.memberUids ?? [])].filter(u => u && u !== uid)`.
@@ -66,7 +66,7 @@
    - Calls `sendToUser(recipientUid, messages)`.
    - **Caller toast on the client:**
      - Pure helper `escalatedRules({ carBefore, carAfter, rulesBefore, rulesAfter, today })`: returns the active rules of the car whose status went `ok`/`unknown` → `soon`/`overdue` or `soon` → `overdue`.
-     - After `settle` returns `'saved'` (or on Undo/Delete), if any rule escalated, the client shows a `toast.warning` (`announceRuleEscalations`) and fires `notifyRulesInBackground(car.id, getToken)`.
+     - After `settle` returns `'saved'` (or on Undo/Delete), if any rule escalated (`escalations.length > 0`), the client shows a `toast.warning` (`announceRuleEscalations`) and, if the car has members (`memberUids.length > 0`), fires `notifyRulesInBackground(car.id, escalations.map(e => e.rule.id), getToken)`. `notifyJobInBackground` is attached to `.then` of the write promise so offline saves that sync while the app is open still send the push; if the app closes before syncing, `submitted` is covered by the daily cron's review summary and `approved`/`rejected` are seen in the app.
      - Wired in: `km-form.tsx` (`recordKm`), `autos/[carId]/page.tsx` (`deleteReading`, `restoreReading`), `fuel-form.tsx` (`saveFuel`, `deleteFuel`, `restoreFuel`), `job-form.tsx` (`saveJob`, `approveJob`, `rejectJob`, `deleteJob`, `restoreJob`).
 
 ## Tasks
