@@ -1,16 +1,18 @@
 import { Timestamp } from 'firebase-admin/firestore'
 import { todayInTimeZone } from '@/lib/dates'
 import { adminDb, authorize } from '@/lib/firebase/admin'
+import { projectRules } from '@/lib/maintenance'
 import { didRuleEscalate, effectiveRuleNotice, planRuleAlerts, type PushPayload } from '@/lib/notifications'
-import { carKmForNotifications } from '@/lib/odometer'
+import { carKmFrom } from '@/lib/odometer'
 import {
   MAX_DOCS_PER_USER,
   sendToUser,
   serverCarFrom,
+  serverJobFrom,
   serverNoticeFrom,
+  serverReadingFrom,
   serverRuleFrom,
   serverSettingsFrom,
-  topReadingOf,
 } from '@/lib/push-server'
 import type { Car, MaintenanceRule } from '@/lib/types'
 
@@ -73,16 +75,25 @@ async function notifyRecipient(
  * activo por vencer o vencido: avisa al resto del grupo del auto (dueño y miembros en `memberUids`, salvo quien llamó)
  * con el mismo texto y tag que el cron diario y graba su `users/{uid}/ruleNotices/{ruleId}` en una transacción por
  * persona y mantenimiento, así una segunda llamada o el cron de la mañana no lo repiten.
+ * Proyecta los mantenimientos en memoria (`projectRules` con los trabajos y lecturas del auto) en vez de usar la
+ * proyección guardada en `rules`, porque los batches de `rules` se commitean recién después del batch del trabajo (y
+ * un miembro `trusted` no los escribe). Si el cliente pasa `ruleIds`, evalúa sólo esos mantenimientos.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
   if (auth instanceof Response) return auth
   const { uid } = auth
 
-  const body = (await request.json().catch(() => null)) as { carId?: unknown } | null
+  const body = (await request.json().catch(() => null)) as { carId?: unknown; ruleIds?: unknown } | null
   const carId = typeof body?.carId === 'string' ? body.carId.trim() : ''
   if (!carId) {
     return Response.json({ error: 'Pedido inválido' }, { status: 400 })
+  }
+  const filterIds = Array.isArray(body?.ruleIds)
+    ? new Set(body.ruleIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
+    : null
+  if (filterIds && !filterIds.size) {
+    return Response.json({ sent: 0 })
   }
 
   try {
@@ -108,12 +119,19 @@ export async function POST(request: Request) {
       return Response.json({ sent: 0 })
     }
 
-    const [rulesSnap, top] = await Promise.all([
+    const [rulesSnap, jobsSnap, readingsSnap] = await Promise.all([
       carRef.collection('rules').limit(MAX_DOCS_PER_USER).get(),
-      topReadingOf(carSnap),
+      carRef.collection('jobs').limit(MAX_DOCS_PER_USER).get(),
+      carRef.collection('odometer').limit(MAX_DOCS_PER_USER).get(),
     ])
-    const car = carKmForNotifications(rawCar, top)
-    const rules = rulesSnap.docs.map(d => serverRuleFrom(d.id, d.data()))
+    const readings = readingsSnap.docs.map(d => serverReadingFrom(d.id, d.data()))
+    const jobs = jobsSnap.docs.map(d => serverJobFrom(d.id, d.data()))
+    const rawRules = rulesSnap.docs
+      .map(d => serverRuleFrom(d.id, d.data()))
+      .filter(r => !filterIds || filterIds.has(r.id))
+    const rules = projectRules(rawRules, jobs, readings)
+    const km = carKmFrom(readings)
+    const car = km ? { ...rawCar, ...km } : rawCar
     const now = new Date()
 
     const counts = await Promise.all(recipients.map(r => notifyRecipient(r, car, rules, now)))

@@ -1,7 +1,7 @@
 'use client'
 
 import { Timestamp } from 'firebase/firestore'
-import { describeRemaining, projectRules, type RuleState } from './maintenance'
+import { describeRemaining, projectRules } from './maintenance'
 import { escalatedRules, type JobNotificationEvent } from './notifications'
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading } from './odometer'
 import { toast } from './toast'
@@ -25,7 +25,9 @@ async function postNotify(path: string, body: unknown, getToken: GetToken) {
 
 /**
  * Avisa en segundo plano al servidor cuando un miembro manda un trabajo (`submitted`) o el dueño lo aprueba o rechaza
- * (`approved` | `rejected`). Si estaba sin señal o falla la red, el resumen diario del cron lo cubre.
+ * (`approved` | `rejected`). Se engancha a la promesa de escritura, así también sale si se guardó sin señal y sincronizó
+ * con la app abierta; si la app se cierra antes de recuperar señal, `submitted` queda cubierto por el resumen diario
+ * del cron y `approved` / `rejected` se ven en la campanita y en el trabajo al abrir la app.
  */
 export function notifyJobInBackground(
   input: { carId: string; jobId: string; event: JobNotificationEvent },
@@ -35,16 +37,17 @@ export function notifyJobInBackground(
 }
 
 /**
- * Avisa en segundo plano al resto del grupo del auto (`POST /api/notify/rules`) los mantenimientos que subieron de
- * estado con la carga recién confirmada.
+ * Avisa en segundo plano al resto del grupo del auto (`POST /api/notify/rules`) los mantenimientos (`ruleIds`) que
+ * subieron de estado con la carga recién confirmada.
  */
-export function notifyRulesInBackground(carId: string, getToken: GetToken) {
-  void postNotify('/api/notify/rules', { carId }, getToken)
+export function notifyRulesInBackground(carId: string, ruleIds: string[], getToken: GetToken) {
+  if (!ruleIds.length) return
+  void postNotify('/api/notify/rules', { carId, ruleIds }, getToken)
 }
 
 /**
  * Muestra a quien hizo la carga un toast por cada mantenimiento activo del auto que pasó a por vencer o vencido, y si
- * el auto es compartido le pide al servidor que avise por push al resto del grupo.
+ * hubo alguno y el auto tiene miembros le pide al servidor que avise por push al resto del grupo.
  */
 export function announceRuleEscalations(input: {
   car: Car
@@ -57,6 +60,7 @@ export function announceRuleEscalations(input: {
 }) {
   const { car, carBefore, carAfter, rulesBefore, rulesAfter, today, getToken } = input
   const escalations = escalatedRules({ carBefore, carAfter, rulesBefore, rulesAfter, today })
+  if (!escalations.length) return
   for (const { rule, state, status } of escalations) {
     const r = describeRemaining(state)
     const detail = [r.km, r.date].filter(Boolean).join(' · ')
@@ -66,7 +70,11 @@ export function announceRuleEscalations(input: {
     )
   }
   if ((car.memberUids?.length ?? 0) > 0) {
-    notifyRulesInBackground(car.id, getToken)
+    notifyRulesInBackground(
+      car.id,
+      escalations.map(e => e.rule.id),
+      getToken,
+    )
   }
 }
 
@@ -126,7 +134,7 @@ export function readingsWithLinked(
   return [
     ...readings.filter(r => r.carId !== carId),
     ...withLinkedReading(
-      readings.filter(r => r.carId === carId),
+      readings.filter(r => r.carId === car.id),
       id,
       next,
     ),

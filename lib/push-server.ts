@@ -4,7 +4,18 @@ import webpush from 'web-push'
 import { adminDb } from './firebase/admin'
 import { isPushEndpoint, type PushPayload } from './notifications'
 import { fuelTypesFromDoc, intervalFromDoc } from './parse'
-import { DEFAULT_SETTINGS, type Car, type Job, type JobStatus, type MaintenanceRule, type MemberProfile, type MemberRole, type RuleNotice, type UserSettings } from './types'
+import {
+  DEFAULT_SETTINGS,
+  type Car,
+  type Job,
+  type JobStatus,
+  type MaintenanceRule,
+  type MemberProfile,
+  type MemberRole,
+  type OdometerReading,
+  type RuleNotice,
+  type UserSettings,
+} from './types'
 
 let configured = false
 
@@ -78,9 +89,8 @@ export function serverCarFrom(id: string, x: DocumentData): Car {
 }
 
 /**
- * Un mantenimiento como lo leen el cron y `/api/notify/rules`: la proyección guardada (`lastDone*`, `completedByJobId`),
- * sin leer trabajos. La base, como en `ruleFrom` de `lib/db.ts`: si el documento no tiene los campos (versión anterior
- * de la PWA), es la "última vez" guardada.
+ * Un mantenimiento como lo leen el cron y `/api/notify/rules`. La base, como en `ruleFrom` de `lib/db.ts`: si el
+ * documento no tiene los campos (versión anterior de la PWA), es la "última vez" guardada.
  */
 export function serverRuleFrom(id: string, x: DocumentData): MaintenanceRule {
   const legacy = !('baseDate' in x)
@@ -105,7 +115,7 @@ export function serverRuleFrom(id: string, x: DocumentData): MaintenanceRule {
   }
 }
 
-/** Un trabajo como lo lee `/api/notify/job`. */
+/** Un trabajo como lo leen `/api/notify/job` y `/api/notify/rules`. */
 export function serverJobFrom(id: string, x: DocumentData): Job {
   return {
     id,
@@ -124,6 +134,21 @@ export function serverJobFrom(id: string, x: DocumentData): Job {
     createdBy: str(x.createdBy),
     createdByName: str(x.createdByName),
     createdAt: toDate(x.createdAt) ?? new Date(0),
+  }
+}
+
+/** Una lectura de km como la lee `/api/notify/rules` para proyectar los mantenimientos y el km del auto. */
+export function serverReadingFrom(id: string, x: DocumentData): OdometerReading {
+  return {
+    id,
+    carId: x.carId,
+    km: num(x.km) ?? 0,
+    date: toDate(x.date) ?? new Date(0),
+    source: x.source ?? 'manual',
+    sourceId: str(x.sourceId),
+    createdBy: str(x.createdBy),
+    createdByName: str(x.createdByName),
+    createdAt: toDate(x.createdAt),
   }
 }
 

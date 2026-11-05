@@ -15,7 +15,7 @@ import {
   type CronUserReport,
 } from '@/lib/cron-run'
 import { todayInTimeZone } from '@/lib/dates'
-import { planDailyNotifications, updatesToPersist } from '@/lib/notifications'
+import { orphanNoticeIds, planDailyNotifications, updatesToPersist } from '@/lib/notifications'
 import { carKmForNotifications } from '@/lib/odometer'
 import { MAX_DOCS_PER_USER, sendToUser, serverCarFrom, serverNoticeFrom, serverRuleFrom, serverSettingsFrom, topReadingOf } from '@/lib/push-server'
 import { isSharedCar } from '@/lib/sharing'
@@ -146,7 +146,9 @@ async function saveRunSummary(runRef: DocumentReference, date: string, summary: 
  * Los recordatorios cumplidos (`completedByJobId`) no se avisan (`planDailyNotifications` los saltea). El km de cada
  * auto es el de su lectura más alta (`carKmForNotifications`), no el `currentKm` guardado. Los mantenimientos, las
  * lecturas de km, los `ruleNotices` del usuario y los trabajos pendientes de sus autos compartidos se piden a la vez.
- * Un uid con suscripciones pero sin `users/{uid}` no tiene ajustes: cuenta como procesado sin mensajes.
+ * Cuando se leyeron todos los autos y mantenimientos del usuario (`sharedCars !== false` y sin llegar al tope), borra
+ * con el mismo `bulkWriter` los `ruleNotices` huérfanos (`orphanNoticeIds`: mantenimientos o autos borrados, o autos de
+ * los que salió). Un uid con suscripciones pero sin `users/{uid}` no tiene ajustes: cuenta como procesado sin mensajes.
  */
 async function processUser(uid: string, now: Date): Promise<CronUserReport> {
   const db = adminDb()
@@ -188,7 +190,11 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
 
   const { sent, delivered } = await sendToUser(uid, messages)
   const updates = updatesToPersist(ruleUpdates, delivered)
-  if (updates.length) {
+  const orphans =
+    settings.sharedCars && carDocs.length < MAX_DOCS_PER_USER && rules.length < MAX_DOCS_PER_USER
+      ? orphanNoticeIds(notices, rules)
+      : []
+  if (updates.length || orphans.length) {
     const writer = db.bulkWriter()
     writer.onWriteError(err => err.code !== 5 && err.failedAttempts < 3)
     const noticesCol = db.collection('users').doc(uid).collection('ruleNotices')
@@ -201,6 +207,11 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
         .catch(e => {
           if (e.code !== 5) console.error('Cron: no se guardó el aviso', uid, u.ruleId, e)
         })
+    }
+    for (const ruleId of orphans) {
+      writer.delete(noticesCol.doc(ruleId)).catch(e => {
+        if (e.code !== 5) console.error('Cron: no se borró el aviso huérfano', uid, ruleId, e)
+      })
     }
     await writer.close()
   }

@@ -37,10 +37,11 @@ export async function POST(request: Request) {
       return Response.json({ error: 'No encontrado' }, { status: 404 })
     }
 
+    const job = serverJobFrom(jobSnap.id, jobData)
     const plan = planJobNotification({
       uid,
       car: serverCarFrom(carSnap.id, carData),
-      job: serverJobFrom(jobSnap.id, jobData),
+      job,
       event,
     })
     if (!plan.ok) {
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
       await db
         .collection('notices')
         .doc(plan.noticeId)
-        .create({ carId, jobId, event, createdAt: Timestamp.now() })
+        .create({ carId, jobId, event, revision: job.revision ?? 0, createdAt: Timestamp.now() })
     } catch (e) {
       if ((e as { code?: number }).code === 6) {
         return Response.json({ sent: 0, duplicate: true })

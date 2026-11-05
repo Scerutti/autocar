@@ -7,6 +7,7 @@ import {
   KM_TAG,
   MAX_MESSAGES_PER_RUN,
   MORE_TAG,
+  orphanNoticeIds,
   planDailyNotifications,
   planJobNotification,
   planRuleAlerts,
@@ -316,6 +317,12 @@ describe('planRuleAlerts y escalatedRules', () => {
     expect(effectiveRuleNotice(r, true, undefined)).toEqual({ status: 'soon', at: now })
     expect(effectiveRuleNotice(r, false, undefined)).toEqual({ status: null, at: null })
     expect(effectiveRuleNotice(r, true, { status: null, at: null })).toEqual({ status: null, at: null })
+    const notices = new Map<string, RuleNotice>([
+      ['r1', { status: 'soon', at: now }],
+      ['deleted-rule', { status: 'overdue', at: now }],
+    ])
+    expect(orphanNoticeIds(notices, [rule])).toEqual(['deleted-rule'])
+    expect(orphanNoticeIds(notices, [rule, { id: 'deleted-rule' }])).toEqual([])
   })
 
   it('planRuleAlerts arma el aviso con el mismo tag que el cron y no repite si ya estaba en ese estado', () => {

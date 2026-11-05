@@ -98,10 +98,11 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(approveJob(actor, ctx, job), 'No se pudo aprobar')
+      const p = approveJob(actor, ctx, job)
+      p.then(() => notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'approved' }, getToken)).catch(() => {})
+      const status = await settle(p, 'No se pudo aprobar')
       toastSaved('Trabajo aprobado', status, job.title)
       if (status === 'saved') {
-        notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'approved' }, getToken)
         const afterJob: Job = { ...job, status: 'approved' }
         checkCarRuleEscalations({
           car,
@@ -131,23 +132,22 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job), 'No se pudo rechazar')
+      const p = rejectJob(actor, jobContext(car, allRules, jobs, odometer), job)
+      p.then(() => notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'rejected' }, getToken)).catch(() => {})
+      const status = await settle(p, 'No se pudo rechazar')
       toastSaved('Trabajo rechazado', status, job.title)
-      if (status === 'saved') {
-        notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'rejected' }, getToken)
-        if (isApproved(job)) {
-          const afterJob: Job = { ...job, status: 'rejected' }
-          checkCarRuleEscalations({
-            car,
-            rawRules: allRules,
-            jobsBefore: jobs,
-            jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
-            readingsBefore: odometer,
-            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
-            today,
-            getToken,
-          })
-        }
+      if (status === 'saved' && isApproved(job)) {
+        const afterJob: Job = { ...job, status: 'rejected' }
+        checkCarRuleEscalations({
+          car,
+          rawRules: allRules,
+          jobsBefore: jobs,
+          jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
+          readingsBefore: odometer,
+          readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+          today,
+          getToken,
+        })
       }
       return true
     } catch (e) {
@@ -352,7 +352,13 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     const jobId = job?.id ?? newChildId(car.id, 'jobs')
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveJob(actor, ctx, input, original, followUp, jobId))
+      const p = saveJob(actor, ctx, input, original, followUp, jobId)
+      if (!owner && !autoApproved) {
+        p.then(out => {
+          if (out !== 'unchanged') notifyJobInBackground({ carId: car.id, jobId, event: 'submitted' }, getToken)
+        }).catch(() => {})
+      }
+      status = await settle(p)
     })
     if (!ok) return
     const note = applies
@@ -368,27 +374,22 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         ? 'Sigue esperando tu aprobación.'
         : `Queda pendiente hasta que ${ownerName} lo apruebe.`
     toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : autoApproved ? 'Trabajo guardado' : 'Trabajo enviado', status, note)
-    if (status === 'saved') {
-      if (!owner && !autoApproved) {
-        notifyJobInBackground({ carId: car.id, jobId, event: 'submitted' }, getToken)
+    if (status === 'saved' && applies) {
+      const afterJob: Job = {
+        ...(job ?? { id: jobId, createdBy: uid, createdByName: actor.name, createdAt: null }),
+        ...input,
+        status: 'approved',
       }
-      if (applies) {
-        const afterJob: Job = {
-          ...(job ?? { id: jobId, createdBy: uid, createdByName: actor.name, createdAt: null }),
-          ...input,
-          status: 'approved',
-        }
-        checkCarRuleEscalations({
-          car,
-          rawRules: allRules,
-          jobsBefore: jobs,
-          jobsAfter: [...jobs.filter(j => j.id !== jobId), afterJob],
-          readingsBefore: odometer,
-          readingsAfter: readingsWithLinked(odometer, car.id, 'job', jobId, { date, km: kmNum }),
-          today,
-          getToken,
-        })
-      }
+      checkCarRuleEscalations({
+        car,
+        rawRules: allRules,
+        jobsBefore: jobs,
+        jobsAfter: [...jobs.filter(j => j.id !== jobId), afterJob],
+        readingsBefore: odometer,
+        readingsAfter: readingsWithLinked(odometer, car.id, 'job', jobId, { date, km: kmNum }),
+        today,
+        getToken,
+      })
     }
     router.replace(`/autos/${car.id}?tab=trabajos`)
   }
@@ -429,7 +430,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         if (isApproved(job)) {
           checkCarRuleEscalations({
             car,
-            rawRules: allRules.map(r => (r.completedByJobId === job.id ? { ...r, completedAt: null, completedByJobId: null } : r)),
+            rawRules: allRules,
             jobsBefore: jobs.filter(j => j.id !== job.id),
             jobsAfter: [...jobs.filter(j => j.id !== job.id), job],
             readingsBefore: readingsWithLinked(odometer, car.id, 'job', job.id, null),
@@ -551,7 +552,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
             description="Por ejemplo, si te dijeron que vuelvas en 3 semanas para un control. Te lo recordamos."
           />
           {comeBack && (
-            <FieldGroup label="¿En cuánto tiempo?" hint={comeBackIn ? `Te avisamos para volver el ${formatDate(addInterval(date, comeBackIn))}.` : undefined}>
+            <FieldGroup label="¿En cuánto tiempo?" hint={comeBackIn ? `Te avisamos para volver el ${formatDate(addInterval(date, followUp.intervalTime))}.` : undefined}>
               <IntervalPicker value={comeBackIn} onChange={setComeBackIn} presets={INTERVAL_PRESETS.once} aria-label="En cuánto tiempo volver" />
             </FieldGroup>
           )}

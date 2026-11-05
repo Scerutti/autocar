@@ -336,3 +336,21 @@ export function planDailyNotifications(input: {
 
   return { messages, ruleUpdates }
 }
+
+/**
+ * Los `ruleId` de `users/{uid}/ruleNotices` que ya no corresponden a ningún mantenimiento leído del usuario (porque se
+ * borró el mantenimiento o el auto, o el usuario dejó de ser miembro). Sólo se usa cuando se leyeron todos los autos y
+ * mantenimientos del usuario (`sharedCars !== false` y sin llegar al tope `MAX_DOCS_PER_USER`).
+ */
+export function orphanNoticeIds(
+  notices: ReadonlyMap<string, RuleNotice>,
+  rules: Pick<MaintenanceRule, 'id'>[],
+): string[] {
+  const activeIds = new Set(rules.map(r => r.id))
+  const orphans: string[] = []
+  for (const ruleId of notices.keys()) {
+    if (!activeIds.has(ruleId)) orphans.push(ruleId)
+  }
+  return orphans
+}
+}
