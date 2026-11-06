@@ -56,8 +56,58 @@ export interface Car {
   /** Uid del dueño. Opcional en el tipo porque el cron y los logros arman autos sin él; lib/db.ts siempre lo completa. */
   ownerUid?: string
   ownerName?: string | null
-  /** Mails en minúscula de las personas con las que el dueño compartió el auto (hasta 2). El dueño no figura. */
-  members?: string[]
+  /** Uids de las personas que aceptaron una invitación al auto (hasta 2). El dueño no figura. */
+  memberUids?: string[]
+  /** Mail y nombre de cada miembro, por uid: para mostrarlos. Tiene las mismas claves que `memberUids`. */
+  memberProfiles?: Record<string, MemberProfile>
+  /**
+   * Cuándo el dueño lo borró (`markCarDeleted`): desde ahí el auto desaparece de la app y nadie carga nada en él, y el
+   * servidor (`DELETE /api/cars/[carId]` o el barrido del cron) termina de borrarlo con su historial y su foto. Falta
+   * o es null en los autos vivos.
+   */
+  deletedAt?: Date | null
+}
+
+/**
+ * Qué puede hacer un miembro en el auto: `editor` carga y sus trabajos esperan la aprobación del dueño; `trusted` carga
+ * y sus trabajos nuevos quedan aprobados; `viewer` sólo mira.
+ */
+export type MemberRole = 'editor' | 'trusted' | 'viewer'
+
+/**
+ * Cómo se muestra un miembro: el mail con el que entró y su nombre de Google (null si no lo tiene), y su rol (sin rol
+ * es `editor`: así entra al aceptar una invitación).
+ */
+export interface MemberProfile {
+  email: string
+  name: string | null
+  role?: MemberRole
+}
+
+export type InviteStatus = 'pending' | 'accepted' | 'declined' | 'revoked'
+
+/**
+ * Invitación a compartir un auto (invites/{carId}_{emailKey}): una activa por auto y mail. El auto le aparece al
+ * invitado recién cuando la acepta.
+ */
+export interface Invite {
+  id: string
+  carId: string
+  ownerUid: string
+  ownerName: string | null
+  /** "Ford Ka 2015": lo que el invitado ve antes de aceptar, sin poder leer el auto. */
+  carLabel: string
+  /** Como lo escribió el dueño, en minúscula. */
+  email: string
+  /** canonicalEmail(email): con lo que se compara contra el login. */
+  emailKey: string
+  status: InviteStatus
+  createdAt: Date
+  /** Pasada esta fecha no se puede aceptar ni rechazar: el dueño la puede volver a mandar. */
+  expiresAt: Date
+  respondedAt: Date | null
+  /** Uid de la cuenta que respondió la invitación; null mientras está pendiente o si el dueño la canceló. */
+  acceptedUid: string | null
 }
 
 /**
@@ -200,11 +250,24 @@ export interface AchievementRecord {
 export interface UserSettings {
   reminder: { enabled: boolean; weekday: number }
   timezone: string
+  /** Si el usuario recibe vencimientos y recordatorios de km de los autos donde es miembro (falta = true). */
+  sharedCars?: boolean
+}
+
+/**
+ * Estado de "avisado" de un mantenimiento para una persona (`users/{uid}/ruleNotices/{ruleId}`): lo escribe el
+ * servidor (cron y `/api/notify/rules`) y reemplaza a `rule.lastNotified*` para que el dueño y cada miembro tengan su
+ * propio seguimiento.
+ */
+export interface RuleNotice {
+  status: 'soon' | 'overdue' | null
+  at: Date | null
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   reminder: { enabled: true, weekday: 0 },
   timezone: 'America/Argentina/Buenos_Aires',
+  sharedCars: true,
 }
 
 export interface RulePreset {

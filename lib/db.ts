@@ -6,13 +6,15 @@ import {
   collection,
   deleteField,
   doc,
+  getDoc,
   getDocFromServer,
-  getDocs,
   onSnapshot,
   query,
   runTransaction,
+  serverTimestamp,
   setDoc,
   Timestamp,
+  waitForPendingWrites,
   where,
   writeBatch,
   type DocumentData,
@@ -26,7 +28,21 @@ import { toISODate } from './dates'
 import { defaultWarnings, jobChangeDiff, projectionPatch, projectRule, type ProjectionChange } from './maintenance'
 import { carKmFrom, linkedReadingId, readingDateOf, withLinkedReading, type LinkedSource } from './odometer'
 import { fuelTypeFromDoc, fuelTypesFromDoc, gradeFromDoc, intervalFromDoc } from './parse'
-import { isApproved, jobEdit, reviewAlreadyDone, type ReviewTarget } from './sharing'
+import {
+  approvesOwnJobs,
+  canonicalEmail,
+  INVITE_DAYS,
+  inviteCarLabel,
+  inviteId,
+  isApproved,
+  jobEdit,
+  normalizeEmail,
+  reviewAlreadyDone,
+  setRolePatch,
+  transferPatch,
+  type CarMember,
+  type ReviewTarget,
+} from './sharing'
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
@@ -34,10 +50,14 @@ import {
   type AchievementRecord,
   type Car,
   type FuelLoad,
+  type Invite,
+  type InviteStatus,
   type ISODate,
   type Job,
   type JobStatus,
   type MaintenanceRule,
+  type MemberProfile,
+  type MemberRole,
   type OdometerReading,
   type TimeInterval,
   type UserSettings,
@@ -54,6 +74,8 @@ const userCol = (uid: string, name: UserCollectionName) => collection(firestore(
 const carsCol = () => collection(firestore(), 'cars')
 const carDoc = (carId: string) => doc(carsCol(), carId)
 const carCol = (carId: string, name: RelatedName) => collection(firestore(), 'cars', carId, name)
+const invitesCol = () => collection(firestore(), 'invites')
+const inviteDoc = (id: string) => doc(invitesCol(), id)
 
 type UserCollectionName = 'pushSubscriptions' | 'achievements'
 type RelatedName = 'rules' | 'jobs' | 'fuel' | 'odometer'
@@ -63,7 +85,7 @@ const RELATED: readonly RelatedName[] = ['rules', 'jobs', 'fuel', 'odometer']
 /** Id para un auto nuevo: el formulario lo necesita antes de crearlo, porque la foto se sube con ese id. */
 export const newCarId = () => doc(carsCol()).id
 
-const newChildId = (carId: string, name: RelatedName) => doc(carCol(carId, name)).id
+export const newChildId = (carId: string, name: RelatedName) => doc(carCol(carId, name)).id
 
 /** Quién figura como autor de un registro: `createdBy` y `createdByName` tal como se guardan. */
 type Author = { createdBy: string; createdByName: string | null }
@@ -87,6 +109,24 @@ function toDate(v: unknown): Date | null {
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((m: unknown): m is string => typeof m === 'string') : [])
+
+/** Roles que se leen de un perfil; cualquier otro valor se descarta (el miembro queda `editor`). */
+const MEMBER_ROLES: readonly MemberRole[] = ['editor', 'trusted', 'viewer']
+
+/** Perfiles de los miembros (`memberProfiles`): se descarta lo que no es un mapa, y el rol si no es uno conocido. */
+function profilesFrom(v: unknown): Record<string, MemberProfile> {
+  if (!v || typeof v !== 'object') return {}
+  const out: Record<string, MemberProfile> = {}
+  for (const [uid, p] of Object.entries(v as Record<string, unknown>)) {
+    if (!p || typeof p !== 'object') continue
+    const x = p as Record<string, unknown>
+    const role = MEMBER_ROLES.find(r => r === x.role)
+    out[uid] = { email: str(x.email) ?? '', name: str(x.name), ...(role ? { role } : {}) }
+  }
+  return out
+}
+
 /** Un trabajo sin estado (guardado antes de compartir autos) cuenta como aprobado. */
 const statusFrom = (v: unknown): JobStatus => (v === 'pending' || v === 'rejected' ? v : 'approved')
 
@@ -108,7 +148,36 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     createdAt: toDate(x.createdAt) ?? new Date(0),
     ownerUid: str(x.ownerUid) ?? '',
     ownerName: str(x.ownerName),
-    members: Array.isArray(x.members) ? x.members.filter((m: unknown): m is string => typeof m === 'string') : [],
+    memberUids: strings(x.memberUids),
+    memberProfiles: profilesFrom(x.memberProfiles),
+    deletedAt: toDate(x.deletedAt),
+  }
+}
+
+/**
+ * Si el auto está marcado como borrado (`markCarDeleted`). Con `serverTimestamps: 'estimate'`, porque mientras la marca
+ * no llega al servidor (sin señal) `deletedAt` se lee null sin la estimación, y el auto tiene que desaparecer igual.
+ */
+const isMarkedDeleted = (d: QueryDocumentSnapshot<DocumentData>) =>
+  d.data({ serverTimestamps: 'estimate' }).deletedAt != null
+
+const INVITE_STATUSES: readonly InviteStatus[] = ['pending', 'accepted', 'declined', 'revoked']
+
+/** Una invitación como la usa la app. Un estado que no se conoce cuenta como cancelada. */
+function inviteFrom(id: string, x: DocumentData): Invite {
+  return {
+    id,
+    carId: x.carId ?? '',
+    ownerUid: x.ownerUid ?? '',
+    ownerName: str(x.ownerName),
+    carLabel: x.carLabel ?? '',
+    email: x.email ?? '',
+    emailKey: x.emailKey ?? '',
+    status: INVITE_STATUSES.includes(x.status) ? x.status : 'revoked',
+    createdAt: toDate(x.createdAt) ?? new Date(0),
+    expiresAt: toDate(x.expiresAt) ?? new Date(0),
+    respondedAt: toDate(x.respondedAt),
+    acceptedUid: str(x.acceptedUid),
   }
 }
 
@@ -217,6 +286,10 @@ export interface UserData {
   fuel: FuelLoad[]
   odometer: OdometerReading[]
   achievements: AchievementRecord[]
+  /** Las invitaciones que mandé como dueño, en cualquier estado. */
+  invites: Invite[]
+  /** Las invitaciones pendientes para mi mail (`emailKey`); pueden estar vencidas. */
+  myInvites: Invite[]
 }
 
 type Part = keyof UserData
@@ -235,7 +308,7 @@ interface CarListeners {
   fromCache: Partial<Record<RelatedName, boolean>>
 }
 
-/** Una de las dos consultas de autos (los míos y los compartidos conmigo), con su última foto. */
+/** Una de las dos consultas de autos (los míos y los que me compartieron), con su última foto. */
 interface CarQuery {
   ready: boolean
   fromCache: boolean
@@ -248,10 +321,16 @@ interface CarQuery {
  * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
  *
  * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
- * compartieron (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la
- * unión, y sale cuando las dos entregaron su primera foto. Si la de compartidos falla con
- * `permission-denied` (la app publicada antes que las reglas nuevas), cuenta como "sin autos compartidos"
- * y no como un error. Cada auto abre 4 listeners propios, que se abren y se cierran cuando el auto aparece
+ * compartieron por invitación (`memberUids` contiene mi uid). La lista de autos es la unión por id sin los marcados
+ * como borrados (`deletedAt`, `isMarkedDeleted`: desaparecen en el acto y se cierran sus listeners), y sale cuando las
+ * dos entregaron su primera foto. Si la de compartidos falla con `permission-denied` (la app publicada antes que las
+ * reglas nuevas), cuenta como "sin autos compartidos" y no como un error.
+ *
+ * Las invitaciones salen de dos consultas: las que mandé como dueño (`ownerUid`, parte `invites`) y las pendientes
+ * para mi mail canónico (`emailKey` y `status == 'pending'`, parte `myInvites`; sin `email`, vacía). Si fallan con
+ * `permission-denied` (reglas sin publicar), cuentan como vacías.
+ *
+ * Cada auto abre 4 listeners propios, que se abren y se cierran cuando el auto aparece
  * o desaparece. `onChange` sigue recibiendo una parte por colección: la de los mantenimientos, trabajos,
  * cargas y lecturas sale cuando todos los autos actuales entregaron su primera foto (enseguida si no hay
  * autos), y `fromCache` es true si alguna de esas fotos, o alguna de las consultas de autos, salió de la
@@ -279,6 +358,7 @@ export function subscribeUserData(
             settings: {
               reminder: { ...DEFAULT_SETTINGS.reminder, ...(x?.reminder ?? {}) },
               timezone: x?.timezone ?? DEFAULT_SETTINGS.timezone,
+              sharedCars: x?.sharedCars !== false,
             },
           },
           'settings',
@@ -350,11 +430,17 @@ export function subscribeUserData(
   }
 
   const owned: CarQuery = { ready: false, fromCache: true, docs: [] }
-  const shared: CarQuery = { ready: !email, fromCache: false, docs: [] }
+  const byUid: CarQuery = { ready: false, fromCache: true, docs: [] }
+  const carQueries = [owned, byUid]
 
   const publishCars = () => {
-    if (!owned.ready || !shared.ready) return
-    const byId = new Map([...owned.docs, ...shared.docs].map(d => [d.id, d]))
+    if (carQueries.some(q => !q.ready)) return
+    const byId = new Map(
+      carQueries
+        .flatMap(q => q.docs)
+        .filter(d => !isMarkedDeleted(d))
+        .map(d => [d.id, d]),
+    )
     const ids = [...byId.keys()]
     for (const [carId, entry] of perCar) {
       if (!ids.includes(carId)) dropCar(carId, entry)
@@ -362,7 +448,7 @@ export function subscribeUserData(
     for (const carId of revoked) if (!ids.includes(carId)) revoked.delete(carId)
     for (const carId of ids) if (!perCar.has(carId) && !revoked.has(carId)) listenCar(carId)
 
-    const fromCache = owned.fromCache || shared.fromCache
+    const fromCache = carQueries.some(q => q.fromCache)
     const idsKey = [...ids].sort().join(',')
     const changed = !carsReady || idsKey !== carIdsKey || fromCache !== carsFromCache
     carsReady = true
@@ -384,18 +470,40 @@ export function subscribeUserData(
       onFail,
     )
 
+  const sharedFailed = (target: CarQuery) => (e: Error) => {
+    if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
+    console.warn('No se pudieron leer los autos compartidos; se sigue sin ellos', e)
+    target.ready = true
+    target.fromCache = false
+    target.docs = []
+    publishCars()
+  }
+
   subs.push(listenCars(owned, query(carsCol(), where('ownerUid', '==', uid)), onError))
+  subs.push(listenCars(byUid, query(carsCol(), where('memberUids', 'array-contains', uid)), sharedFailed(byUid)))
+
+  const listenInvites = (part: 'invites' | 'myInvites', q: Query<DocumentData>) =>
+    onSnapshot(
+      q,
+      snap =>
+        onChange({ [part]: snap.docs.map(d => inviteFrom(d.id, d.data())) } as Partial<UserData>, part, snap.metadata.fromCache),
+      e => {
+        if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
+        console.warn('No se pudieron leer las invitaciones; se sigue sin ellas', e)
+        onChange({ [part]: [] } as Partial<UserData>, part, false)
+      },
+    )
+
+  subs.push(listenInvites('invites', query(invitesCol(), where('ownerUid', '==', uid))))
   if (email) {
     subs.push(
-      listenCars(shared, query(carsCol(), where('members', 'array-contains', email)), e => {
-        if ((e as { code?: string }).code !== 'permission-denied') return onError(e)
-        console.warn('No se pudieron leer los autos compartidos; se sigue sin ellos', e)
-        shared.ready = true
-        shared.fromCache = false
-        shared.docs = []
-        publishCars()
-      }),
+      listenInvites(
+        'myInvites',
+        query(invitesCol(), where('emailKey', '==', canonicalEmail(email)), where('status', '==', 'pending')),
+      ),
     )
+  } else {
+    onChange({ myInvites: [] }, 'myInvites', false)
   }
   return () => {
     subs.forEach(u => u())
@@ -430,8 +538,15 @@ function carKmUpdate(readings: OdometerReading[]) {
  * actual del auto y el promedio diario con las lecturas del auto más la nueva (`carKmFrom`: una lectura con fecha
  * pasada y menos km no lo baja).
  */
-function addManualReading(batch: WriteBatch, actor: Actor, car: Car, readings: OdometerReading[], km: number, date: Date) {
-  const id = newChildId(car.id, 'odometer')
+function addManualReading(
+  batch: WriteBatch,
+  actor: Actor,
+  car: Car,
+  readings: OdometerReading[],
+  km: number,
+  date: Date,
+  id = newChildId(car.id, 'odometer'),
+) {
   const reading: OdometerReading = {
     id,
     carId: car.id,
@@ -450,11 +565,12 @@ function addManualReading(batch: WriteBatch, actor: Actor, car: Car, readings: O
 /**
  * Carga los km del tablero en una fecha (validar antes con `validateKmReading`). Con la fecha de hoy la lectura
  * lleva la hora actual; con una fecha pasada, el mediodía de ese día (`readingDateOf`), como las vinculadas.
+ * `readingId`: el id de la lectura, si se generó antes (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number, date: ISODate) {
+export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number, date: ISODate, readingId?: string) {
   const now = new Date()
   const batch = writeBatch(firestore())
-  addManualReading(batch, actor, car, readings, km, date === toISODate(now) ? now : readingDateOf(date))
+  addManualReading(batch, actor, car, readings, km, date === toISODate(now) ? now : readingDateOf(date), readingId)
   await batch.commit()
 }
 
@@ -552,7 +668,7 @@ export type CarInput = Pick<Car, 'brand' | 'model' | 'version' | 'year' | 'plate
   photoPublicId?: string | null
 }
 
-/** Crea el auto con su dueño (`members` arranca vacío) y la lectura inicial de km, en un mismo batch. */
+/** Crea el auto con su dueño (sin miembros) y la lectura inicial de km, en un mismo batch. */
 export async function createCar(actor: Actor, data: CarInput, initialKm: number, carId = newCarId()) {
   const now = new Date()
   const batch = writeBatch(firestore())
@@ -560,7 +676,8 @@ export async function createCar(actor: Actor, data: CarInput, initialKm: number,
     ...data,
     ownerUid: actor.uid,
     ownerName: actor.name,
-    members: [],
+    memberUids: [],
+    memberProfiles: {},
     currentKm: initialKm,
     kmUpdatedAt: Timestamp.fromDate(now),
     avgKmPerDay: null,
@@ -590,51 +707,135 @@ export async function updateCar(actor: Actor, carId: string, data: Partial<CarIn
 }
 
 /**
- * Suma o saca un mail de `members` (lo hace el dueño). Va con arrayUnion/arrayRemove y no con la lista que tiene
- * la app, así un cambio hecho en otro dispositivo no se pisa. El tope de 2 lo controlan también las reglas.
+ * Invita a un mail a compartir el auto (lo hace el dueño; validar antes con `memberError`): `set` de
+ * `invites/{carId}_{mail canónico}` pendiente, que vence a los `INVITE_DAYS` días. El id es fijo: volver a invitar a
+ * un mail cuya invitación venció, se rechazó, se canceló o ya no es miembro pisa la anterior (las reglas deciden cuándo
+ * se puede). El auto no le aparece al invitado hasta que acepta.
  */
-export async function addMember(actor: Actor, carId: string, email: string) {
+export async function inviteMember(actor: Actor, car: Car, email: string) {
+  const mail = normalizeEmail(email)
+  const now = new Date()
   const batch = writeBatch(firestore())
-  batch.update(carDoc(carId), { members: arrayUnion(email) })
+  batch.set(inviteDoc(inviteId(car.id, mail)), {
+    carId: car.id,
+    ownerUid: actor.uid,
+    ownerName: actor.name,
+    carLabel: inviteCarLabel(car),
+    email: mail,
+    emailKey: canonicalEmail(mail),
+    status: 'pending',
+    createdAt: Timestamp.fromDate(now),
+    expiresAt: Timestamp.fromDate(new Date(now.getTime() + INVITE_DAYS * 24 * 60 * 60 * 1000)),
+    respondedAt: null,
+    acceptedUid: null,
+  })
   await batch.commit()
 }
 
-export async function removeMember(actor: Actor, carId: string, email: string) {
+/** El dueño cancela una invitación pendiente: el link deja de servir. */
+export async function revokeInvite(actor: Actor, invite: Invite) {
   const batch = writeBatch(firestore())
-  batch.update(carDoc(carId), { members: arrayRemove(email) })
+  batch.update(inviteDoc(invite.id), { status: 'revoked' })
   await batch.commit()
-}
-
-/** El miembro sale de un auto compartido: saca su propio mail de `members`. Lo que cargó queda en el auto. */
-export async function leaveCar(actor: Actor, carId: string, email: string) {
-  await removeMember(actor, carId, email)
-}
-
-/** Borra en tandas de 450: un batch admite hasta 500 operaciones. */
-async function deleteRefs(refs: ReturnType<typeof doc>[]) {
-  for (let i = 0; i < refs.length; i += 450) {
-    const batch = writeBatch(firestore())
-    refs.slice(i, i + 450).forEach(r => batch.delete(r))
-    await batch.commit()
-  }
 }
 
 /**
- * Borra el auto y todo lo asociado (mantenimientos, trabajos, cargas y lecturas).
- * Los hijos van antes que el auto: las reglas deciden el permiso de un hijo con el documento del auto, así
- * que sin el auto ya no se pueden leer ni borrar, y quedarían huérfanos. Primero borra lo que la app ya
- * tiene en memoria, después barre en el servidor lo que pudiera haber quedado (por ejemplo, cargado desde
- * otro dispositivo) y por último borra el auto, que recién ahí desaparece de la pantalla.
+ * Lee una invitación (la página del link). null si no existe. Si es para otra cuenta, las reglas la deniegan y tira
+ * un `FirebaseError` con `code: 'permission-denied'`.
  */
-export async function deleteCar(actor: Actor, carId: string, known: Partial<Record<RelatedName, string[]>> = {}) {
-  await deleteRefs(RELATED.flatMap(name => (known[name] ?? []).map(id => doc(carCol(carId, name), id))))
-  const leftovers: ReturnType<typeof doc>[] = []
-  for (const name of RELATED) {
-    const snap = await getDocs(carCol(carId, name))
-    leftovers.push(...snap.docs.map(d => d.ref))
-  }
-  if (leftovers.length) await deleteRefs(leftovers)
-  await deleteRefs([carDoc(carId)])
+export async function getInvite(id: string): Promise<Invite | null> {
+  const snap = await getDoc(inviteDoc(id))
+  return snap.exists() ? inviteFrom(snap.id, snap.data()) : null
+}
+
+/**
+ * El invitado acepta: en un mismo batch la invitación queda `accepted` con su uid, y el auto suma su uid a
+ * `memberUids` y su perfil (`email`: el mail de su login en minúscula; su nombre) a `memberProfiles`. Las reglas
+ * exigen las dos escrituras juntas.
+ */
+export async function acceptInvite(actor: Actor, invite: Invite, email: string | null) {
+  const batch = writeBatch(firestore())
+  batch.update(inviteDoc(invite.id), { status: 'accepted', acceptedUid: actor.uid, respondedAt: serverTimestamp() })
+  batch.update(carDoc(invite.carId), {
+    memberUids: arrayUnion(actor.uid),
+    [`memberProfiles.${actor.uid}`]: { email: email ? normalizeEmail(email) : invite.email, name: actor.name },
+  })
+  await batch.commit()
+}
+
+/** El invitado rechaza: la invitación queda `declined` y el dueño la puede volver a mandar. */
+export async function declineInvite(actor: Actor, invite: Invite) {
+  const batch = writeBatch(firestore())
+  batch.update(inviteDoc(invite.id), { status: 'declined', acceptedUid: actor.uid, respondedAt: serverTimestamp() })
+  await batch.commit()
+}
+
+/**
+ * El dueño saca a un miembro: su uid de `memberUids` y su perfil de `memberProfiles`. Va con arrayRemove y no con la
+ * lista que tiene la app, así un cambio hecho en otro dispositivo no se pisa.
+ */
+export async function removeMember(actor: Actor, car: Car, member: CarMember) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), { memberUids: arrayRemove(member.uid), [`memberProfiles.${member.uid}`]: deleteField() })
+  await batch.commit()
+}
+
+/** El miembro sale de un auto compartido: saca su uid y su perfil. Lo que cargó queda en el auto. */
+export async function leaveCar(actor: Actor, car: Car) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), { memberUids: arrayRemove(actor.uid), [`memberProfiles.${actor.uid}`]: deleteField() })
+  await batch.commit()
+}
+
+/**
+ * El dueño le cambia el rol a un miembro: `update` sólo de `memberProfiles.{uid}.role` (`setRolePatch`), y nada más
+ * del auto. Lo que el miembro ya cargó no cambia: un
+ * trabajo pendiente sigue esperando la aprobación aunque pase a `trusted`.
+ */
+export async function setMemberRole(actor: Actor, car: Car, uid: string, role: MemberRole) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), setRolePatch(uid, role))
+  await batch.commit()
+}
+
+/**
+ * El dueño le pasa el auto a un miembro (`to.uid`). En un mismo batch, el auto cambia de dueño con `transferPatch` (el
+ * nuevo dueño sale de `memberUids` y de `memberProfiles` con `deleteField()`; yo entro como miembro con mi perfil:
+ * `myEmail`, el mail de mi login, y mi nombre) y se borran todas las invitaciones del auto, con cualquier estado
+ * (`ctx.invites`: las mías, de `useData()`): el id de una invitación es fijo y sólo la puede volver a mandar o borrar su
+ * dueño, así que el nuevo dueño no podría invitar a esos mails ni borrarlas con el auto. `memberUids` va como lista
+ * entera, no con arrayUnion/arrayRemove, porque la regla (`ownerTransfer`) compara los conjuntos.
+ */
+export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car: Car, to: CarMember, myEmail: string | null) {
+  const patch = transferPatch(car, to, { uid: actor.uid, email: myEmail ?? '', name: actor.name })
+  const profiles = Object.fromEntries(Object.entries(patch.memberProfiles).map(([uid, p]) => [`memberProfiles.${uid}`, p]))
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), {
+    ownerUid: patch.ownerUid,
+    ownerName: patch.ownerName,
+    memberUids: patch.memberUids,
+    ...profiles,
+    [`memberProfiles.${patch.ownerUid}`]: deleteField(),
+  })
+  ctx.invites.filter(i => i.carId === car.id).forEach(i => batch.delete(inviteDoc(i.id)))
+  await batch.commit()
+}
+
+/**
+ * El dueño borra el auto: sólo lo marca (`deletedAt` con la hora del servidor). `subscribeUserData` deja de mostrarlo
+ * en el acto, también sin señal, y las reglas no dejan crear ni editar nada en un auto marcado. El historial, las
+ * invitaciones y la foto los borra el servidor (`DELETE /api/cars/[carId]`, que la app llama cuando se confirma la
+ * marca, o el barrido del cron si la app se cerró antes).
+ * En el mismo batch pasa a `revoked` las invitaciones pendientes del auto que tiene la app (`ctx.invites`: las mías,
+ * de `useData()`), así el invitado no las puede aceptar mientras el servidor no las borra (`ownerRevoke` en las reglas).
+ */
+export async function markCarDeleted(actor: Actor, ctx: { invites: Invite[] }, carId: string) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(carId), { deletedAt: serverTimestamp() })
+  ctx.invites
+    .filter(i => i.carId === carId && i.ownerUid === actor.uid && i.status === 'pending')
+    .forEach(i => batch.update(inviteDoc(i.id), { status: 'revoked' }))
+  await batch.commit()
 }
 
 /** Lo que el dueño declara de un mantenimiento. La "última vez" es la base (`baseKm`, `baseDate`): nunca la proyección. */
@@ -667,10 +868,17 @@ export type WriteOutcome = 'saved' | 'unchanged'
  *   base, cambiaría la base que se lee.
  * Si no cambió nada, no escribe y devuelve `unchanged`. Si el mantenimiento se borró en otro dispositivo, el `update`
  * falla con `not-found` y no lo vuelve a crear. Si otro dispositivo aprobó un trabajo que la app todavía no tiene, la
- * reconciliación de `DataProvider` corrige la proyección cuando llega.
+ * reconciliación de `DataProvider` corrige la proyección cuando llega. `ruleId`: el id de un alta, si se generó antes
+ * (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function saveRule(actor: Actor, ctx: ProjectionContext, data: RuleInput, existing?: MaintenanceRule): Promise<WriteOutcome> {
-  const id = existing?.id ?? newChildId(data.carId, 'rules')
+export async function saveRule(
+  actor: Actor,
+  ctx: ProjectionContext,
+  data: RuleInput,
+  existing?: MaintenanceRule,
+  ruleId?: string,
+): Promise<WriteOutcome> {
+  const id = existing?.id ?? ruleId ?? newChildId(data.carId, 'rules')
   const declared: RuleInput = {
     carId: data.carId,
     name: data.name,
@@ -763,6 +971,8 @@ type JobContext = KmContext & ProjectionContext & { rules: MaintenanceRule[] }
  * pantalla muestra la proyección en memoria (`DataProvider`), y la reconciliación de `DataProvider` escribe lo que haya
  * faltado o fallado en la próxima carga confirmada por el servidor. La promesa espera sólo el batch del trabajo.
  * Ningún trabajo borra un mantenimiento: los de una sola vez quedan cumplidos (`completedByJobId`).
+ * Si escribe un miembro (un `trusted` que crea un trabajo aprobado) no hay batches de mantenimientos: el plan es del
+ * dueño y las reglas no lo dejan. Los escribe la reconciliación de `DataProvider` cuando el dueño abre la app.
  */
 async function applyJobChange(
   actor: Actor,
@@ -783,7 +993,10 @@ async function applyJobChange(
   } else if (before && isApproved(before)) {
     readingsAfter = writeLinkedReading(jobBatch, ctx, link, null)
   }
-  const changes = jobChangeDiff({ rules: ctx.rules, jobs: ctx.jobs, readings: ctx.readings, readingsAfter, before, after })
+  const changes =
+    ctx.car.ownerUid === actor.uid
+      ? jobChangeDiff({ rules: ctx.rules, jobs: ctx.jobs, readings: ctx.readings, readingsAfter, before, after })
+      : []
   const saved = jobBatch.commit()
   saved.then(
     () => {
@@ -802,9 +1015,11 @@ async function applyJobChange(
  * Guarda un trabajo (`applyJobChange` desde `existing`, el trabajo como estaba).
  * - Al crearlo, `set` del documento completo con quién lo cargó y `revision: 0`. Si lo crea el dueño queda aprobado
  *   y sus mantenimientos se recalculan; opcionalmente, agenda la vuelta al taller (`followUp`, sólo al crear). Si lo
- *   crea un miembro queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos y el km
+ *   crea un miembro `editor` queda `pending` y no cambia nada más, aunque el km sea mayor al actual: los mantenimientos y el km
  *   quedan guardados en el trabajo y cuentan al aprobarlo (`approveJob`), así un trabajo rechazado no deja nada mal
- *   cargado.
+ *   cargado. Si lo crea un miembro `trusted` (`approvesOwnJobs`) queda aprobado, con su lectura de km a su nombre y el
+ *   km del auto, pero sin escribir los mantenimientos ni la vuelta al taller (el plan es del dueño): los mantenimientos
+ *   los escribe la reconciliación cuando el dueño abre la app, y mientras tanto la pantalla los muestra calculados.
  * - Al editarlo, `update` sólo de los campos que cambiaron (`changedFields`) contra `existing`, el trabajo como lo
  *   abrió el formulario: así no pisa lo que otro dispositivo cambió mientras tanto en otros campos. Suma el estado y
  *   la revisión que dice `jobEdit` con el trabajo como lo tiene la app ahora (`ctx.jobs`; si no está, `existing`):
@@ -819,6 +1034,7 @@ export async function saveJob(
   data: JobInput,
   existing?: Job,
   followUp?: FollowUp | null,
+  jobId?: string,
 ): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const member = ctx.car.ownerUid !== actor.uid
@@ -836,8 +1052,8 @@ export async function saveJob(
     await applyJobChange(actor, ctx, current, after, batch => batch.update(doc(carCol(carId, 'jobs'), current.id), update))
     return 'saved'
   }
-  const id = newChildId(carId, 'jobs')
-  const status: JobStatus = member ? 'pending' : 'approved'
+  const id = jobId ?? newChildId(carId, 'jobs')
+  const status: JobStatus = !member || approvesOwnJobs(ctx.car, actor.uid) ? 'approved' : 'pending'
   const now = new Date()
   const after: Job = { ...data, id, status, reviewedAt: null, revision: 0, createdAt: now, createdBy: actor.uid, createdByName: actor.name }
   await applyJobChange(actor, ctx, null, after, batch => {
@@ -849,7 +1065,7 @@ export async function saveJob(
       createdBy: actor.uid,
       createdByName: actor.name,
     })
-    if (!followUp || status !== 'approved') return
+    if (!followUp || member) return
     batch.set(doc(carCol(carId, 'rules')), {
       carId,
       name: followUp.name,
@@ -955,8 +1171,9 @@ export type FuelInput = Omit<FuelLoad, 'id' | 'createdAt' | 'createdBy' | 'creat
  *   sigue a su nombre; la lectura se escribe sólo si cambió el km o la fecha. Si no cambió nada, no escribe y devuelve
  *   `unchanged`. Si la carga se borró en otro dispositivo, el `update` falla con `not-found` (el batch entero, también
  *   la lectura) y no la vuelve a crear.
+ * `fuelId`: el id de un alta, si se generó antes (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, existing?: FuelLoad): Promise<WriteOutcome> {
+export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, existing?: FuelLoad, fuelId?: string): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const batch = writeBatch(firestore())
   const entry = { date: data.date, km: data.km, author: authorOf(existing ?? {}, actor) }
@@ -966,7 +1183,7 @@ export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, ex
     batch.update(doc(carCol(carId, 'fuel'), existing.id), changes)
     if ('km' in changes || 'date' in changes) writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: existing.id }, entry)
   } else {
-    const id = newChildId(carId, 'fuel')
+    const id = fuelId ?? newChildId(carId, 'fuel')
     batch.set(doc(carCol(carId, 'fuel'), id), { ...data, createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name })
     writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, entry)
   }
@@ -1050,4 +1267,19 @@ export async function markAchievementsCelebrated(uid: string, ids: string[]) {
   const now = Timestamp.now()
   ids.forEach(id => batch.update(doc(userCol(uid, 'achievements'), id), { celebratedAt: now }))
   await batch.commit()
+}
+
+/**
+ * Espera a que el servidor confirme (o rechace) todas las escrituras pendientes de la cuenta, también las de una sesión
+ * anterior que Firestore guardó en la caché y vuelve a mandar al abrir la app. Sin conexión espera hasta que vuelva.
+ */
+export function waitForServerWrites() {
+  return waitForPendingWrites(firestore())
+}
+
+/** Un documento como lo tiene el servidor (no la caché); null si no existe. Sin conexión o sin permiso, falla. */
+export async function serverDocData(path: string[]): Promise<Record<string, unknown> | null> {
+  const [first, ...rest] = path
+  const snap = await getDocFromServer(doc(firestore(), first, ...rest))
+  return snap.exists() ? snap.data() : null
 }

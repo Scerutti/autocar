@@ -13,6 +13,52 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.6.0',
+    date: '2026-11-05',
+    items: [
+      {
+        title: 'Compartir es una invitación',
+        text: 'En "Editar auto" ahora invitás a alguien con su mail y esa persona tiene que aceptar. Hasta que acepta no ve nada del auto, así un mail mal escrito no le muestra tu auto a otra persona. La invitación vence a los 14 días.',
+      },
+      {
+        title: 'Aceptar o rechazar',
+        text: 'Si te invitan, lo ves en el Inicio y en la campanita, con Aceptar y Rechazar. También podés abrir el link que te manden. Si entraste con otra cuenta, te avisamos para qué mail es.',
+      },
+      {
+        title: 'Da igual cómo esté escrito el Gmail',
+        text: 'Una invitación a jdoe@gmail.com la puede aceptar j.doe@gmail.com o jdoe+auto@gmail.com: para Gmail son la misma cuenta.',
+      },
+      {
+        title: 'Quién está y quién falta',
+        text: 'En "Editar auto" ves a cada persona con su nombre, y las invitaciones pendientes con "vence el …", para mandar el link de nuevo o cancelarlas. Si alguien rechaza o deja vencer la invitación, la podés volver a mandar.',
+      },
+      {
+        title: 'Pasarle el auto a otra persona',
+        text: 'Si vendés el auto o lo va a manejar otro, en "Editar auto" → Compartir tocá "Pasarle el auto" junto a alguien que aceptó tu invitación. Pasa a ser el dueño: maneja el plan de mantenimiento y aprueba los trabajos. Vos quedás como miembro y podés salir cuando quieras.',
+      },
+      {
+        title: 'Qué puede hacer cada uno',
+        text: 'En "Editar auto" → Compartir elegís para cada persona: "Puede cargar" (sus trabajos esperan tu aprobación, como hasta ahora), "Sin aprobación" (sus trabajos nuevos cuentan al instante) o "Solo mira" (ve el auto y su historial, pero no carga nada).',
+      },
+      {
+        title: 'Avisos también en los autos compartidos',
+        text: 'Si te compartieron un auto, ahora te llegan los avisos de mantenimientos por vencer y el recordatorio semanal de km igual que al dueño. Si preferís no recibirlos, los podés silenciar desde Ajustes → Notificaciones ("Avisos de autos compartidos").',
+      },
+      {
+        title: 'Avisos al instante cuando cargan o revisan un trabajo',
+        text: 'Cuando alguien carga un trabajo para revisar, al dueño le llega una notificación en el momento (y un recordatorio a la mañana si quedaron pendientes). Cuando el dueño lo aprueba o lo rechaza, le avisa en el acto a quien lo cargó. Y si al cargar km, combustible o un trabajo se vence un mantenimiento, te avisa enseguida en pantalla y por notificación al resto del auto.',
+      },
+      {
+        title: 'Borrar un auto, de una',
+        text: 'Cuando borrás un auto desaparece en el acto, aunque no tengas señal, y terminamos de borrar su historial y su foto por vos aunque cierres la app.',
+      },
+      {
+        title: 'Lo que cargás sin señal no se pierde',
+        text: 'Si guardás algo sin señal, abajo te avisamos "1 carga sin sincronizar" hasta que llegue al servidor, aunque cierres la app. Y si no se pudo guardar (por ejemplo, porque te sacaron del auto), queda en la campanita con sus datos para reintentarlo, corregirlo o descartarlo.',
+      },
+    ],
+  },
+  {
     version: '1.5.0',
     date: '2026-10-26',
     items: [

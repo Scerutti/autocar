@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { formatDate, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, type RuleWithState } from '@/lib/maintenance'
-import { isCarOwner } from '@/lib/sharing'
+import { canWrite, isCarOwner } from '@/lib/sharing'
 import type { Car } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { CAR_ACCENTS, CarAvatar, RuleProgress, STATUS_TEXT, StatusBadge, carDetail, carName } from './common'
@@ -98,9 +98,11 @@ export function CarCard({
             <Plus className="size-4" /> Agregá el primer mantenimiento (service, VTV…)
           </Link>
         )}
-        <Button onClick={onUpdateKm} className={cn('h-10 w-full gap-2', !kmDue && 'bg-foreground text-background hover:bg-foreground/90')}>
-          <Gauge /> Cargar km
-        </Button>
+        {canWrite(car, uid) && (
+          <Button onClick={onUpdateKm} className={cn('h-10 w-full gap-2', !kmDue && 'bg-foreground text-background hover:bg-foreground/90')}>
+            <Gauge /> Cargar km
+          </Button>
+        )}
       </CardContent>
     </Card>
   )

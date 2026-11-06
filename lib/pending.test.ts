@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { RuleState, RuleWithState } from './maintenance'
-import { kmDueDay, kmDueSince, parseSeenCars, pendingItems, urgentCount, type PendingItem } from './pending'
-import type { Car, Job, MaintenanceRule, UserSettings } from './types'
+import { outboxEntry, withFailure, type OutboxEntry } from './outbox'
+import { kmDueDay, kmDueSince, pendingItems, urgentCount, type PendingItem } from './pending'
+import type { Car, Invite, Job, MaintenanceRule, UserSettings } from './types'
 
 const OWNER = 'u1'
 const MEMBER = 'u2'
@@ -22,7 +23,8 @@ const car: Car = {
   createdAt: new Date(0),
   ownerUid: OWNER,
   ownerName: 'Ana',
-  members: ['beto@gmail.com'],
+  memberUids: [MEMBER],
+  memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto' } },
 }
 
 const rule: MaintenanceRule = {
@@ -111,11 +113,30 @@ const job = (extra: Partial<Job> = {}): Job => ({
 const key = (i: PendingItem) => {
   if (i.kind === 'rule') return i.rule.id
   if (i.kind === 'review' || i.kind === 'rejected') return `${i.kind}:${i.job.id}`
-  if (i.kind === 'shared') return `shared:${i.car.id}`
+  if (i.kind === 'invite') return `invite:${i.invite.id}`
+  if (i.kind === 'failed-write') return `failed:${i.entry.id}`
   return 'km'
 }
 
-const base = { settings, jobs: [] as Job[], uid: OWNER, seenShared: [] as string[] }
+const NOW = new Date(2026, 8, 21, 12)
+
+const invite = (extra: Partial<Invite> = {}): Invite => ({
+  id: 'c9_beto@gmail.com',
+  carId: 'c9',
+  ownerUid: 'u3',
+  ownerName: 'Caro',
+  carLabel: 'Fiat Uno 2010',
+  email: 'beto@gmail.com',
+  emailKey: 'beto@gmail.com',
+  status: 'pending',
+  createdAt: new Date(2026, 8, 20, 12),
+  expiresAt: new Date(2026, 9, 4, 12),
+  respondedAt: null,
+  acceptedUid: null,
+  ...extra,
+})
+
+const base = { settings, jobs: [] as Job[], uid: OWNER, invites: [] as Invite[], now: NOW }
 
 describe('pendingItems', () => {
   const rulesByCar = new Map([['c1', [withState('ok', 'ok'), withState('soon', 'soon'), withState('overdue', 'overdue')]]])
@@ -134,6 +155,30 @@ describe('pendingItems', () => {
     const done: RuleWithState = { rule: { ...rule, id: 'done', repeat: false, completedByJobId: 'j1' }, state: state('overdue') }
     const items = pendingItems({ ...base, cars: [car], rulesByCar: new Map([['c1', [done]]]), today: '2026-09-21' })
     expect(items.map(key)).toEqual([])
+  })
+
+  it('a un miembro viewer no se le piden los km; a un editor o trusted, sí', () => {
+    const asMember = (role: 'editor' | 'trusted' | 'viewer') => ({
+      ...car,
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', role } },
+    })
+    const input = { ...base, uid: MEMBER, rulesByCar: new Map(), today: '2026-09-28' }
+    expect(pendingItems({ ...input, cars: [asMember('viewer')] }).map(key)).toEqual([])
+    expect(pendingItems({ ...input, cars: [asMember('editor')] }).map(key)).toEqual(['km'])
+    expect(pendingItems({ ...input, cars: [asMember('trusted')] }).map(key)).toEqual(['km'])
+  })
+
+  it('a un miembro viewer no se le avisan sus trabajos rechazados; a un editor, sí', () => {
+    const asMember = (role: 'editor' | 'viewer') => ({
+      ...car,
+      memberUids: [MEMBER],
+      memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto', role } },
+    })
+    const jobs = [job({ id: 'r', status: 'rejected', createdBy: MEMBER })]
+    const input = { ...base, uid: MEMBER, jobs, rulesByCar: new Map(), today: '2026-09-21' }
+    expect(pendingItems({ ...input, cars: [asMember('viewer')] }).map(key)).toEqual([])
+    expect(pendingItems({ ...input, cars: [asMember('editor')] }).map(key)).toEqual(['rejected:r'])
   })
 
   it('sin autos no hay nada pendiente', () => {
@@ -156,37 +201,61 @@ describe('pendingItems', () => {
       job({ id: 'other', status: 'rejected', createdBy: 'u3' }),
       job({ id: 'pending', status: 'pending', createdBy: MEMBER }),
     ]
-    const items = pendingItems({ ...base, uid: MEMBER, seenShared: ['c1'], jobs, cars: [car], rulesByCar: new Map(), today: '2026-09-21' })
+    const items = pendingItems({ ...base, uid: MEMBER, jobs, cars: [car], rulesByCar: new Map(), today: '2026-09-21' })
     expect(items.map(key)).toEqual(['rejected:mine'])
   })
 
-  it('un auto compartido aparece hasta marcarlo visto, y uno propio nunca', () => {
+  it('un auto compartido no es un pendiente', () => {
     const input = { ...base, cars: [car], rulesByCar: new Map(), today: '2026-09-21' }
-    expect(pendingItems(input).map(key)).toEqual([])
-    expect(pendingItems({ ...input, uid: MEMBER }).map(key)).toEqual(['shared:c1'])
-    expect(pendingItems({ ...input, uid: MEMBER, seenShared: ['c1'] }).map(key)).toEqual([])
+    expect(pendingItems({ ...input, uid: MEMBER }).map(key)).toEqual([])
   })
 
-  it('ordena vencidos, para revisar, km, rechazados, compartidos nuevos y por vencer, y todos suman salvo los por vencer', () => {
-    const shared: Car = { ...car, id: 'c2', ownerUid: 'u3', ownerName: 'Caro', members: ['ana@gmail.com'] }
+  it('las invitaciones pendientes aparecen hasta que vencen, y las respondidas o canceladas no', () => {
+    const input = { ...base, cars: [], rulesByCar: new Map(), today: '2026-09-21' }
+    expect(pendingItems({ ...input, invites: [invite()] }).map(key)).toEqual(['invite:c9_beto@gmail.com'])
+    expect(pendingItems({ ...input, invites: [invite({ expiresAt: NOW })] })).toEqual([])
+    expect(pendingItems({ ...input, invites: [invite({ status: 'accepted' })] })).toEqual([])
+    expect(pendingItems({ ...input, invites: [invite({ status: 'declined' })] })).toEqual([])
+    expect(pendingItems({ ...input, invites: [invite({ status: 'revoked' })] })).toEqual([])
+  })
+
+  it('ordena vencidos, para revisar, km, rechazados, invitaciones y por vencer, y todos suman salvo los por vencer', () => {
+    const shared: Car = {
+      ...car,
+      id: 'c2',
+      ownerUid: 'u3',
+      ownerName: 'Caro',
+      memberUids: [OWNER],
+      memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+    }
     const jobs = [
       job({ id: 'p', status: 'pending', createdBy: MEMBER }),
       job({ id: 'x', carId: 'c2', status: 'rejected', createdBy: OWNER }),
     ]
     const rules = new Map([['c1', [withState('soon', 'soon'), withState('overdue', 'overdue')]]])
-    const items = pendingItems({ ...base, jobs, cars: [car, shared], rulesByCar: rules, today: '2026-09-28' })
-    expect(items.map(key)).toEqual(['overdue', 'review:p', 'km', 'km', 'rejected:x', 'shared:c2', 'soon'])
+    const items = pendingItems({ ...base, jobs, invites: [invite()], cars: [car, shared], rulesByCar: rules, today: '2026-09-28' })
+    expect(items.map(key)).toEqual(['overdue', 'review:p', 'km', 'km', 'rejected:x', 'invite:c9_beto@gmail.com', 'soon'])
     expect(urgentCount(items)).toBe(6)
   })
-})
 
-describe('parseSeenCars', () => {
-  it('lee la lista guardada y tolera lo que no sirve', () => {
-    expect(parseSeenCars('["c1","c2"]')).toEqual(['c1', 'c2'])
-    expect(parseSeenCars('[1,"c1"]')).toEqual(['c1'])
-    expect(parseSeenCars('no es json')).toEqual([])
-    expect(parseSeenCars('{"a":1}')).toEqual([])
-    expect(parseSeenCars(null)).toEqual([])
-    expect(parseSeenCars(undefined)).toEqual([])
+  it('lo que no se pudo guardar va primero, de lo más nuevo a lo más viejo, con su auto si todavía está', () => {
+    const entry = (id: string, carId: string, createdAt: number): OutboxEntry =>
+      outboxEntry({
+        id,
+        carId,
+        carLabel: 'Ford Focus',
+        now: createdAt,
+        write: { kind: 'km', payload: { recordId: `r-${id}`, data: { km: 15000, date: '2026-09-21' }, original: null } },
+      })
+    const outbox = [
+      ...withFailure([entry('old', 'c1', 1), entry('new', 'gone', 2)], 'old', 'x'),
+      entry('waiting', 'c1', 3),
+    ].map(e => (e.id === 'new' ? { ...e, state: 'failed' as const, error: 'y' } : e))
+    const rules = new Map([['c1', [withState('overdue', 'overdue')]]])
+    const items = pendingItems({ ...base, outbox, cars: [car], rulesByCar: rules, today: '2026-09-21' })
+    expect(items.map(key)).toEqual(['failed:new', 'failed:old', 'overdue'])
+    expect(items[0].kind === 'failed-write' && items[0].car).toBeNull()
+    expect(items[1].kind === 'failed-write' && items[1].car?.id).toBe('c1')
+    expect(urgentCount(items)).toBe(3)
   })
 })

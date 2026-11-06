@@ -19,11 +19,12 @@ import { buttonVariants } from '@/components/ui/button'
 import { Segmented } from '@/components/ui/choice'
 import { useData } from '@/components/providers/data-provider'
 import { formatMoney, MONTHS_SHORT } from '@/lib/format'
+import { canWrite } from '@/lib/sharing'
 
 type Kind = 'jobs' | 'fuel' | 'all'
 
 export default function JobsPage() {
-  const { cars, jobs, fuel, carById } = useData()
+  const { cars, jobs, fuel, carById, uid } = useData()
   const [carId, setCarId] = useState('all')
   const [kind, setKind] = useState<Kind>('jobs')
 
@@ -37,7 +38,10 @@ export default function JobsPage() {
   }
   const amount = (a: (typeof items)[number]) => (a.kind === 'job' ? a.item.cost : a.item.total)
 
-  const targetCar = carId !== 'all' ? carById.get(carId) : cars.length === 1 ? cars[0] : null
+  const writable = cars.filter(c => canWrite(c, uid))
+  const selected = carId !== 'all' ? carById.get(carId) : null
+  const targetCar = selected ? (canWrite(selected, uid) ? selected : null) : writable.length === 1 ? writable[0] : null
+  const canAdd = selected ? targetCar != null : writable.length > 0
   const newHref = (id: string) => (kind === 'fuel' ? `/autos/${id}/combustible/nuevo` : `/autos/${id}/trabajos/nuevo`)
 
   return (
@@ -47,7 +51,7 @@ export default function JobsPage() {
         subtitle="Trabajos y cargas de combustible."
         actions={
           <>
-            {cars.length > 0 &&
+            {canAdd &&
               (targetCar ? (
                 <LinkButton href={newHref(targetCar.id)} size="icon" aria-label="Agregar" className="size-9">
                   <Plus />
@@ -60,7 +64,7 @@ export default function JobsPage() {
                   <DropdownMenuContent>
                     <DropdownMenuGroup>
                       <DropdownMenuLabel>¿Para qué auto?</DropdownMenuLabel>
-                      {cars.map(c => (
+                      {writable.map(c => (
                         <DropdownMenuLinkItem key={c.id} render={<Link href={newHref(c.id)} />}>
                           <CarFront /> {carName(c)}
                         </DropdownMenuLinkItem>
@@ -89,7 +93,7 @@ export default function JobsPage() {
           <EmptyState
             icon={Wrench}
             title={kind === 'fuel' ? 'Sin cargas registradas' : 'Sin trabajos registrados'}
-            description={cars.length ? 'Tocá + para agregar el primero.' : 'Primero agregá un auto desde el inicio.'}
+            description={canAdd ? 'Tocá + para agregar el primero.' : cars.length ? undefined : 'Primero agregá un auto desde el inicio.'}
           />
         ) : (
           [...groups.entries()].map(([ym, list]) => (
