@@ -457,3 +457,58 @@ export const KEEP_REASONS = {
   'child-kept': 'queda algún hijo',
   'has-subcollections': 'tiene subcolecciones',
 }
+
+/**
+ * Motivos que "quedaron a propósito": lo esperable, no hay nada mal. El documento viejo no tiene una copia igual
+ * porque en la app se borró o se editó, o no es de un auto viejo de la cuenta, o espera a un hijo que queda. Se
+ * conserva y no hace falta hacer nada.
+ */
+export const INTENTIONAL_REASONS = ['car-missing', 'car-deleted', 'no-copy', 'copy-differs', 'legacy-newer', 'orphan', 'no-car-id', 'child-kept']
+
+/**
+ * Motivos que son "un problema": hay que mirarlos a mano. Más de una copia posible, un auto nuevo de otra cuenta,
+ * un auto viejo sin `createdAt` (lo grababa siempre la app) o con subcolecciones (la app nunca las creó). Cualquier
+ * motivo que no esté en ninguna de las dos listas también cuenta como problema.
+ */
+export const PROBLEM_REASONS = ['ambiguous', 'conflict', 'no-fingerprint', 'has-subcollections']
+
+/** Grupo de un motivo: `intentional` (quedó a propósito) o `problem` (hubo un problema). */
+export function keepGroup(reason) {
+  return INTENTIONAL_REASONS.includes(reason) ? 'intentional' : 'problem'
+}
+
+/**
+ * Cuenta lo que queda por grupo y por motivo: `{ intentional: { total, byReason }, problem: { total, byReason } }`,
+ * con `byReason` un objeto de motivo a cantidad.
+ */
+export function summarizeKept(kept) {
+  const summary = { intentional: { total: 0, byReason: {} }, problem: { total: 0, byReason: {} } }
+  for (const k of kept) {
+    const group = summary[keepGroup(k.reason)]
+    group.total++
+    group.byReason[k.reason] = (group.byReason[k.reason] ?? 0) + 1
+  }
+  return summary
+}
+
+/**
+ * Problemas de una corrida: los documentos que quedaron por un motivo del grupo `problem`, más lo que pasó al borrar
+ * (`skipped`: salteados por `recheck` o porque no se borraron sus hijos; `errors`: escrituras que fallaron, también
+ * por precondición; `backupFailed`: el respaldo no se pudo escribir o verificar).
+ */
+export function problemCount({ kept = [], skipped = 0, errors = 0, backupFailed = false }) {
+  return summarizeKept(kept).problem.total + skipped + errors + (backupFailed ? 1 : 0)
+}
+
+/** Código de salida: 1 si hubo algún problema, 0 si sólo quedaron documentos a propósito (o nada). */
+export function exitCodeFor(run) {
+  return problemCount(run) > 0 ? 1 : 0
+}
+
+/** Línea final del informe: borrados (o que se borrarían), los que quedaron a propósito y los problemas. */
+export function summaryLine({ apply, deleted, kept = [], skipped = 0, errors = 0, backupFailed = false }) {
+  const { intentional } = summarizeKept(kept)
+  const problems = problemCount({ kept, skipped, errors, backupFailed })
+  const done = apply ? `${deleted} borrados` : `${deleted} se borrarían`
+  return `Resumen: ${done}, ${intentional.total} quedaron a propósito, ${problems} ${problems === 1 ? 'problema' : 'problemas'}.`
+}

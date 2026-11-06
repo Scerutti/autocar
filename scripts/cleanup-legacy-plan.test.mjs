@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   backupFileName,
+  INTENTIONAL_REASONS,
+  KEEP_REASONS,
+  PROBLEM_REASONS,
   buildBackup,
   compareInstants,
+  exitCodeFor,
   isLegacyPath,
+  keepGroup,
+  summarizeKept,
+  summaryLine,
   legacyPath,
   localDay,
   matchReadings,
@@ -511,5 +518,57 @@ describe('respaldo', () => {
 
   it('el nombre del archivo no tiene caracteres que Windows no acepta', () => {
     expect(backupFileName(new Date('2026-11-06T10:20:30.400Z'))).toBe('legacy-backup-2026-11-06T10-20-30-400Z.json')
+  })
+})
+
+describe('grupos de lo que queda', () => {
+  const k = reason => ({ path: `users/u1/jobs/${reason}`, carId: 'c1', reason, detail: null })
+
+  it('cada motivo está en un solo grupo y todos los motivos tienen grupo', () => {
+    expect(INTENTIONAL_REASONS.filter(r => PROBLEM_REASONS.includes(r))).toEqual([])
+    expect([...INTENTIONAL_REASONS, ...PROBLEM_REASONS].sort()).toEqual(Object.keys(KEEP_REASONS).sort())
+  })
+
+  it('lo que se borró o editó en la app queda a propósito; lo ambiguo y lo de otra cuenta es un problema', () => {
+    for (const r of ['car-missing', 'car-deleted', 'no-copy', 'copy-differs', 'legacy-newer', 'orphan', 'no-car-id', 'child-kept']) {
+      expect(keepGroup(r)).toBe('intentional')
+    }
+    for (const r of ['ambiguous', 'conflict', 'no-fingerprint', 'has-subcollections', 'algo-nuevo']) expect(keepGroup(r)).toBe('problem')
+  })
+
+  it('cuenta por grupo y por motivo', () => {
+    expect(summarizeKept([k('no-copy'), k('no-copy'), k('car-deleted'), k('ambiguous')])).toEqual({
+      intentional: { total: 3, byReason: { 'no-copy': 2, 'car-deleted': 1 } },
+      problem: { total: 1, byReason: { ambiguous: 1 } },
+    })
+  })
+
+  it('código 0 si sólo quedó lo que es a propósito; 1 con cualquier problema', () => {
+    expect(exitCodeFor({ kept: [] })).toBe(0)
+    expect(exitCodeFor({ kept: [k('no-copy'), k('legacy-newer'), k('child-kept')] })).toBe(0)
+    expect(exitCodeFor({ kept: [k('no-copy'), k('ambiguous')] })).toBe(1)
+    expect(exitCodeFor({ kept: [k('conflict')] })).toBe(1)
+    expect(exitCodeFor({ kept: [], skipped: 1 })).toBe(1)
+    expect(exitCodeFor({ kept: [], errors: 1 })).toBe(1)
+    expect(exitCodeFor({ kept: [], backupFailed: true })).toBe(1)
+  })
+
+  it('el plan de un auto borrado en la app sólo deja cosas a propósito (código 0)', () => {
+    expect(exitCodeFor({ kept: plan({ current: new Map() }).report.kept })).toBe(0)
+    const cur = current()
+    cur.get('c1').car.ownerUid = 'otra'
+    expect(exitCodeFor({ kept: plan({ current: cur }).report.kept })).toBe(1)
+  })
+
+  it('línea de resumen: una segunda corrida sin cambios dice 0 borrados y 0 problemas', () => {
+    expect(summaryLine({ apply: true, deleted: 0, kept: [k('no-copy')] })).toBe(
+      'Resumen: 0 borrados, 1 quedaron a propósito, 0 problemas.',
+    )
+    expect(summaryLine({ apply: false, deleted: 5, kept: [k('ambiguous')], skipped: 0 })).toBe(
+      'Resumen: 5 se borrarían, 0 quedaron a propósito, 1 problema.',
+    )
+    expect(summaryLine({ apply: true, deleted: 2, kept: [], skipped: 1, errors: 1 })).toBe(
+      'Resumen: 2 borrados, 0 quedaron a propósito, 2 problemas.',
+    )
   })
 })

@@ -15,8 +15,13 @@
  * `fsync`) con la ruta y los datos de cada documento que va a borrar, y lo vuelve a leer para comparar cada documento;
  * si algo falla, no borra nada. Cada documento se borra en una transacción que vuelve a leer el documento viejo, su
  * copia y el auto nuevo, y lo saltea si alguno ya no existe o cambió desde que se leyó (`recheck`). Se puede volver a
- * correr: una segunda corrida con --apply no borra nada. Termina con código 1 si queda algún documento viejo, se
- * salteó alguno o hubo un error.
+ * correr: una segunda corrida con --apply no borra nada.
+ *
+ * Lo que queda se informa en dos grupos (`keepGroup`): "quedó a propósito" (no hay una copia igual porque en la app se
+ * borró o se editó, o no es de un auto viejo de la cuenta: no hace falta hacer nada) y "hubo un problema" (ambiguo, un
+ * auto de otra cuenta, datos que no deberían existir: revisar a mano). También son problemas un respaldo que no se
+ * pudo escribir o verificar, un borrado salteado (`recheck` o hijos sin borrar) y un error al borrar. Al final imprime
+ * la cantidad por motivo de cada grupo y una línea de resumen. Termina con código 1 sólo si hubo algún problema.
  *
  * Usa el Admin SDK (no pasa por las reglas) con las mismas variables FIREBASE_ADMIN_* que `adminApp()` en
  * lib/firebase/admin.ts. No imprime variables de entorno ni datos de la service account.
@@ -40,10 +45,14 @@ import {
   LEGACY_COLLECTIONS,
   backupFileName,
   buildBackup,
+  exitCodeFor,
   isLegacyPath,
+  keepGroup,
   planAccountCleanup,
   recheck,
   referencedCarIds,
+  summarizeKept,
+  summaryLine,
   verifyBackup,
 } from './cleanup-legacy-plan.mjs'
 
@@ -132,7 +141,25 @@ function printReport(report) {
   for (const [carId, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     console.log(`  Auto ${carId}: ${group.deleted.length} ${apply ? 'para borrar' : 'se borrarían'}, ${group.kept.length} quedan`)
     group.deleted.forEach(d => console.log(`    BORRA ${d.path} (copia: ${d.via})`))
-    group.kept.forEach(k => console.log(`    QUEDA ${k.path}: ${KEEP_REASONS[k.reason] ?? k.reason}${k.detail ? ` (${k.detail})` : ''}`))
+    group.kept.forEach(k => {
+      const label = keepGroup(k.reason) === 'problem' ? 'PROBLEMA' : 'QUEDA'
+      console.log(`    ${label} ${k.path}: ${KEEP_REASONS[k.reason] ?? k.reason}${k.detail ? ` (${k.detail})` : ''}`)
+    })
+  }
+}
+
+/** Imprime lo que quedó, separado en "quedó a propósito" y "hubo un problema", con la cantidad por motivo. */
+function printKeptSummary(kept) {
+  const summary = summarizeKept(kept)
+  const groups = [
+    ['Quedó a propósito (no hace falta hacer nada)', summary.intentional],
+    ['Hubo un problema (revisar a mano)', summary.problem],
+  ]
+  for (const [title, group] of groups) {
+    console.log(`${title}: ${group.total}`)
+    for (const [reason, count] of Object.entries(group.byReason).sort(([a], [b]) => a.localeCompare(b))) {
+      console.log(`  ${KEEP_REASONS[reason] ?? reason} (${reason}): ${count}`)
+    }
   }
 }
 
@@ -187,7 +214,7 @@ async function main() {
   const accounts = await db.collection('users').listDocuments()
   const deletes = []
   const updateTimes = new Map()
-  let kept = 0
+  const kept = []
   for (const account of accounts) {
     const uid = account.id
     const read = await readLegacy(db, uid, updateTimes)
@@ -195,21 +222,28 @@ async function main() {
     const current = await readCurrent(db, referencedCarIds(read.legacy), updateTimes)
     const plan = planAccountCleanup({ uid, legacy: read.legacy, legacyCarsWithChildren: read.withChildren, current })
     printReport(plan.report)
-    kept += plan.report.kept.length
+    kept.push(...plan.report.kept)
     deletes.push(...plan.deletes)
   }
 
-  console.log(`\nTotal: ${deletes.length} documentos viejos ${apply ? 'para borrar' : 'se borrarían'}, ${kept} quedan.`)
-  if (!deletes.length && !kept) console.log('Sin cambios: no hay documentos viejos.')
+  console.log(`\nTotal: ${deletes.length} documentos viejos ${apply ? 'para borrar' : 'se borrarían'}, ${kept.length} quedan.`)
+  if (!deletes.length && !kept.length) console.log('Sin cambios: no hay documentos viejos.')
+  printKeptSummary(kept)
 
-  const totals = { deleted: 0, skipped: 0, errors: 0 }
+  const totals = { deleted: 0, skipped: 0, errors: 0, backupFailed: false }
+  const finish = () => {
+    console.log(`\n${summaryLine({ ...totals, apply, deleted: apply ? totals.deleted : deletes.length, kept })}`)
+    process.exitCode = exitCodeFor({ kept, ...totals })
+    if (process.exitCode) console.log('Hubo problemas: revisá las líneas PROBLEMA y los salteados antes de volver a correr.')
+  }
   if (apply && deletes.length) {
     let file
     try {
       file = writeBackup(deletes)
     } catch (e) {
       console.error(`No se pudo escribir o verificar el respaldo, no se borra nada: ${e?.message ?? 'error'}`)
-      process.exitCode = 1
+      totals.backupFailed = true
+      finish()
       return
     }
     console.log(`Respaldo: ${file} (${deletes.length} documentos). Guardalo fuera del repo.`)
@@ -238,10 +272,7 @@ async function main() {
     console.log(`Borrados: ${totals.deleted}. Salteados: ${totals.skipped}. Con error: ${totals.errors}.`)
   }
 
-  if (kept || totals.skipped || totals.errors) {
-    console.log('Quedan documentos viejos: revisá el informe antes de volver a correr.')
-    process.exitCode = 1
-  }
+  finish()
 }
 
 main().catch(e => {
