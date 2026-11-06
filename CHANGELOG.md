@@ -2,7 +2,9 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
-## Próxima versión
+## 1.7.0
+
+Cierra la epic de higiene y privacidad. Salir borra tus datos de este dispositivo, podés descargar todos tus datos y borrar tu cuenta, y las rutas viejas de antes de la 1.1.2 se cierran. Antes de publicar hay que subir las reglas y los índices de Firestore; la limpieza de los datos viejos es un script opcional (ver "Pasos manuales").
 
 ### Seguridad
 
@@ -22,7 +24,7 @@ Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión tambi�
 - `DELETE /api/account` (`lib/account-server.ts`, lógica pura en `lib/account.ts`): si la cuenta de Auth ya no existe, 200 sin hacer nada. Si no, sondea los índices de grupo antes de tocar nada; marca los autos propios en una transacción (409 si alguno vivo tiene miembros, sin escribir nada; revoca sus invitaciones pendientes) → `purgeCar` de cada uno → `createdByName: null` en sus trabajos, cargas y lecturas de autos ajenos → sale de `memberUids`/`memberProfiles` → invitaciones mandadas y recibidas → `usage/{uid}` → fotos de `autocar/{uid}/` por lista (Admin API: `listImagesByPrefix` + `deleteImagesByIds`), salvo las que usa un auto que ya es de otra persona → `revokeRefreshTokens` → `allowlist/{mail}` → `users/{uid}` con `recursiveDelete` → `deleteUser`. Cada paso tolera que ya esté hecho; si Cloudinary falla responde 502 antes de borrar la cuenta, y un fallo después de sacarla de `allowlist` responde 500 con `closed: true` (la app reintenta y, si no, sale).
 - Export en el cliente: `lib/export.ts` (CSV y JSON, también los dispositivos con notificaciones y los avisos de mantenimientos, `readExportExtras`) y `lib/zip.ts` (zip sin comprimir, sin dependencias), con pruebas.
 - `/api/access` verifica que la cuenta exista (`verifyIdToken` con `checkRevoked`): un dispositivo abierto con una cuenta borrada no la vuelve a registrar. `setAccountClosing` (`lib/db.ts`): mientras se borra la cuenta, la pestaña no recrea `users/{uid}` ni intenta registrarse.
-- Nuevo `firestore.indexes.json` (en `firebase.json`) con índices de grupo para `createdBy` en `jobs`, `fuel` y `odometer`. **Paso manual antes del deploy:** `npx firebase-tools deploy --only firestore:indexes` y esperar a que estén `READY` en la consola (sin ellos el borrado de cuenta responde 500 antes de tocar nada).
+- Nuevo `firestore.indexes.json` (en `firebase.json`) con índices de grupo para `createdBy` en `jobs`, `fuel` y `odometer`. **Paso manual antes del deploy:** `npx firebase-tools deploy --only firestore:indexes` y esperar a que estén `READY` en la consola (sin ellos el borrado de cuenta responde 503, "todavía no está disponible", antes de tocar nada).
 - **Pasos manuales, en orden**:
   1. Probar en el simulador de reglas: `create` y `update` en `users/{uid}/jobs/x` (y en `cars`, `rules`, `fuel`, `odometer`) se niegan al dueño; `read` y `delete` del dueño valen; otro usuario no lee ni borra. `pushSubscriptions` y `achievements` siguen igual. Publicar las reglas.
   2. Simulacro: `node --env-file=.env.local scripts/cleanup-legacy.mjs`.
