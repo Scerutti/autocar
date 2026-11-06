@@ -85,7 +85,7 @@ const RELATED: readonly RelatedName[] = ['rules', 'jobs', 'fuel', 'odometer']
 /** Id para un auto nuevo: el formulario lo necesita antes de crearlo, porque la foto se sube con ese id. */
 export const newCarId = () => doc(carsCol()).id
 
-const newChildId = (carId: string, name: RelatedName) => doc(carCol(carId, name)).id
+export const newChildId = (carId: string, name: RelatedName) => doc(carCol(carId, name)).id
 
 /** Quién figura como autor de un registro: `createdBy` y `createdByName` tal como se guardan. */
 type Author = { createdBy: string; createdByName: string | null }
@@ -351,6 +351,7 @@ export function subscribeUserData(
             settings: {
               reminder: { ...DEFAULT_SETTINGS.reminder, ...(x?.reminder ?? {}) },
               timezone: x?.timezone ?? DEFAULT_SETTINGS.timezone,
+              sharedCars: x?.sharedCars !== false,
             },
           },
           'settings',
@@ -1043,6 +1044,7 @@ export async function saveJob(
   data: JobInput,
   existing?: Job,
   followUp?: FollowUp | null,
+  jobId?: string,
 ): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const member = ctx.car.ownerUid !== actor.uid
@@ -1060,7 +1062,7 @@ export async function saveJob(
     await applyJobChange(actor, ctx, current, after, batch => batch.update(doc(carCol(carId, 'jobs'), current.id), update))
     return 'saved'
   }
-  const id = newChildId(carId, 'jobs')
+  const id = jobId ?? newChildId(carId, 'jobs')
   const status: JobStatus = !member || approvesOwnJobs(ctx.car, actor.uid) ? 'approved' : 'pending'
   const now = new Date()
   const after: Job = { ...data, id, status, reviewedAt: null, revision: 0, createdAt: now, createdBy: actor.uid, createdByName: actor.name }

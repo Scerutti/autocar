@@ -15,7 +15,7 @@ Relevado sobre `develop` @ v1.2.1 (2026-10-25).
 | Auth | Firebase Auth (Google, popup → redirect en iOS PWA) | `components/providers/auth-provider.tsx` |
 | DB | Cloud Firestore, **acceso directo desde el cliente** con caché persistente offline | `lib/firebase/client.ts`, `lib/db.ts` |
 | Autorización | `firestore.rules` (cliente) + `authorize()` con Admin SDK (API routes) | `firestore.rules`, `lib/firebase/admin.ts` |
-| Server | 5 Route Handlers (Node runtime) con `firebase-admin` | `app/api/**/route.ts` |
+| Server | 7 Route Handlers (Node runtime) con `firebase-admin` | `app/api/**/route.ts` |
 | Fotos | Cloudinary, subida firmada directa desde el navegador | `lib/cloudinary-*.ts` |
 | Push | Web Push (VAPID, `web-push`), service worker `public/sw.js` | `lib/push-*.ts` |
 | PDF | `@react-pdf/renderer` en el cliente | `components/report/` |
@@ -97,6 +97,20 @@ Auth:
 - 200: `{ sent: number }` · 401 · 403 · 500.
 - Interno: `sendToUser(uid, [payload])` → lee `users/{uid}/pushSubscriptions` (5 más recientes), borra las que dan 404/410. Lo llama `app/(app)/ajustes/page.tsx`.
 
+#### `POST /api/notify/job`
+- Propósito: aviso push al instante cuando un miembro envía un trabajo para revisar (`submitted`), o cuando el dueño aprueba (`approved`) o rechaza (`rejected`) el trabajo de un miembro.
+- Auth: `authorize`.
+- Input: `{ carId: string, jobId: string, event: 'submitted' | 'approved' | 'rejected' }`.
+- 200: `{ sent: number, duplicate?: true }` · 400 · 401 · 403 · 404 · 500.
+- Interno: lee `cars/{carId}` y `cars/{carId}/jobs/{jobId}` en paralelo → valida autoría, rol y estado con `planJobNotification({ uid, car, job, event })` → idempotencia en `notices/{jobId}_{event}_{revision}` con `.create({ carId, jobId, event, revision, createdAt })` (si da código 6 `ALREADY_EXISTS`, responde `{ sent: 0, duplicate: true }`) → `sendToUser(recipientUid, [message])`. Cliente: `notifyJobInBackground` (`lib/notify-client.ts`) en `job-form.tsx`, enganchado al `.then` de la escritura (si se guarda sin señal y sincroniza con la app abierta, avisa al sincronizar; si la app se cierra antes, `submitted` queda cubierto por el resumen diario del cron y `approved`/`rejected` se ven en la app).
+
+#### `POST /api/notify/rules`
+- Propósito: aviso push al instante al resto del auto (dueño y miembros con `sharedCars !== false`, excepto quien llamó) cuando un cambio deja algún mantenimiento activo en `soon` o `overdue` (`didRuleEscalate`).
+- Auth: `authorize` + ser dueño o miembro (`memberUids`) del auto.
+- Input: `{ carId: string, ruleIds?: string[] }`.
+- 200: `{ sent: number }` · 400 · 401 · 403 · 404 · 500.
+- Interno: lee `cars/{carId}`, sus `rules` y, de la fecha más nueva a la más vieja (tope 1000 cada uno), `jobs` y `odometer` en paralelo → proyecta los mantenimientos en memoria (`projectRules(rawRules, jobs, readings)` filtrando por `ruleIds` si vienen) y el km del auto (`carKmFrom(readings)`) → por cada destinatario lee `users/{recipientUid}` (saltea miembros con `sharedCars === false`) → calcula alertas con `planRuleAlerts` → por cada mantenimiento que escaló reclama el cambio en una transacción (`claimRuleNotice`) sobre `users/{recipientUid}/ruleNotices/{ruleId}` y envía push con `sendToUser`. Cliente: `checkCarRuleEscalations` (`lib/notify-client.ts`), que muestra un `toast.warning` local a quien hizo el cambio (`announceRuleEscalations`) y sólo llama al servidor si `escalations.length > 0` y el auto tiene miembros, pasando los `ruleIds` escalados. Llamado desde `km-form.tsx`, `autos/[carId]/page.tsx`, `fuel-form.tsx` y `job-form.tsx`.
+
 #### `GET /api/cron/daily`
 - Propósito: avisos push diarios de mantenimientos por vencer/vencidos y recordatorio semanal de km.
 - Auth: `Authorization: Bearer $CRON_SECRET` (comparación en tiempo constante). Si no → 401.
@@ -104,7 +118,7 @@ Auth:
 - Qué hace cada llamada sale de `cronRuns/{YYYY-MM-DD}` (fecha UTC), tomado en una transacción (`claimRun`), no del schedule: sin registro procesa a todos; con una corrida que terminó sin dejar a nadie afuera (`finishedAt` y `skipped == 0`) responde `{ ok: true, date, alreadyDone: true }`; si otra llamada está en curso (`runningSince` de hace menos de 60 s y `finishedAt == null`) responde `{ ok: true, date, busy: true }`; si no (quedaron usuarios afuera, o la anterior se cortó), sigue con los uids `> cursor`. Los usuarios con error no se reintentan (quedan en `failures`). Para repetir una corrida completa el mismo día: borrar `cronRuns/{fecha}` en la consola.
 - 200: `{ ok: true, date, candidates, processed, skipped, errors, sent, report: { uid, messages, sent, error? }[] }` (los números son de esta corrida; los del día quedan en `cronRuns`, guardado con un reintento; si aun así falla el cierre, responde 500 con `ok: false`). Si `skipped > 0` o hay errores, `console.error` con el resumen y `failures` (para la alerta en los logs de Vercel).
 - Candidatos: `collectionGroup('pushSubscriptions').select()` → uids de `users/{uid}/pushSubscriptions/{id}` sin repetir y ordenados (`candidateUids`, `lib/cron-run.ts`). `users/{uid}` se lee dentro de `processUser`, sólo por cada usuario que efectivamente se procesa (no se pagan las lecturas de los que quedan afuera por tiempo). Un usuario sin suscripciones no genera ninguna lectura de autos, mantenimientos ni lecturas de km (consecuencia aceptada: a quien no tiene push no se le limpia `lastNotifiedStatus` cuando un mantenimiento vuelve a estar al día; se limpia en la primera corrida después de suscribirse). Otra consecuencia aceptada: quien se suscribe entre la primera y la segunda corrida con un uid menor o igual al cursor recibe su primer aviso al día siguiente. Un uid con suscripciones sin `users/{uid}` cuenta como procesado sin mensajes. Dos corridas completas el mismo día (sólo si la primera se cortó después de 60 s): los mantenimientos ya avisados se saltean por `lastNotified*` y el pedido de km se repite, pero el `tag` lo reemplaza en el dispositivo.
-- Interno: por cada candidato → `users/{uid}` → `cars where ownerUid == uid` → `cars/{id}/rules` de todos los autos a la vez (`limit(1000)` por auto y recorte a 1000 en total, así un auto con muchos mantenimientos aprovecha el cupo libre de los demás) y, en paralelo, la lectura de más km de cada auto (`cars/{id}/odometer` `orderBy('km', 'desc').limit(1)`, índice simple automático; una por auto, dentro del tope) → el km de cada auto para los avisos es esa lectura (`carKmForNotifications`: `currentKm` y `kmUpdatedAt` de la lectura, o lo guardado si no tiene; `avgKmPerDay` del auto), no el `currentKm` guardado → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes; saltea los recordatorios cumplidos, `completedByJobId != null`) → `sendToUser()` → `bulkWriter` actualiza `rules.lastNotifiedAt/lastNotifiedStatus` sólo de lo entregado (`updatesToPersist`). **Sólo avisa al dueño**, no a los miembros. Usa la proyección guardada de cada mantenimiento (`lastDone*`, `completedByJobId`), sin leer trabajos: si una escritura falló y el dueño no volvió a abrir la app, trabaja con la proyección vieja (lo mismo que el km). `ruleFrom` del cron tiene la misma lectura tolerante de la base que el de `lib/db.ts`.
+- Interno: por cada candidato → `users/{uid}` → `cars where ownerUid == uid` y, si `settings.sharedCars !== false`, `cars where memberUids array-contains uid` (hasta 1000 autos en total) → en paralelo: `cars/{id}/rules` de todos los autos (`limit(1000)` por auto y recorte a 1000 en total), la lectura de más km de cada auto (`topReadingOf`: `cars/{id}/odometer` `orderBy('km', 'desc').limit(1)`), `users/{uid}/ruleNotices` (`limit(1000)`) y, en los autos propios compartidos, `cars/{id}/jobs where status == 'pending'` (`pendingReviewOf`) → el km de cada auto para los avisos es esa lectura (`carKmForNotifications`: `currentKm` y `kmUpdatedAt` de la lectura, o lo guardado si no tiene; `avgKmPerDay` del auto), no el `currentKm` guardado → `planDailyNotifications()` (`lib/notifications.ts`, máx. 6 mensajes; saltea los recordatorios cumplidos `completedByJobId != null`; saltea el pedido de km en autos donde el usuario es `viewer` vía `canWrite`; reserva 1 lugar para `"Tenés N trabajo(s) para revisar"` con `REVIEW_TAG` si hay pendientes; usa el estado de avisado por persona `effectiveRuleNotice`, tomando `rule.lastNotified*` como semilla inicial del dueño si aún no tiene doc en `ruleNotices`) → `sendToUser()` → `bulkWriter` escribe `users/{uid}/ruleNotices/{ruleId}` sólo de lo entregado (`updatesToPersist`) y, si se leyeron todos los autos y mantenimientos (`sharedCars !== false` y sin llegar al tope), borra los `ruleNotices` huérfanos (`orphanNoticeIds`). Usa la proyección guardada de cada mantenimiento (`lastDone*`, `completedByJobId`), sin leer trabajos aprobados. `serverRuleFrom` (`lib/push-server.ts`) tiene la misma lectura tolerante de la base que `ruleFrom` de `lib/db.ts`.
 
 ### 2.2 Data layer (Firestore desde el cliente, `lib/db.ts`)
 
@@ -130,7 +144,7 @@ Leyenda Auth: **O** = dueño del auto (`car.ownerUid == uid`), **M** = miembro (
 
 | Función | Auth | Input clave | Escribe |
 |---|---|---|---|
-| `newCarId()` | — | — | `string` (id antes de crear, para la foto) |
+| `newCarId()` / `newChildId(carId, sub)` | — | — | `string` (id antes de crear, para la foto o para avisar un trabajo nuevo) |
 | `createCar(actor, data: CarInput, initialKm, carId?)` | U (queda O) | `CarInput = { brand, model, version, year, plate, fuelTypes, photoUrl?, photoPublicId? }` | batch: `cars/{id}` (`ownerUid`, `ownerName`, `members: []`, `memberUids: []`, `memberProfiles: {}`, `currentKm`, `kmUpdatedAt`, `avgKmPerDay: null`, `createdAt`) + `odometer` `source:'initial'`, `sourceId: null`, `createdAt`. → `carId` |
 | `updateCar(actor, carId, Partial<CarInput>)` | O | — | `cars/{id}` |
 | `deleteCar(actor, carId, known?)` | O | `known: { rules?, jobs?, fuel?, odometer?: string[] }` | Borra hijos (tandas de 450), las invitaciones del auto (`invites where ownerUid==uid and carId==carId`) y al final el auto. Las reglas dejan al dueño borrar lecturas sin consultar su registro, por el tope de llamadas por pedido |
@@ -218,7 +232,7 @@ Permisos de UI: `canEditEntry(car, uid, record)` (un `viewer`, nada).
 
 | Función | Input | Escribe |
 |---|---|---|
-| `saveSettings(uid, Partial<UserSettings>)` | `{ reminder: { enabled, weekday 0-6 }, timezone }` | `users/{uid}` merge |
+| `saveSettings(uid, Partial<UserSettings>)` | `{ reminder: { enabled, weekday 0-6 }, timezone, sharedCars?: boolean }` | `users/{uid}` merge |
 | `savePushSubscription(uid, sub.toJSON())` | `PushSubscriptionJSON` | `pushSubscriptions/{sha256(endpoint)}` `{ endpoint, keys{p256dh,auth}, userAgent, createdAt }` |
 | `deletePushSubscription(uid, endpoint)` | — | — |
 | `unlockAchievements(uid, [{ id, carId }])` | ids de `ACHIEVEMENTS` | Transacción idempotente `achievements/{id}` `{ carId, unlockedAt, celebratedAt: null }` → creados |
@@ -244,7 +258,7 @@ Wrappers de cliente: `enablePush(uid)` / `disablePush(uid)` / `pushSupport()` en
 | `/logros` | Logros | — |
 | `/invitaciones/[inviteId]` | Link de una invitación (`getInvite`): Aceptar / Rechazar con confirmación (`useInviteResponse`, `components/invites/invite-card.tsx`); al aceptar va a `/autos/{carId}`. Vencida, cancelada o respondida: lo dice. De otra cuenta (`permission-denied`): "Esta invitación es para j•••@gmail.com…" (`maskEmail` del id) | `inviteId` = `{carId}_{emailKey}` (URL-encoded) |
 | `/novedades` | Changelog para usuarios (`lib/novedades.ts`). Entrar marca todo como visto. Fuera de esta pantalla, `NovedadesHost` anuncia con una ventana todas las versiones sin ver (después de los logros por festejar) | — |
-| `/ajustes` | Recordatorio semanal, zona horaria, push, versión | — |
+| `/ajustes` | Recordatorio semanal, avisos de autos compartidos (`sharedCars`), zona horaria, push, versión | — |
 
 ### 2.4 Receta: pantalla nueva
 
@@ -266,10 +280,12 @@ Layout: `PageHeader`, `PageBody`, `SectionTitle`, `EmptyState`, `Loading`, `NotF
 allowlist/{emailLower}            { uid, createdAt }                      sólo Admin SDK
 usage/{uid}                       { day: ISODate, photos: number }        sólo Admin SDK
 cronRuns/{YYYY-MM-DD}             { startedAt, runningSince, finishedAt, runs, candidates, processed, skipped, errors, sent, cursor, failures[≤20] }  sólo Admin SDK (sin match)
+notices/{jobId}_{event}_{revision} { carId, jobId, event, revision, createdAt }  sólo Admin SDK (sin match; idempotencia de /api/notify/job)
 invites/{carId}_{emailKey}        Invite                                  O crea/reenvía/cancela/borra · invitado lee y responde
 users/{uid}                       UserSettings + createdAt                U
   ├─ pushSubscriptions/{sha256}   { endpoint, keys, userAgent, createdAt } U
   ├─ achievements/{achievementId} { carId, unlockedAt, celebratedAt }     U
+  ├─ ruleNotices/{ruleId}         { status: 'soon'|'overdue'|null, at }   U read · sólo Admin SDK escribe (estado de avisado por persona)
   └─ cars|rules|jobs|fuel|odometer  LEGADO (pre-migración 1.1.2), sólo lectura/limpieza; la app no los usa
 cars/{carId}                      Car                                     O rw (miembros: sólo sacar, cambiarles el rol, o pasarle el auto a uno) · M read + update km (no `viewer`)/salir · invitado: sumarse
   ├─ rules/{id}                   MaintenanceRule                         O rw · M read
@@ -297,7 +313,8 @@ Relaciones:
 | `FuelLoad` | `id, carId, date: ISODate, km?, fuelType, grade?: 'super'\|'premium' (null en GNC), quantity (L o m³), unitPrice, total, fullTank, station?, createdBy?, createdByName?, createdAt` |
 | `OdometerReading` | `id, carId, km, date: Date, source: 'initial'\|'manual'\|'job'\|'fuel', sourceId: string \| null (id de la carga o del trabajo; null en alta, manual y viejas), createdBy?, createdByName?, createdAt: Date \| null (cuándo se cargó en la app; null en las viejas)` |
 | `AchievementRecord` | `id (= id del logro), carId?, unlockedAt, celebratedAt?` |
-| `UserSettings` | `reminder: { enabled (true), weekday (0 = domingo) }, timezone ('America/Argentina/Buenos_Aires')` |
+| `UserSettings` | `reminder: { enabled (true), weekday (0 = domingo) }, timezone ('America/Argentina/Buenos_Aires'), sharedCars?: boolean (true; falta = true)` |
+| `RuleNotice` | `status: 'soon'\|'overdue'\|null, at: Date \| null` (`users/{uid}/ruleNotices/{ruleId}`) |
 | `Actor` | `{ uid, name? }` — autor de una escritura |
 
 Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceria|documentacion|otros`. Combinaciones válidas de `fuelTypes`: `['nafta']`, `['nafta','gnc']`, `['gasoil']`. Presets: `RULE_PRESETS`, `INTERVAL_PRESETS`.
@@ -327,7 +344,8 @@ Enums: `JobCategory = service|reparacion|cubiertas|frenos|electricidad|carroceri
 | `sharing.ts` | `isCarOwner`, `isSharedCar` (miembros por `memberUids` o `members`), `memberRole(car, uid)` (falta = `editor`), `canWrite(car, uid)` (dueño, o miembro no `viewer`), `approvesOwnJobs(car, uid)` (miembro `trusted`), `setRolePatch(uid, role)`, `canEditEntry`, `canEditJob` (los dos con `canWrite`), `approvedJobs`, `memberError(car, invites, email, { ownerEmail, now })` (mail válido, no el mío ni el de un miembro ni el de una invitación pendiente, comparando con `canonicalEmail`; el tope cuenta `memberUids` + invitaciones pendientes sin vencer), `canonicalEmail` (minúscula; en Gmail/googlemail sin puntos ni "+algo"), `maskEmail`, `inviteId(carId, email)`, `inviteEmailKey(id)`, `isInviteOpen(invite, now)`, `inviteCarLabel`, `carMembers(car)` (`CarMember[]`: los de `memberUids` con su perfil y los mails viejos que no son de ninguno), `transferPatch(car, to, me)` (lo que cambia del auto al pasárselo a un miembro por uid; tira error si `to` no está en `memberUids` o soy yo), `INVITE_DAYS = 14`, `authorLabel`, `mineForAchievements` (sin mantenimientos de autos ajenos ni recordatorios cumplidos), `jobEdit(job, changes, member)` (el `update` de un trabajo editado: cambios + `status:'pending'` y `revision + 1` del miembro; null = nada que escribir), `reviewAlreadyDone(target, current)` (una revisión denegada que ya quedó hecha), `MAX_MEMBERS = 2` |
 | `utils.ts` | `changedFields(original, draft)` (los campos del borrador que cambiaron: null = undefined, listas en orden, mapas por contenido), `isUnchanged`, `safeNextPath`, `cn` |
 | `report.ts` | `buildServiceReport` (PDF de historial), `reportFileName` |
-| `notifications.ts` | `planDailyNotifications` (saltea los recordatorios cumplidos), `updatesToPersist`, `isPushEndpoint` |
+| `notifications.ts` | `planDailyNotifications` (recibe `uid`, `notices` y `pendingReview`; saltea recordatorios cumplidos, autos compartidos si `sharedCars === false` y pedido de km si `viewer`; reserva lugar para `REVIEW_TAG`), `updatesToPersist`, `orphanNoticeIds`, `ruleAlertRecipients(car, callerUid)` (destinatarios de `/api/notify/rules`: dueño y miembros sin quien llamó; null = 403), `isPushEndpoint`, `REVIEW_TAG`, `effectiveRuleNotice` (usa `rule.lastNotified*` como semilla inicial del dueño si aún no tiene `ruleNotices/{ruleId}`), `didRuleEscalate`, `ruleAlertMessage`, `planRuleAlerts`, `escalatedRules`, `planJobNotification` |
+| `notify-client.ts` | Helpers de cliente fire-and-forget: `notifyJobInBackground`, `notifyRulesInBackground`, `announceRuleEscalations`, `checkCarRuleEscalations`, `readingsWithLinked` |
 | `cron-run.ts` | Corridas del cron: `runDateOf(now)` (id de `cronRuns`, fecha UTC), `candidateUids(paths)`, `runIsDone(previous)`, `runIsBusy(previous, now)` (`RUN_LOCK_MS = 60_000`), `queueFrom(uids, previous)` (los uids después del cursor), `tally(reports)`, `summarizeRun({ queue, next, reports, candidates, previous })` (métricas acumuladas del día y cursor), `MAX_FAILURES = 20` |
 | `dates.ts` / `format.ts` | `ISODate` helpers / formato es-AR (`formatKm`, `formatMoney`, `formatDate`, `formatDayMonth`) |
 

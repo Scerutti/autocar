@@ -8,11 +8,13 @@ import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Checkbox, Field, FormError, Input } from '@/components/ui/form'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { toISODate } from '@/lib/dates'
 import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
+import { checkCarRuleEscalations, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
 import { canEditEntry } from '@/lib/sharing'
 import {
@@ -75,7 +77,8 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
 function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { actor, today, odometer } = useData()
+  const { getToken } = useAuth()
+  const { actor, today, odometer, rules: allRules, jobs } = useData()
   const { fuel: carFuel, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
@@ -176,6 +179,19 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
       status,
       `${fuelLabel(data)} · ${formatNumber(amounts.quantity)} ${unit} · ${formatMoney(amounts.total)}`,
     )
+    if (status === 'saved') {
+      const readingsAfter = readingsWithLinked(odometer, car.id, 'fuel', load?.id ?? 'new', { date, km: kmNum })
+      checkCarRuleEscalations({
+        car,
+        rawRules: allRules,
+        jobsBefore: jobs,
+        jobsAfter: jobs,
+        readingsBefore: odometer,
+        readingsAfter,
+        today,
+        getToken,
+      })
+    }
     router.replace(`/autos/${car.id}?tab=combustible`)
   }
 
@@ -191,8 +207,32 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
     router.replace(`/autos/${car.id}?tab=combustible`)
     removeWithUndo({
       message: 'Carga borrada',
-      remove: () => deleteFuel(actor, { car, readings: odometer }, load),
-      restore: () => restoreFuel(actor, { car, readings: odometer }, load),
+      remove: () =>
+        deleteFuel(actor, { car, readings: odometer }, load).then(() =>
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs,
+            readingsBefore: odometer,
+            readingsAfter: readingsWithLinked(odometer, car.id, 'fuel', load.id, null),
+            today,
+            getToken,
+          }),
+        ),
+      restore: () =>
+        restoreFuel(actor, { car, readings: readingsWithLinked(odometer, car.id, 'fuel', load.id, null) }, load).then(() =>
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs,
+            readingsBefore: readingsWithLinked(odometer, car.id, 'fuel', load.id, null),
+            readingsAfter: odometer,
+            today,
+            getToken,
+          }),
+        ),
     })
   }
 

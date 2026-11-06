@@ -249,11 +249,24 @@ export interface AchievementRecord {
 export interface UserSettings {
   reminder: { enabled: boolean; weekday: number }
   timezone: string
+  /** Si el usuario recibe vencimientos y recordatorios de km de los autos donde es miembro (falta = true). */
+  sharedCars?: boolean
+}
+
+/**
+ * Estado de "avisado" de un mantenimiento para una persona (`users/{uid}/ruleNotices/{ruleId}`): lo escribe el
+ * servidor (cron y `/api/notify/rules`) y reemplaza a `rule.lastNotified*` para que el dueño y cada miembro tengan su
+ * propio seguimiento.
+ */
+export interface RuleNotice {
+  status: 'soon' | 'overdue' | null
+  at: Date | null
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   reminder: { enabled: true, weekday: 0 },
   timezone: 'America/Argentina/Buenos_Aires',
+  sharedCars: true,
 }
 
 export interface RulePreset {

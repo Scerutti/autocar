@@ -24,6 +24,7 @@ import {
 import { useConfirm } from '@/components/confirm-provider'
 import { KmDialog } from '@/components/km-form'
 import { ExportReportDialog } from '@/components/report/export-dialog'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { toISODate } from '@/lib/dates'
@@ -31,6 +32,7 @@ import { deleteReading, leaveCar, restoreReading } from '@/lib/db'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm, type RuleWithState } from '@/lib/maintenance'
+import { checkCarRuleEscalations } from '@/lib/notify-client'
 import { readingOrigin } from '@/lib/odometer'
 import { approvedJobs, authorLabel, canEditEntry, canWrite, carMembers, isCarOwner, isSharedCar } from '@/lib/sharing'
 import { toast } from '@/lib/toast'
@@ -307,7 +309,8 @@ const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
  * borrar si los puedo editar (`canEditEntry`).
  */
 function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerReading[]; fuel: FuelLoad[]; jobs: Job[] }) {
-  const { actor, uid, odometer } = useData()
+  const { getToken } = useAuth()
+  const { actor, uid, odometer, rules: allRules, today } = useData()
   const confirm = useConfirm()
   const shared = isSharedCar(car, uid)
 
@@ -321,8 +324,32 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
     if (!confirmed) return
     removeWithUndo({
       message: `Registro de ${formatKm(r.km)} borrado`,
-      remove: () => deleteReading(actor, car, odometer, r.id),
-      restore: () => restoreReading(actor, car, odometer, r),
+      remove: () =>
+        deleteReading(actor, car, odometer, r.id).then(() =>
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs,
+            readingsBefore: odometer,
+            readingsAfter: odometer.filter(x => x.id !== r.id),
+            today,
+            getToken,
+          }),
+        ),
+      restore: () =>
+        restoreReading(actor, car, odometer.filter(x => x.id !== r.id), r).then(() =>
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs,
+            readingsBefore: odometer.filter(x => x.id !== r.id),
+            readingsAfter: odometer,
+            today,
+            getToken,
+          }),
+        ),
     })
   }
 
