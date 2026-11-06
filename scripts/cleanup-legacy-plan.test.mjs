@@ -125,8 +125,9 @@ describe('planAccountCleanup', () => {
 
   it('no modifica lo que recibe', () => {
     const src = legacy()
+    const before = JSON.stringify(src)
     planAccountCleanup({ uid: 'u1', legacy: src, current: current() })
-    expect(src).toEqual(legacy())
+    expect(JSON.stringify(src)).toBe(before)
   })
 
   it('deja un hijo sin copia y, con él, el auto', () => {
