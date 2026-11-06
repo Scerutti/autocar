@@ -10,14 +10,15 @@ import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Field, FormError, Input } from '@/components/ui/form'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
+import { purgeCarInBackground } from '@/lib/cars-client'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
 import { toISODate } from '@/lib/dates'
 import {
   createCar,
-  deleteCar,
   inviteMember,
+  markCarDeleted,
   newCarId,
   removeMember,
   revokeInvite,
@@ -40,7 +41,7 @@ import {
 } from '@/lib/sharing'
 import type { Car, FuelType, Invite, MemberRole } from '@/lib/types'
 import { errorMessage, toast } from '@/lib/toast'
-import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
+import { settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 
 /** Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC). */
 type FuelChoice = 'nafta' | 'dual' | 'gasoil'
@@ -597,14 +598,17 @@ function ShareSection({ car }: { car: Car }) {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /**
- * Borrar un auto borra todo su historial y la foto: no se puede deshacer. Primero sale de la pantalla del
- * auto, para no mostrar "no encontrado" mientras se borra.
+ * Borrar un auto borra todo su historial y la foto: no se puede deshacer. Primero sale de la pantalla del auto, para
+ * no mostrar "no encontrado" mientras se borra. La app sólo lo marca (`markCarDeleted`), y desaparece en el acto,
+ * también sin señal. Cuando el servidor confirma la marca, le pide que termine de borrarlo (`purgeCarInBackground`);
+ * si la app se cierra antes, lo termina el barrido del cron. Si el servidor rechaza la marca, el auto vuelve a
+ * aparecer y se avisa con un toast.
  */
 function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { actor } = useData()
+  const { actor, invites } = useData()
   const { allRules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
 
@@ -628,19 +632,14 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     if (!confirmed) return
 
     router.replace('/')
-    runInBackground(
-      (async () => {
-        await deleteCar(actor, car.id, {
-          rules: allRules.map(r => r.id),
-          jobs: jobs.map(j => j.id),
-          fuel: fuel.map(f => f.id),
-          odometer: readings.map(r => r.id),
-        })
-        if (car.photoPublicId) await deleteImage(car.photoPublicId, await getToken())
-      })(),
-      `No se pudo borrar ${name}`,
-    )
-    toast.success(`${name} borrado`)
+    const mark = markCarDeleted(actor, { invites }, car.id)
+    try {
+      toastSaved(`${name} borrado`, await settle(mark, `No se pudo borrar ${name}`))
+    } catch (e) {
+      toast.error(`No se pudo borrar ${name}`, { description: errorMessage(e) })
+      return
+    }
+    mark.then(() => purgeCarInBackground(car.id, getToken)).catch(() => {})
   }
 
   return (

@@ -65,6 +65,12 @@ export interface Car {
   memberUids?: string[]
   /** Mail y nombre de cada miembro, por uid: para mostrarlos. Tiene las mismas claves que `memberUids`. */
   memberProfiles?: Record<string, MemberProfile>
+  /**
+   * Cuándo el dueño lo borró (`markCarDeleted`): desde ahí el auto desaparece de la app y nadie carga nada en él, y el
+   * servidor (`DELETE /api/cars/[carId]` o el barrido del cron) termina de borrarlo con su historial y su foto. Falta
+   * o es null en los autos vivos.
+   */
+  deletedAt?: Date | null
 }
 
 /**

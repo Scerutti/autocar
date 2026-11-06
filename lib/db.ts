@@ -8,7 +8,6 @@ import {
   doc,
   getDoc,
   getDocFromServer,
-  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -151,8 +150,16 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     members: strings(x.members),
     memberUids: strings(x.memberUids),
     memberProfiles: profilesFrom(x.memberProfiles),
+    deletedAt: toDate(x.deletedAt),
   }
 }
+
+/**
+ * Si el auto está marcado como borrado (`markCarDeleted`). Con `serverTimestamps: 'estimate'`, porque mientras la marca
+ * no llega al servidor (sin señal) `deletedAt` se lee null sin la estimación, y el auto tiene que desaparecer igual.
+ */
+const isMarkedDeleted = (d: QueryDocumentSnapshot<DocumentData>) =>
+  d.data({ serverTimestamps: 'estimate' }).deletedAt != null
 
 const INVITE_STATUSES: readonly InviteStatus[] = ['pending', 'accepted', 'declined', 'revoked']
 
@@ -315,7 +322,8 @@ interface CarQuery {
  *
  * Los autos salen de tres consultas, las que pide la regla de lectura: los míos (`ownerUid`), los que me
  * compartieron por invitación (`memberUids` contiene mi uid) y, hasta #66, los compartidos por el mail viejo
- * (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la unión por id, y sale
+ * (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la unión por id sin los
+ * marcados como borrados (`deletedAt`, `isMarkedDeleted`: desaparecen en el acto y se cierran sus listeners), y sale
  * cuando las tres entregaron su primera foto. Si una de compartidos falla con `permission-denied` (la app publicada
  * antes que las reglas nuevas), cuenta como "sin autos compartidos" y no como un error.
  *
@@ -429,7 +437,12 @@ export function subscribeUserData(
 
   const publishCars = () => {
     if (carQueries.some(q => !q.ready)) return
-    const byId = new Map(carQueries.flatMap(q => q.docs).map(d => [d.id, d]))
+    const byId = new Map(
+      carQueries
+        .flatMap(q => q.docs)
+        .filter(d => !isMarkedDeleted(d))
+        .map(d => [d.id, d]),
+    )
     const ids = [...byId.keys()]
     for (const [carId, entry] of perCar) {
       if (!ids.includes(carId)) dropCar(carId, entry)
@@ -825,34 +838,21 @@ export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car:
   await batch.commit()
 }
 
-/** Borra en tandas de 450: un batch admite hasta 500 operaciones. */
-async function deleteRefs(refs: ReturnType<typeof doc>[]) {
-  for (let i = 0; i < refs.length; i += 450) {
-    const batch = writeBatch(firestore())
-    refs.slice(i, i + 450).forEach(r => batch.delete(r))
-    await batch.commit()
-  }
-}
-
 /**
- * Borra el auto y todo lo asociado (mantenimientos, trabajos, cargas y lecturas).
- * Los hijos van antes que el auto: las reglas deciden el permiso de un hijo con el documento del auto, así
- * que sin el auto ya no se pueden leer ni borrar, y quedarían huérfanos. Primero borra lo que la app ya
- * tiene en memoria, después barre en el servidor lo que pudiera haber quedado (por ejemplo, cargado desde
- * otro dispositivo), borra las invitaciones del auto (así a nadie le queda una pendiente de un auto que no existe) y
- * por último borra el auto, que recién ahí desaparece de la pantalla.
+ * El dueño borra el auto: sólo lo marca (`deletedAt` con la hora del servidor). `subscribeUserData` deja de mostrarlo
+ * en el acto, también sin señal, y las reglas no dejan crear ni editar nada en un auto marcado. El historial, las
+ * invitaciones y la foto los borra el servidor (`DELETE /api/cars/[carId]`, que la app llama cuando se confirma la
+ * marca, o el barrido del cron si la app se cerró antes).
+ * En el mismo batch pasa a `revoked` las invitaciones pendientes del auto que tiene la app (`ctx.invites`: las mías,
+ * de `useData()`), así el invitado no las puede aceptar mientras el servidor no las borra (`ownerRevoke` en las reglas).
  */
-export async function deleteCar(actor: Actor, carId: string, known: Partial<Record<RelatedName, string[]>> = {}) {
-  await deleteRefs(RELATED.flatMap(name => (known[name] ?? []).map(id => doc(carCol(carId, name), id))))
-  const leftovers: ReturnType<typeof doc>[] = []
-  for (const name of RELATED) {
-    const snap = await getDocs(carCol(carId, name))
-    leftovers.push(...snap.docs.map(d => d.ref))
-  }
-  if (leftovers.length) await deleteRefs(leftovers)
-  const invites = await getDocs(query(invitesCol(), where('ownerUid', '==', actor.uid), where('carId', '==', carId)))
-  if (!invites.empty) await deleteRefs(invites.docs.map(d => d.ref))
-  await deleteRefs([carDoc(carId)])
+export async function markCarDeleted(actor: Actor, ctx: { invites: Invite[] }, carId: string) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(carId), { deletedAt: serverTimestamp() })
+  ctx.invites
+    .filter(i => i.carId === carId && i.ownerUid === actor.uid && i.status === 'pending')
+    .forEach(i => batch.update(inviteDoc(i.id), { status: 'revoked' }))
+  await batch.commit()
 }
 
 /** Lo que el dueño declara de un mantenimiento. La "última vez" es la base (`baseKm`, `baseDate`): nunca la proyección. */
