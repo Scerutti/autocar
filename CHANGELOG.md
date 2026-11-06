@@ -2,6 +2,20 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Mantenimiento
+
+- **Cierre de las rutas viejas `users/{uid}/…`** (#64): `users/{uid}/cars|rules|jobs|fuel|odometer` (la estructura de antes de la 1.1.2, que la app ya no usa) quedan en las reglas sólo para leer y borrar (`allow read, delete: if isOwner(uid)`): sin `create` ni `update`. No cambia nada de lo que ve el usuario.
+- **Limpieza de los datos ya migrados** (#64): el script `scripts/cleanup-legacy.mjs` (lógica en `scripts/cleanup-legacy-plan.mjs`, con pruebas) borra cada documento viejo sólo si su copia en `cars/{carId}/…` está probada (mismo id y los campos que no se editan; las lecturas de km, por id, por `sourceId` o por km, origen y día), y cada auto viejo sólo si se borraron todos sus hijos. Lo que no tiene copia, la tiene distinta o es ambiguo queda y se informa. Simulacro por defecto; con `--apply` primero escribe un respaldo local `legacy-backup-<fecha>.json` con todo lo que va a borrar (si no puede, no borra nada). Sólo borra en esas cinco rutas: nunca toca `cars/…`, `users/{uid}`, los logros, las suscripciones push ni `ruleNotices`.
+- **Pasos manuales, en orden**:
+  1. Probar en el simulador de reglas: `create` y `update` en `users/{uid}/jobs/x` (y en `cars`, `rules`, `fuel`, `odometer`) se niegan al dueño; `read` y `delete` del dueño valen; otro usuario no lee ni borra. `pushSubscriptions` y `achievements` siguen igual. Publicar las reglas.
+  2. Simulacro: `node --env-file=.env.local scripts/cleanup-legacy.mjs`.
+  3. Revisar el informe: lo que queda no se borra; decidir a mano qué hacer con eso.
+  4. `node --env-file=.env.local scripts/cleanup-legacy.mjs --apply`.
+  5. Guardar el `legacy-backup-<fecha>.json` fuera del repo: es la única copia de lo borrado.
+  6. Otra corrida con `--apply` tiene que borrar 0.
+
 ## 1.6.0
 
 Cierra las epics de colaboración segura y de resiliencia y operación. Compartir un auto pasa a ser una invitación que la otra persona acepta, y los miembros pasan a ser por su cuenta (uid) y no por el mail. Los miembros reciben avisos, los trabajos para revisar avisan al momento, borrar un auto termina siempre y lo que se carga sin señal no se pierde. Antes de publicar hay que subir las reglas de Firestore y correr dos migraciones de datos (ver "Pasos manuales").
