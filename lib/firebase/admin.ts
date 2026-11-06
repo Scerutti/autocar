@@ -23,14 +23,16 @@ export const adminDb = () => getFirestore(adminApp())
 
 /**
  * Verifica el header "Authorization: Bearer <ID token de Firebase>".
- * Devuelve el token decodificado, o la respuesta 401 para devolver tal cual.
+ * Devuelve el token decodificado, o la respuesta 401 para devolver tal cual. Con `checkAccount`, además consulta a
+ * Firebase Auth que la cuenta siga existiendo y no esté deshabilitada ni con la sesión revocada (una lectura más): un
+ * token de una cuenta recién borrada (`DELETE /api/account`) sigue siendo válido hasta una hora.
  */
-export async function verifyUser(request: Request): Promise<DecodedIdToken | Response> {
+export async function verifyUser(request: Request, options: { checkAccount?: boolean } = {}): Promise<DecodedIdToken | Response> {
   const header = request.headers.get('authorization') ?? ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : null
   if (!token) return Response.json({ error: 'No autorizado' }, { status: 401 })
   try {
-    return await adminAuth().verifyIdToken(token)
+    return await adminAuth().verifyIdToken(token, options.checkAccount === true)
   } catch {
     return Response.json({ error: 'No autorizado' }, { status: 401 })
   }

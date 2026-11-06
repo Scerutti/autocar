@@ -5,10 +5,12 @@ import { accountEmail, accountRef, verifyUser } from '@/lib/firebase/admin'
  * Registro automático: la app está abierta a cualquier cuenta de Google con mail verificado.
  * La primera vez que alguien entra, Firestore rechaza la carga (todavía no está en allowlist) y la
  * app llama acá para registrarlo. Si algún día hay que cerrar la app (invitación o aprobación),
- * alcanza con cambiar esta ruta: las reglas ya exigen el registro.
+ * alcanza con cambiar esta ruta: las reglas ya exigen el registro. Verifica que la cuenta siga existiendo
+ * (`checkAccount`): un dispositivo que quedó abierto con una cuenta borrada (`DELETE /api/account`) no la vuelve a
+ * registrar con su token, que sigue siendo válido hasta una hora.
  */
 export async function POST(request: Request) {
-  const decoded = await verifyUser(request)
+  const decoded = await verifyUser(request, { checkAccount: true })
   if (decoded instanceof Response) return decoded
   const email = accountEmail(decoded)
   if (!email) return Response.json({ error: 'Tu cuenta de Google no tiene un mail verificado.' }, { status: 403 })

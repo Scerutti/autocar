@@ -59,3 +59,49 @@ export async function destroyImage(publicId: string): Promise<DestroyResult> {
   }
   return { ok: true, result: json.result ?? null }
 }
+
+/** Páginas de `deleteImagesByPrefix`: cada llamada a Cloudinary borra hasta 1000 fotos. */
+const PREFIX_DELETE_PAGES = 10
+
+/** Cómo terminó un borrado por carpeta: `ok` con cuántas fotos borró, o el mensaje del fallo (para los logs). */
+export type PrefixDeleteResult = { ok: true; deleted: number } | { ok: false; error: string }
+
+/**
+ * Borra todas las fotos cuyo `public_id` empieza con `prefix` (por ejemplo `autocar/{uid}/`, `accountImagePrefix`) con
+ * la Admin API de Cloudinary (`DELETE resources/image/upload?prefix=…`, autenticación básica con la api key y el
+ * secret; sólo desde el servidor, no pasa por la CSP). Cloudinary borra hasta 1000 por llamada y avisa con `partial`
+ * (y `next_cursor`) si quedan más: sigue hasta `PREFIX_DELETE_PAGES` llamadas. Una carpeta vacía o inexistente (404)
+ * cuenta como borrada, así se puede llamar de nuevo. Corta cada llamada a los 10 s.
+ */
+export async function deleteImagesByPrefix(prefix: string): Promise<PrefixDeleteResult> {
+  const config = cloudinaryConfig()
+  if (!config) return { ok: false, error: 'Cloudinary no está configurado' }
+  const authorization = `Basic ${Buffer.from(`${config.apiKey}:${config.apiSecret}`).toString('base64')}`
+  let cursor: string | null = null
+  let deleted = 0
+  for (let page = 0; page < PREFIX_DELETE_PAGES; page++) {
+    const query = new URLSearchParams({ prefix, invalidate: 'true' })
+    if (cursor) query.set('next_cursor', cursor)
+    let res: Response
+    try {
+      res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/resources/image/upload?${query}`, {
+        method: 'DELETE',
+        headers: { Authorization: authorization },
+        signal: AbortSignal.timeout(10_000),
+      })
+    } catch (e) {
+      console.error('Borrado por carpeta en Cloudinary', prefix, e)
+      return { ok: false, error: 'No se pudo contactar a Cloudinary' }
+    }
+    if (res.status === 404) return { ok: true, deleted }
+    const json = (await res.json().catch(() => ({}))) as { deleted?: Record<string, string>; partial?: boolean; next_cursor?: string }
+    if (!res.ok) {
+      console.error('Cloudinary rechazó el borrado por carpeta', prefix, res.status, json)
+      return { ok: false, error: 'Cloudinary rechazó el borrado' }
+    }
+    deleted += Object.values(json.deleted ?? {}).filter(v => v === 'deleted').length
+    if (!json.partial && !json.next_cursor) return { ok: true, deleted }
+    cursor = json.next_cursor ?? null
+  }
+  return { ok: false, error: 'Quedaron fotos sin borrar en Cloudinary' }
+}
