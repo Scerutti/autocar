@@ -7,7 +7,7 @@ import { AppShell } from '@/components/app-shell'
 import { BrandLogo } from '@/components/brand'
 import { NovedadesHost } from '@/components/novedades/novedades-host'
 import { OutboxSync } from '@/components/outbox/outbox'
-import { Loading } from '@/components/common'
+import { Loading, SignOutLabel } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/providers/auth-provider'
 import { DataProvider, useData } from '@/components/providers/data-provider'
@@ -24,7 +24,7 @@ const isPermissionDenied = (e: Error | null) => (e as { code?: string } | null)?
  * los efectos dos veces).
  */
 function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
-  const { getToken, signOut } = useAuth()
+  const { getToken, signOut, signingOut } = useAuth()
   const [failure, setFailure] = useState<string | null>(auto ? null : 'No pudimos cargar tu cuenta.')
   const started = useRef(false)
 
@@ -56,8 +56,14 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
         <Button onClick={() => void join()} size="lg" className="mt-6 h-11 w-full">
           Reintentar
         </Button>
-        <Button onClick={() => void signOut()} variant="ghost" size="lg" className="mt-2 h-11 w-full">
-          Salir
+        <Button
+          onClick={() => void signOut()}
+          disabled={signingOut != null}
+          variant="ghost"
+          size="lg"
+          className="mt-2 h-11 w-full gap-2"
+        >
+          <SignOutLabel phase={signingOut} />
         </Button>
       </div>
     </div>

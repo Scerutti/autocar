@@ -33,9 +33,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     void registerServiceWorker()
   }, [])
   return (
-    <AuthProvider>
-      <ConfirmProvider>{children}</ConfirmProvider>
+    <ConfirmProvider>
+      <AuthProvider>{children}</AuthProvider>
       <Toaster />
-    </AuthProvider>
+    </ConfirmProvider>
   )
 }
