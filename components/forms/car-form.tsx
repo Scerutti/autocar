@@ -608,7 +608,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { actor } = useData()
+  const { actor, invites } = useData()
   const { allRules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
 
@@ -632,7 +632,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     if (!confirmed) return
 
     router.replace('/')
-    const mark = markCarDeleted(actor, car.id)
+    const mark = markCarDeleted(actor, { invites }, car.id)
     try {
       toastSaved(`${name} borrado`, await settle(mark, `No se pudo borrar ${name}`))
     } catch (e) {

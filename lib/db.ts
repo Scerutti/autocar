@@ -843,10 +843,15 @@ export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car:
  * en el acto, también sin señal, y las reglas no dejan crear ni editar nada en un auto marcado. El historial, las
  * invitaciones y la foto los borra el servidor (`DELETE /api/cars/[carId]`, que la app llama cuando se confirma la
  * marca, o el barrido del cron si la app se cerró antes).
+ * En el mismo batch pasa a `revoked` las invitaciones pendientes del auto que tiene la app (`ctx.invites`: las mías,
+ * de `useData()`), así el invitado no las puede aceptar mientras el servidor no las borra (`ownerRevoke` en las reglas).
  */
-export async function markCarDeleted(actor: Actor, carId: string) {
+export async function markCarDeleted(actor: Actor, ctx: { invites: Invite[] }, carId: string) {
   const batch = writeBatch(firestore())
   batch.update(carDoc(carId), { deletedAt: serverTimestamp() })
+  ctx.invites
+    .filter(i => i.carId === carId && i.ownerUid === actor.uid && i.status === 'pending')
+    .forEach(i => batch.update(inviteDoc(i.id), { status: 'revoked' }))
   await batch.commit()
 }
 
