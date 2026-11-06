@@ -83,12 +83,14 @@ service cloud.firestore {
     // ownerUid, ownerName, members, memberUids y memberProfiles sólo los guarda cars/{carId}; members son hasta 2
     // mails en minúscula (lo viejo, hasta #66). Las reglas no tienen bucles: como en optIds, se acota la cantidad y el
     // largo de la lista unida (join falla, y la regla deniega, si hay algo que no es texto), y la lista unida tiene
-    // que estar en minúscula. Los miembros por uid los valida validMembers.
+    // que estar en minúscula. Los miembros por uid los valida validMembers. deletedAt es la marca de borrado
+    // (markCarDeleted): falta o es null en los autos vivos.
     function validCar(d) {
       return d.keys().hasOnly([
           'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
           'avgKmPerDay', 'photoUrl', 'photoPublicId', 'createdAt', 'ownerUid', 'ownerName', 'members',
-          'memberUids', 'memberProfiles'])
+          'memberUids', 'memberProfiles', 'deletedAt'])
+        && optTime(d, 'deletedAt')
         && optText(d, 'ownerUid', 128) && optText(d, 'ownerName', 200)
         && validMembers(d)
         && (d.get('members', null) == null
@@ -232,10 +234,10 @@ service cloud.firestore {
 
     // Una invitación nueva, o mandada de nuevo, como la escribe inviteMember: la manda el dueño del auto a su nombre,
     // el id es carId + '_' + emailKey, está pendiente y sin respuesta, vence en 15 días como mucho y no es para el
-    // mail del propio dueño.
+    // mail del propio dueño. No se invita a un auto marcado como borrado (ownsLiveCar).
     function freshInvite(inviteId) {
       let d = request.resource.data;
-      return validInvite(d) && isOwner(d.ownerUid) && ownsCar(d.carId)
+      return validInvite(d) && isOwner(d.ownerUid) && ownsLiveCar(d.carId)
         && inviteId == d.carId + '_' + d.emailKey
         && d.status == 'pending'
         && d.expiresAt <= request.time + duration.value(15, 'd')
@@ -291,10 +293,24 @@ service cloud.firestore {
       return isOwner(get(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
     }
 
+    // Si un auto (sus datos) no está marcado como borrado: falta deletedAt o es null. En un auto marcado no se crea ni se
+    // edita nada (el servidor lo termina de borrar con el Admin SDK, que no pasa por estas reglas).
+    function carAlive(car) {
+      return car.get('deletedAt', null) == null;
+    }
+
+    // Dueño de un auto sin marca de borrado, según el documento antes del pedido: lo usa crear una invitación.
+    function ownsLiveCar(carId) {
+      let car = get(/databases/$(database)/documents/cars/$(carId)).data;
+      return isOwner(car.ownerUid) && carAlive(car);
+    }
+
     // Dueño del auto según el documento después del pedido: lo usan crear y editar. createCar crea el auto y su
-    // primera lectura en el mismo batch, y con get() el auto todavía no existe para la regla de la lectura.
+    // primera lectura en el mismo batch, y con get() el auto todavía no existe para la regla de la lectura. El auto no
+    // puede quedar marcado como borrado (carAlive). Lee el auto una sola vez.
     function ownsCarAfter(carId) {
-      return isOwner(getAfter(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
+      let car = getAfter(/databases/$(database)/documents/cars/$(carId)).data;
+      return isOwner(car.ownerUid) && carAlive(car);
     }
 
     // Mail de quien pide, en minúscula: así se guarda en members y así lo busca la consulta de autos compartidos
@@ -331,19 +347,20 @@ service cloud.firestore {
     }
 
     // Miembro que puede escribir en el auto (no es viewer), según el documento después del pedido (crear y editar), como
-    // ownsCarAfter.
+    // ownsCarAfter: tampoco en un auto marcado como borrado.
     function writerOfCarAfter(carId) {
       let car = getAfter(/databases/$(database)/documents/cars/$(carId)).data;
-      return isMember(car) && memberRoleOf(car) != 'viewer';
+      return isMember(car) && memberRoleOf(car) != 'viewer' && carAlive(car);
     }
 
     // Un miembro crea un trabajo: si no es viewer y a su nombre, pending o rejected ("Deshacer"); si es trusted, también
-    // approved, sin reviewedAt y con revision 0 (nadie lo revisó). Lee el auto una sola vez.
+    // approved, sin reviewedAt y con revision 0 (nadie lo revisó). No en un auto marcado como borrado. Lee el auto una
+    // sola vez.
     function memberJobCreate(carId) {
       let car = getAfter(/databases/$(database)/documents/cars/$(carId)).data;
       let role = memberRoleOf(car);
       let d = request.resource.data;
-      return isMember(car) && role != 'viewer' && d.createdBy == request.auth.uid
+      return isMember(car) && role != 'viewer' && carAlive(car) && d.createdBy == request.auth.uid
         && (d.get('status', 'approved') in ['pending', 'rejected']
           || (role == 'trusted' && d.get('status', 'approved') == 'approved'
             && d.get('reviewedAt', null) == null && d.get('revision', 0) == 0));
@@ -459,6 +476,14 @@ service cloud.firestore {
         && before.get('members', []).toSet().hasAll(after.get('members', []));
     }
 
+    // El dueño marca el auto como borrado (markCarDeleted): sólo escribe deletedAt, con la hora del pedido
+    // (serverTimestamp). Un reintento lo vuelve a marcar; desmarcarlo no se puede.
+    // Quien pide ya es el dueño según el documento antes del pedido (lo revisa el match).
+    function ownerMarkDeleted() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedAt'])
+        && request.resource.data.deletedAt == request.time;
+    }
+
     // Lo que el dueño cambia de un trabajo. Editar sin revisarlo (mismo estado y mismo reviewedAt) no tiene condiciones
     // extra. Revisarlo (aprobar o rechazar: cambia el estado o reviewedAt) sólo vale para pasar un trabajo pendiente a
     // approved o rejected, o uno aprobado a rejected, y con la revisión que vio el dueño: si el miembro lo editó
@@ -491,17 +516,22 @@ service cloud.firestore {
     // cambia el rol (ownerRoleUpdate) y le puede pasar el auto a un miembro por uid (ownerTransfer); el miembro sólo
     // cambia el km (no si es viewer) o sale (memberCarUpdate),
     // y un invitado se suma aceptando (memberJoin). Los hijos guardan el carId de la ruta, y createdBy no cambia al
-    // editar.
+    // editar. Borrar: el dueño lo marca (ownerMarkDeleted) y desde ahí nadie cambia nada más del auto (carAlive antes
+    // y después del pedido) ni crea o edita sus hijos (ownsCarAfter, writerOfCarAfter, memberJobCreate); lo termina
+    // de borrar el servidor. El borrado directo (los hijos y después el auto) queda para la versión anterior de la PWA.
     match /cars/{carId} {
       allow read: if isOwner(resource.data.ownerUid) || isMember(resource.data);
       allow delete: if isOwner(resource.data.ownerUid);
-      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
+      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data)
+        && carAlive(request.resource.data);
       allow update: if validCar(request.resource.data)
-        && ((isOwner(resource.data.ownerUid)
-            && ((request.resource.data.ownerUid == resource.data.ownerUid && ownerMembersUpdate())
-              || ownerTransfer() || ownerRoleUpdate()))
-          || (isMember(resource.data) && memberCarUpdate())
-          || memberJoin(carId));
+        && ((isOwner(resource.data.ownerUid) && ownerMarkDeleted())
+          || (carAlive(resource.data) && carAlive(request.resource.data)
+            && ((isOwner(resource.data.ownerUid)
+                && ((request.resource.data.ownerUid == resource.data.ownerUid && ownerMembersUpdate())
+                  || ownerTransfer() || ownerRoleUpdate()))
+              || (isMember(resource.data) && memberCarUpdate())
+              || memberJoin(carId))));
 
       // El plan de mantenimiento es del dueño: los miembros sólo lo leen.
       match /rules/{ruleId} {
@@ -548,10 +578,11 @@ service cloud.firestore {
 
       // Los mismos permisos que las cargas, más el vínculo con la carga o el trabajo (linkedOk), que no cambia al
       // editar. Una lectura vinculada va a nombre de quien cargó el registro, así que el dueño puede escribir la de
-      // la carga de un miembro sin cambiar createdBy. El dueño borra cualquier lectura sin consultar el registro
-      // (deleteCar borra de a 450 y pasaría el tope de llamadas por pedido); el miembro, sólo las suyas y, si son
-      // vinculadas, cuando el registro ya no existe o no tiene km (linkedReleased). Borrar una lectura que no existe
-      // no tiene efecto y se acepta, para no tirar abajo el batch de la carga o el trabajo. Un viewer no escribe nada.
+      // la carga de un miembro sin cambiar createdBy. El dueño borra cualquier lectura sin consultar el registro (la
+      // versión anterior de la PWA borra el auto desde la app, de a 450, y pasaría el tope de llamadas por pedido); el
+      // miembro, sólo las suyas y, si son vinculadas, cuando el registro ya no existe o no tiene km (linkedReleased).
+      // Borrar una lectura que no existe no tiene efecto y se acepta, para no tirar abajo el batch de la carga o el
+      // trabajo. Un viewer no escribe nada.
       match /odometer/{readingId} {
         allow read: if ownsCar(carId) || memberOfCar(carId);
         allow delete: if ownsCar(carId)
