@@ -79,11 +79,23 @@ service cloud.firestore {
         && (uids.size() < 2 || validProfile(profiles[uids[1]]));
     }
 
-    // ownerUid, ownerName, memberUids y memberProfiles sólo los guarda cars/{carId}; los miembros los valida
-    // validMembers. members (los mails viejos) ya no da acceso: sólo se acepta vacío, porque la versión anterior de la
-    // PWA lo escribe así al crear un auto, al sacar un miembro, al salir y al pasar el auto (arrayRemove sobre un campo
-    // que no existe lo deja en []). Un auto con mails en members no se puede escribir: el script remove-member-emails
-    // los borra antes de publicar estas reglas.
+    // Los mails viejos de un auto (members), como lista; sin el campo o en null, vacía. Ya no dan acceso a nadie
+    // (isMember mira sólo memberUids): el script remove-member-emails los borra.
+    function memberEmails(d) {
+      return d.get('members', null) == null ? [] : d.members;
+    }
+
+    // Una escritura del auto no suma mails a members: los de después son parte de los de antes. La versión anterior de
+    // la PWA escribe members como [] o le saca mails (arrayRemove sobre un campo que no existe lo deja en []).
+    function membersNotGrown() {
+      return memberEmails(resource.data).toSet().hasAll(memberEmails(request.resource.data));
+    }
+
+    // ownerUid, ownerName, members, memberUids y memberProfiles sólo los guarda cars/{carId}; los miembros los valida
+    // validMembers. members (los mails viejos, que ya no dan acceso) puede faltar, ser null o tener la forma vieja:
+    // hasta 2 mails en minúscula (como en optIds, se acota la cantidad y el largo de la lista unida; join falla, y la
+    // regla deniega, si hay algo que no es texto). Así un auto al que todavía le quedan mails se sigue pudiendo
+    // escribir. Al crear, sólo vacío o sin el campo, y al editar no puede crecer (membersNotGrown).
     function validCar(d) {
       return d.keys().hasOnly([
           'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
@@ -91,7 +103,9 @@ service cloud.firestore {
           'memberUids', 'memberProfiles'])
         && optText(d, 'ownerUid', 128) && optText(d, 'ownerName', 200)
         && validMembers(d)
-        && (d.get('members', null) == null || (d.members is list && d.members.size() == 0))
+        && (d.get('members', null) == null
+          || (d.members is list && d.members.size() <= 2 && d.members.join(',').size() <= 2 * 320
+            && d.members.join(',') == d.members.join(',').lower()))
         && optText(d, 'brand', 200) && optText(d, 'model', 200) && optText(d, 'version', 200)
         && optNum(d, 'year') && optText(d, 'plate', 50)
         && (d.get('fuelTypes', null) == null || (d.fuelTypes is list && d.fuelTypes.hasOnly(['nafta', 'gnc', 'gasoil'])))
@@ -339,7 +353,7 @@ service cloud.firestore {
     }
 
     // Salir de un auto (leaveCar): saca mi uid de memberUids y mi perfil de memberProfiles, y nada más. La versión
-    // anterior de la PWA también manda members, que validCar sólo acepta vacío.
+    // anterior de la PWA también le saca mi mail a members (que no puede crecer: membersNotGrown en el match).
     function memberLeave() {
       let before = resource.data;
       let after = request.resource.data;
@@ -414,7 +428,7 @@ service cloud.firestore {
     // El dueño le pasa el auto a un miembro (transferCar): ownerUid pasa a ser un uid de memberUids que no es el mío; en
     // memberUids y memberProfiles sale el nuevo dueño (y con él su rol) y entro yo, con un perfil válido y sin role (paso
     // a ser miembro editor, con 2 como mucho); ownerName es el nombre del perfil del nuevo dueño, y no cambia nada más
-    // del auto (la versión anterior de la PWA también manda members, que validCar sólo acepta vacío). Las invitaciones
+    // del auto (la versión anterior de la PWA también le saca mails a members, que no puede crecer). Las invitaciones
     // del auto se borran en el mismo batch (las borra su dueño). Quien pide ya es el dueño según el documento antes del
     // pedido (lo revisa el match).
     function ownerTransfer() {
@@ -467,12 +481,14 @@ service cloud.firestore {
     // crea, borra y edita el auto, de los miembros sólo saca (ownerMembersUpdate), les cambia el rol (ownerRoleUpdate) y
     // le puede pasar el auto a un miembro (ownerTransfer); el miembro sólo cambia el km (no si es viewer) o sale
     // (memberCarUpdate), y un invitado se suma aceptando (memberJoin). Los hijos guardan el carId de la ruta, y
-    // createdBy no cambia al editar.
+    // createdBy no cambia al editar. Un auto nuevo no trae mails en members, y ninguna edición los suma
+    // (membersNotGrown, en todas las ramas de update).
     match /cars/{carId} {
       allow read: if isOwner(resource.data.ownerUid) || isMember(resource.data);
       allow delete: if isOwner(resource.data.ownerUid);
-      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data);
-      allow update: if validCar(request.resource.data)
+      allow create: if isOwner(request.resource.data.ownerUid) && validCar(request.resource.data)
+        && memberEmails(request.resource.data).size() == 0;
+      allow update: if validCar(request.resource.data) && membersNotGrown()
         && ((isOwner(resource.data.ownerUid)
             && ((request.resource.data.ownerUid == resource.data.ownerUid && ownerMembersUpdate())
               || ownerTransfer() || ownerRoleUpdate()))
