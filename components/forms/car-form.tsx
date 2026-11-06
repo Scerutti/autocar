@@ -298,10 +298,9 @@ const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${
  * pendientes (vencen a los `INVITE_DAYS` días; "Compartir", "Copiar link" y "Cancelar") y las rechazadas o vencidas,
  * que se pueden volver a mandar. El tope (`MAX_MEMBERS`) cuenta miembros e invitaciones pendientes. Cada cambio se
  * guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Compartir" abre el menú de
- * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro por uid se le puede
- * pasar el auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto. A un miembro por uid también se
- * le elige el rol (`ROLES`), con un control segmentado que se aplica al confirmar; uno sólo por el mail viejo no tiene
- * perfil, es `editor` y no muestra el control.
+ * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro se le puede pasar el
+ * auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto. A cada miembro también se le elige el rol
+ * (`ROLES`), con un control segmentado que se aplica al confirmar.
  */
 function ShareSection({ car }: { car: Car }) {
   const router = useRouter()
@@ -399,7 +398,7 @@ function ShareSection({ car }: { car: Car }) {
   }
 
   async function changeRole(member: CarMember, role: MemberRole) {
-    if (!member.uid || role === memberRole(car, member.uid)) return
+    if (role === memberRole(car, member.uid)) return
     const who = member.name ?? member.email
     const confirmed = await confirm({
       title: `¿Cambiar lo que puede hacer ${who}?`,
@@ -484,24 +483,22 @@ function ShareSection({ car }: { car: Car }) {
       {rows > 0 && (
         <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
           {members.map(m => (
-            <li key={m.uid ?? m.email} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
+            <li key={m.uid} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm">{m.name ?? m.email}</p>
                 {m.name && <p className="truncate text-xs text-muted-foreground">{m.email}</p>}
               </div>
-              {m.uid && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`Pasarle el auto a ${m.name ?? m.email}`}
-                  className="gap-1.5"
-                  disabled={busy}
-                  onClick={() => void transfer(m)}
-                >
-                  <KeyRound /> Pasarle el auto
-                </Button>
-              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`Pasarle el auto a ${m.name ?? m.email}`}
+                className="gap-1.5"
+                disabled={busy}
+                onClick={() => void transfer(m)}
+              >
+                <KeyRound /> Pasarle el auto
+              </Button>
               <Button
                 type="button"
                 variant="ghost"
@@ -512,16 +509,14 @@ function ShareSection({ car }: { car: Car }) {
               >
                 <UserMinus /> Sacar
               </Button>
-              {m.uid && (
-                <Segmented
-                  value={memberRole(car, m.uid)}
-                  onChange={role => void changeRole(m, role)}
-                  options={ROLE_OPTIONS}
-                  aria-label={`Qué puede hacer ${m.name ?? m.email}`}
-                  disabled={busy}
-                  className="w-full"
-                />
-              )}
+              <Segmented
+                value={memberRole(car, m.uid)}
+                onChange={role => void changeRole(m, role)}
+                options={ROLE_OPTIONS}
+                aria-label={`Qué puede hacer ${m.name ?? m.email}`}
+                disabled={busy}
+                className="w-full"
+              />
             </li>
           ))}
           {open.map(i => (

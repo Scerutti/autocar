@@ -46,7 +46,8 @@ const car = (extra: Partial<Car> = {}): Car => ({
   createdAt: new Date('2026-06-01T12:00:00'),
   ownerUid: OWNER,
   ownerName: 'Ana',
-  members: ['beto@gmail.com'],
+  memberUids: [MEMBER],
+  memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: null } },
   ...extra,
 })
 
@@ -206,13 +207,9 @@ describe('permisos', () => {
 
   it('un auto está compartido si tiene miembros o si me lo compartieron', () => {
     expect(isSharedCar(car(), OWNER)).toBe(true)
-    expect(isSharedCar(car({ members: [] }), OWNER)).toBe(false)
-    expect(isSharedCar(car({ members: [] }), MEMBER)).toBe(true)
-  })
-
-  it('cuenta los miembros por uid aunque no estén en el mail viejo', () => {
-    expect(isSharedCar(car({ members: [], memberUids: [MEMBER] }), OWNER)).toBe(true)
-    expect(isSharedCar(car({ members: [], memberUids: [] }), OWNER)).toBe(false)
+    expect(isSharedCar(car({ memberUids: [], memberProfiles: {} }), OWNER)).toBe(false)
+    expect(isSharedCar(car({ memberUids: undefined, memberProfiles: undefined }), OWNER)).toBe(false)
+    expect(isSharedCar(car({ memberUids: [], memberProfiles: {} }), MEMBER)).toBe(true)
   })
 })
 
@@ -294,20 +291,20 @@ describe('invitaciones', () => {
 })
 
 describe('carMembers', () => {
-  it('lista los miembros por uid y los mails viejos que no son de ninguno', () => {
+  it('lista los miembros de memberUids, en orden, con su perfil', () => {
     const c = car({
-      members: ['j.doe@gmail.com', 'beto@gmail.com'],
-      memberUids: [MEMBER],
-      memberProfiles: { [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' } },
+      memberUids: [MEMBER, 'other-uid'],
+      memberProfiles: { [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' }, 'other-uid': { email: 'caro@gmail.com', name: null } },
     })
     expect(carMembers(c)).toEqual([
       { uid: MEMBER, email: 'jdoe@gmail.com', name: 'Juan' },
-      { uid: null, email: 'beto@gmail.com', name: null },
+      { uid: 'other-uid', email: 'caro@gmail.com', name: null },
     ])
   })
 
-  it('sin los campos nuevos, sólo los mails viejos', () => {
-    expect(carMembers(car())).toEqual([{ uid: null, email: 'beto@gmail.com', name: null }])
+  it('sin miembros, o sin los campos, la lista está vacía', () => {
+    expect(carMembers(car({ memberUids: [], memberProfiles: {} }))).toEqual([])
+    expect(carMembers(car({ memberUids: undefined, memberProfiles: undefined }))).toEqual([])
   })
 })
 
@@ -316,7 +313,6 @@ describe('transferPatch', () => {
   const me = { uid: OWNER, email: ' Ana@Gmail.com ', name: 'Ana' }
   const shared = (extra: Partial<Car> = {}) =>
     car({
-      members: ['j.doe@gmail.com', 'beto@gmail.com'],
       memberUids: [MEMBER, OTHER],
       memberProfiles: {
         [MEMBER]: { email: 'jdoe@gmail.com', name: 'Juan' },
@@ -331,15 +327,13 @@ describe('transferPatch', () => {
       ownerName: 'Juan',
       memberUids: [OTHER, OWNER],
       memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
-      members: ['beto@gmail.com'],
     })
   })
 
-  it('sin nombre en el perfil, ownerName null; sólo saca los mails viejos del nuevo dueño', () => {
+  it('sin nombre en el perfil, ownerName null', () => {
     const patch = transferPatch(shared(), { uid: OTHER }, me)
     expect(patch.ownerName).toBeNull()
     expect(patch.memberUids).toEqual([MEMBER, OWNER])
-    expect(patch.members).toEqual(['j.doe@gmail.com', 'beto@gmail.com'])
   })
 
   it('el dueño anterior entra sin rol (editor), aunque el nuevo dueño tuviera uno', () => {
@@ -352,21 +346,16 @@ describe('transferPatch', () => {
     expect(transferPatch(c, { uid: MEMBER }, me).memberProfiles).toEqual({ [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } })
   })
 
-  it('sin members, la lista queda vacía', () => {
-    expect(transferPatch(shared({ members: undefined }), { uid: MEMBER }, me).members).toEqual([])
-  })
-
-  it('no se le pasa a un miembro sólo por el mail viejo, a alguien que no es miembro ni a mí', () => {
-    expect(() => transferPatch(shared(), { uid: null }, me)).toThrow()
+  it('no se le pasa a alguien que no es miembro ni a mí', () => {
     expect(() => transferPatch(shared(), { uid: 'stranger-uid' }, me)).toThrow()
     expect(() => transferPatch(shared({ memberUids: [MEMBER, OWNER] }), { uid: OWNER }, me)).toThrow()
   })
 })
 
 describe('memberError', () => {
-  const c = car({ members: [], memberUids: [], memberProfiles: {} })
+  const c = car({ memberUids: [], memberProfiles: {} })
   const ctx = { ownerEmail: 'ana@gmail.com', now: NOW }
-  const withUid = (email: string) => car({ members: [], memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email, name: null } } })
+  const withUid = (email: string) => car({ memberUids: [MEMBER], memberProfiles: { [MEMBER]: { email, name: null } } })
 
   it('acepta un mail nuevo en minúscula', () => {
     expect(memberError(c, [], 'caro@gmail.com', ctx)).toBeNull()
@@ -390,7 +379,7 @@ describe('memberError', () => {
     expect(memberError(c, [], 'ana@gmail.com', { ...ctx, ownerEmail: 'Ana@Gmail.com' })).not.toBeNull()
   })
 
-  it('rechaza el mail de un miembro, por uid o por el mail viejo', () => {
+  it('rechaza el mail de un miembro, también escrito de otra forma', () => {
     expect(memberError(withUid('caro@gmail.com'), [], 'c.aro@gmail.com', ctx)).not.toBeNull()
     expect(memberError(car(), [], 'beto@gmail.com', ctx)).not.toBeNull()
   })
@@ -429,7 +418,13 @@ describe('approvedJobs', () => {
 
 describe('mineForAchievements', () => {
   const own = car({ id: 'own', ownerUid: OWNER })
-  const shared = car({ id: 'shared', ownerUid: 'other-uid', ownerName: 'Caro', members: ['ana@gmail.com'] })
+  const shared = car({
+    id: 'shared',
+    ownerUid: 'other-uid',
+    ownerName: 'Caro',
+    memberUids: [OWNER],
+    memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+  })
   const data = {
     cars: [own, shared],
     rules: [rule({ id: 'r-own', carId: 'own' }), rule({ id: 'r-shared', carId: 'shared' })],

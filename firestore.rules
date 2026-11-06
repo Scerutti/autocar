@@ -66,7 +66,7 @@ service cloud.firestore {
         && p.get('role', 'editor') in ['editor', 'trusted', 'viewer'];
     }
 
-    // memberUids son hasta 2 uids distintos (como en members, se acota el largo de la lista unida). memberProfiles
+    // memberUids son hasta 2 uids distintos (como en optIds, se acota el largo de la lista unida). memberProfiles
     // tiene un perfil por cada uno y ninguna otra clave; sin bucles, se valida el perfil de cada posición de la lista.
     // Los dos pueden faltar: los autos creados con la versión anterior de la PWA no los tienen.
     function validMembers(d) {
@@ -79,10 +79,11 @@ service cloud.firestore {
         && (uids.size() < 2 || validProfile(profiles[uids[1]]));
     }
 
-    // ownerUid, ownerName, members, memberUids y memberProfiles sólo los guarda cars/{carId}; members son hasta 2
-    // mails en minúscula (lo viejo, hasta #66). Las reglas no tienen bucles: como en optIds, se acota la cantidad y el
-    // largo de la lista unida (join falla, y la regla deniega, si hay algo que no es texto), y la lista unida tiene
-    // que estar en minúscula. Los miembros por uid los valida validMembers.
+    // ownerUid, ownerName, memberUids y memberProfiles sólo los guarda cars/{carId}; los miembros los valida
+    // validMembers. members (los mails viejos) ya no da acceso: sólo se acepta vacío, porque la versión anterior de la
+    // PWA lo escribe así al crear un auto, al sacar un miembro, al salir y al pasar el auto (arrayRemove sobre un campo
+    // que no existe lo deja en []). Un auto con mails en members no se puede escribir: el script remove-member-emails
+    // los borra antes de publicar estas reglas.
     function validCar(d) {
       return d.keys().hasOnly([
           'brand', 'model', 'version', 'year', 'plate', 'fuelTypes', 'currentKm', 'kmUpdatedAt',
@@ -90,9 +91,7 @@ service cloud.firestore {
           'memberUids', 'memberProfiles'])
         && optText(d, 'ownerUid', 128) && optText(d, 'ownerName', 200)
         && validMembers(d)
-        && (d.get('members', null) == null
-          || (d.members is list && d.members.size() <= 2 && d.members.join(',').size() <= 2 * 320
-            && d.members.join(',') == d.members.join(',').lower()))
+        && (d.get('members', null) == null || (d.members is list && d.members.size() == 0))
         && optText(d, 'brand', 200) && optText(d, 'model', 200) && optText(d, 'version', 200)
         && optNum(d, 'year') && optText(d, 'plate', 50)
         && (d.get('fuelTypes', null) == null || (d.fuelTypes is list && d.fuelTypes.hasOnly(['nafta', 'gnc', 'gasoil'])))
@@ -296,19 +295,11 @@ service cloud.firestore {
       return isOwner(getAfter(/databases/$(database)/documents/cars/$(carId)).data.ownerUid);
     }
 
-    // Mail de quien pide, en minúscula: así se guarda en members y así lo busca la consulta de autos compartidos
-    // (where('members', 'array-contains', mail en minúscula)). Tiene que ser el mismo valor para que Firestore
-    // pueda probar la regla de lectura con esa consulta.
-    function myEmail() {
-      return request.auth.token.email.lower();
-    }
-
-    // Miembro de un auto, según sus datos: una cuenta registrada cuyo uid está en memberUids (aceptó una invitación)
-    // o, hasta #66, cuyo mail está en members. Si al auto le falta uno de los dos campos, esa mitad da error y el ||
-    // decide con la otra. Así se prueban las dos consultas de autos compartidos (por memberUids y por members).
+    // Miembro de un auto, según sus datos: una cuenta registrada cuyo uid está en memberUids (aceptó una invitación).
+    // El mail no da acceso. Si al auto le falta memberUids, da error y se deniega. Así se prueba la consulta de autos
+    // compartidos (where('memberUids', 'array-contains', uid)).
     function isMember(car) {
-      return request.auth != null && isAllowed()
-        && (request.auth.uid in car.memberUids || myEmail() in car.members);
+      return request.auth != null && isAllowed() && request.auth.uid in car.memberUids;
     }
 
     // Miembro del auto según el documento antes del pedido (leer), como ownsCar.
@@ -316,8 +307,7 @@ service cloud.firestore {
       return isMember(get(/databases/$(database)/documents/cars/$(carId)).data);
     }
 
-    // Rol de quien pide en un auto (sus datos): el role de su perfil en memberProfiles. Sin perfil (un miembro sólo por
-    // el mail viejo de members) o sin role, editor.
+    // Rol de quien pide en un auto (sus datos): el role de su perfil en memberProfiles. Sin perfil o sin role, editor.
     function memberRoleOf(car) {
       return car.get('memberProfiles', {}).get(request.auth.uid, {}).get('role', 'editor');
     }
@@ -348,33 +338,23 @@ service cloud.firestore {
             && d.get('reviewedAt', null) == null && d.get('revision', 0) == 0));
     }
 
-    // Salir de un auto al que entré por invitación (leaveCar): saca mi uid de memberUids, mi perfil de memberProfiles
-    // y, si está, mi mail de members, y nada más.
+    // Salir de un auto (leaveCar): saca mi uid de memberUids y mi perfil de memberProfiles, y nada más. La versión
+    // anterior de la PWA también manda members, que validCar sólo acepta vacío.
     function memberLeave() {
       let before = resource.data;
       let after = request.resource.data;
       return request.auth.uid in before.get('memberUids', [])
         && after.diff(before).affectedKeys().hasOnly(['memberUids', 'memberProfiles', 'members'])
         && after.get('memberUids', []).toSet() == before.get('memberUids', []).toSet().difference([request.auth.uid].toSet())
-        && after.get('memberProfiles', {}).diff(before.get('memberProfiles', {})).affectedKeys().hasOnly([request.auth.uid])
-        && after.get('members', []).toSet() == before.get('members', []).toSet().difference([myEmail()].toSet());
-    }
-
-    // Salir como lo hace la versión anterior de la PWA: sacar sólo mi mail de members. Vale únicamente si mi uid no está
-    // en memberUids; si no, seguiría viendo el auto por el uid creyendo que salió.
-    function legacyMemberLeave() {
-      return !(request.auth.uid in resource.data.get('memberUids', []))
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
-        && request.resource.data.members.toSet() == resource.data.members.toSet().difference([myEmail()].toSet());
+        && after.get('memberProfiles', {}).diff(before.get('memberProfiles', {})).affectedKeys().hasOnly([request.auth.uid]);
     }
 
     // Lo único que un miembro cambia del auto: el km (al cargar km o una carga, o cuando la app lo corrige sola; un
-    // viewer no) o salir (memberLeave, o legacyMemberLeave desde la versión anterior de la PWA; también un viewer).
+    // viewer no) o salir (memberLeave; también un viewer).
     function memberCarUpdate() {
       return (memberRoleOf(resource.data) != 'viewer'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentKm', 'kmUpdatedAt', 'avgKmPerDay']))
-        || memberLeave()
-        || legacyMemberLeave();
+        || memberLeave();
     }
 
     // Un invitado se suma al auto (acceptInvite): sólo agrega su uid al final de memberUids (con 2 como mucho) y su
@@ -399,15 +379,13 @@ service cloud.firestore {
         && getAfter(invite).data.acceptedUid == request.auth.uid;
     }
 
-    // Lo que el dueño cambia de los miembros: sólo sacar. No suma mails a members (la versión anterior de la PWA
-    // compartía así, sin que la otra persona aceptara) ni uids a memberUids, ni agrega o cambia perfiles: al auto se
-    // entra sólo aceptando una invitación (memberJoin).
+    // Lo que el dueño cambia de los miembros: sólo sacar. No suma uids a memberUids ni agrega o cambia perfiles: al auto
+    // se entra sólo aceptando una invitación (memberJoin).
     function ownerMembersUpdate() {
       let before = resource.data;
       let after = request.resource.data;
       let profiles = after.get('memberProfiles', {}).diff(before.get('memberProfiles', {}));
-      return before.get('members', []).toSet().hasAll(after.get('members', []))
-        && before.get('memberUids', []).toSet().hasAll(after.get('memberUids', []))
+      return before.get('memberUids', []).toSet().hasAll(after.get('memberUids', []))
         && profiles.addedKeys().size() == 0 && profiles.changedKeys().size() == 0;
     }
 
@@ -433,11 +411,12 @@ service cloud.firestore {
         && (uids.size() < 2 || onlyRoleChanged(bp, ap, uids[1]));
     }
 
-    // El dueño le pasa el auto a un miembro por uid (transferCar): ownerUid pasa a ser un uid de memberUids que no es
-    // el mío; en memberUids y memberProfiles sale el nuevo dueño (y con él su rol) y entro yo, con un perfil válido y
-    // sin role (paso a ser miembro editor, con 2 como mucho); ownerName es el nombre del perfil del nuevo dueño; de members sólo se sacan mails, y
-    // no cambia nada más del auto. Las invitaciones del auto se borran en el mismo batch (las borra su dueño). Quien
-    // pide ya es el dueño según el documento antes del pedido (lo revisa el match).
+    // El dueño le pasa el auto a un miembro (transferCar): ownerUid pasa a ser un uid de memberUids que no es el mío; en
+    // memberUids y memberProfiles sale el nuevo dueño (y con él su rol) y entro yo, con un perfil válido y sin role (paso
+    // a ser miembro editor, con 2 como mucho); ownerName es el nombre del perfil del nuevo dueño, y no cambia nada más
+    // del auto (la versión anterior de la PWA también manda members, que validCar sólo acepta vacío). Las invitaciones
+    // del auto se borran en el mismo batch (las borra su dueño). Quien pide ya es el dueño según el documento antes del
+    // pedido (lo revisa el match).
     function ownerTransfer() {
       let before = resource.data;
       let after = request.resource.data;
@@ -454,8 +433,7 @@ service cloud.firestore {
         && profiles.changedKeys().size() == 0
         && validProfile(after.memberProfiles[request.auth.uid])
         && !('role' in after.memberProfiles[request.auth.uid])
-        && after.get('ownerName', null) == before.memberProfiles[to].get('name', null)
-        && before.get('members', []).toSet().hasAll(after.get('members', []));
+        && after.get('ownerName', null) == before.memberProfiles[to].get('name', null);
     }
 
     // Lo que el dueño cambia de un trabajo. Editar sin revisarlo (mismo estado y mismo reviewedAt) no tiene condiciones
@@ -485,12 +463,11 @@ service cloud.firestore {
 
     // Rutas: sólo las que usa la app (lib/db.ts). Cualquier otra queda negada.
     // Los autos son documentos de primer nivel con dueño y hasta 2 miembros. Leen el dueño y los miembros: el
-    // cliente pide los suyos por ownerUid y los compartidos por memberUids y, hasta #66, por members, que es lo que
-    // piden estas reglas. El dueño crea, borra y edita el auto, de los miembros sólo saca (ownerMembersUpdate), les
-    // cambia el rol (ownerRoleUpdate) y le puede pasar el auto a un miembro por uid (ownerTransfer); el miembro sólo
-    // cambia el km (no si es viewer) o sale (memberCarUpdate),
-    // y un invitado se suma aceptando (memberJoin). Los hijos guardan el carId de la ruta, y createdBy no cambia al
-    // editar.
+    // cliente pide los suyos por ownerUid y los compartidos por memberUids, que es lo que piden estas reglas. El dueño
+    // crea, borra y edita el auto, de los miembros sólo saca (ownerMembersUpdate), les cambia el rol (ownerRoleUpdate) y
+    // le puede pasar el auto a un miembro (ownerTransfer); el miembro sólo cambia el km (no si es viewer) o sale
+    // (memberCarUpdate), y un invitado se suma aceptando (memberJoin). Los hijos guardan el carId de la ruta, y
+    // createdBy no cambia al editar.
     match /cars/{carId} {
       allow read: if isOwner(resource.data.ownerUid) || isMember(resource.data);
       allow delete: if isOwner(resource.data.ownerUid);

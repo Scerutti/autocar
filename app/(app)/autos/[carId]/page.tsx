@@ -386,7 +386,7 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
 function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { actor, email } = useData()
+  const { actor } = useData()
   const members = carMembers(car)
   const name = carName(car)
 
@@ -400,7 +400,7 @@ function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
     })
     if (!confirmed) return
     router.replace('/')
-    runInBackground(leaveCar(actor, car, email), `No se pudo salir de ${name}`)
+    runInBackground(leaveCar(actor, car), `No se pudo salir de ${name}`)
     toast.success(`Saliste de ${name}`)
   }
 

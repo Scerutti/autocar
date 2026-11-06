@@ -56,11 +56,6 @@ export interface Car {
   /** Uid del dueño. Opcional en el tipo porque el cron y los logros arman autos sin él; lib/db.ts siempre lo completa. */
   ownerUid?: string
   ownerName?: string | null
-  /**
-   * Mails en minúscula de las personas con las que el dueño compartió el auto antes de las invitaciones (hasta 2). El
-   * dueño no figura. Sólo se leen y se sacan: se borra en #66.
-   */
-  members?: string[]
   /** Uids de las personas que aceptaron una invitación al auto (hasta 2). El dueño no figura. */
   memberUids?: string[]
   /** Mail y nombre de cada miembro, por uid: para mostrarlos. Tiene las mismas claves que `memberUids`. */

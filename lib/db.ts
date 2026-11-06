@@ -148,7 +148,6 @@ function carFrom(d: QueryDocumentSnapshot<DocumentData>): Car {
     createdAt: toDate(x.createdAt) ?? new Date(0),
     ownerUid: str(x.ownerUid) ?? '',
     ownerName: str(x.ownerName),
-    members: strings(x.members),
     memberUids: strings(x.memberUids),
     memberProfiles: profilesFrom(x.memberProfiles),
   }
@@ -301,7 +300,7 @@ interface CarListeners {
   fromCache: Partial<Record<RelatedName, boolean>>
 }
 
-/** Una de las tres consultas de autos (los míos, los compartidos por uid y por el mail viejo), con su última foto. */
+/** Una de las dos consultas de autos (los míos y los que me compartieron), con su última foto. */
 interface CarQuery {
   ready: boolean
   fromCache: boolean
@@ -313,11 +312,10 @@ interface CarQuery {
  * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
  * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
  *
- * Los autos salen de tres consultas, las que pide la regla de lectura: los míos (`ownerUid`), los que me
- * compartieron por invitación (`memberUids` contiene mi uid) y, hasta #66, los compartidos por el mail viejo
- * (`members` contiene mi mail en minúscula; sin `email` no se abre). La lista de autos es la unión por id, y sale
- * cuando las tres entregaron su primera foto. Si una de compartidos falla con `permission-denied` (la app publicada
- * antes que las reglas nuevas), cuenta como "sin autos compartidos" y no como un error.
+ * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
+ * compartieron por invitación (`memberUids` contiene mi uid). La lista de autos es la unión por id, y sale cuando las
+ * dos entregaron su primera foto. Si la de compartidos falla con `permission-denied` (la app publicada antes que las
+ * reglas nuevas), cuenta como "sin autos compartidos" y no como un error.
  *
  * Las invitaciones salen de dos consultas: las que mandé como dueño (`ownerUid`, parte `invites`) y las pendientes
  * para mi mail canónico (`emailKey` y `status == 'pending'`, parte `myInvites`; sin `email`, vacía). Si fallan con
@@ -423,8 +421,7 @@ export function subscribeUserData(
 
   const owned: CarQuery = { ready: false, fromCache: true, docs: [] }
   const byUid: CarQuery = { ready: false, fromCache: true, docs: [] }
-  const byMail: CarQuery = { ready: !email, fromCache: false, docs: [] }
-  const carQueries = [owned, byUid, byMail]
+  const carQueries = [owned, byUid]
 
   const publishCars = () => {
     if (carQueries.some(q => !q.ready)) return
@@ -469,9 +466,6 @@ export function subscribeUserData(
 
   subs.push(listenCars(owned, query(carsCol(), where('ownerUid', '==', uid)), onError))
   subs.push(listenCars(byUid, query(carsCol(), where('memberUids', 'array-contains', uid)), sharedFailed(byUid)))
-  if (email) {
-    subs.push(listenCars(byMail, query(carsCol(), where('members', 'array-contains', email)), sharedFailed(byMail)))
-  }
 
   const listenInvites = (part: 'invites' | 'myInvites', q: Query<DocumentData>) =>
     onSnapshot(
@@ -659,7 +653,6 @@ export async function createCar(actor: Actor, data: CarInput, initialKm: number,
     ...data,
     ownerUid: actor.uid,
     ownerName: actor.name,
-    members: [],
     memberUids: [],
     memberProfiles: {},
     currentKm: initialKm,
@@ -755,42 +748,25 @@ export async function declineInvite(actor: Actor, invite: Invite) {
 }
 
 /**
- * El dueño saca a un miembro: su uid de `memberUids`, su perfil de `memberProfiles` y los mails viejos de `members`
- * que son suyos (comparados con `canonicalEmail`). Un miembro sólo por el mail viejo (`uid` null) sale de `members`.
- * Va con arrayRemove y no con la lista que tiene la app, así un cambio hecho en otro dispositivo no se pisa.
+ * El dueño saca a un miembro: su uid de `memberUids` y su perfil de `memberProfiles`. Va con arrayRemove y no con la
+ * lista que tiene la app, así un cambio hecho en otro dispositivo no se pisa.
  */
 export async function removeMember(actor: Actor, car: Car, member: CarMember) {
-  const key = canonicalEmail(member.email)
-  const mails = [member.email, ...(car.members ?? []).filter(m => canonicalEmail(m) === key)]
   const batch = writeBatch(firestore())
-  batch.update(
-    carDoc(car.id),
-    member.uid
-      ? { memberUids: arrayRemove(member.uid), [`memberProfiles.${member.uid}`]: deleteField(), members: arrayRemove(...mails) }
-      : { members: arrayRemove(...mails) },
-  )
+  batch.update(carDoc(car.id), { memberUids: arrayRemove(member.uid), [`memberProfiles.${member.uid}`]: deleteField() })
+  await batch.commit()
+}
+
+/** El miembro sale de un auto compartido: saca su uid y su perfil. Lo que cargó queda en el auto. */
+export async function leaveCar(actor: Actor, car: Car) {
+  const batch = writeBatch(firestore())
+  batch.update(carDoc(car.id), { memberUids: arrayRemove(actor.uid), [`memberProfiles.${actor.uid}`]: deleteField() })
   await batch.commit()
 }
 
 /**
- * El miembro sale de un auto compartido. Si entró por invitación saca su uid, su perfil y, si está, su mail viejo
- * (`email`, el del login en minúscula); si sólo está por el mail viejo, saca el mail. Lo que cargó queda en el auto.
- */
-export async function leaveCar(actor: Actor, car: Car, email: string | null) {
-  const mail = email ? { members: arrayRemove(normalizeEmail(email)) } : {}
-  const batch = writeBatch(firestore())
-  batch.update(
-    carDoc(car.id),
-    car.memberUids?.includes(actor.uid)
-      ? { memberUids: arrayRemove(actor.uid), [`memberProfiles.${actor.uid}`]: deleteField(), ...mail }
-      : mail,
-  )
-  await batch.commit()
-}
-
-/**
- * El dueño le cambia el rol a un miembro por uid (uno sólo por el mail viejo no tiene perfil y es `editor`): `update`
- * sólo de `memberProfiles.{uid}.role` (`setRolePatch`), y nada más del auto. Lo que el miembro ya cargó no cambia: un
+ * El dueño le cambia el rol a un miembro: `update` sólo de `memberProfiles.{uid}.role` (`setRolePatch`), y nada más
+ * del auto. Lo que el miembro ya cargó no cambia: un
  * trabajo pendiente sigue esperando la aprobación aunque pase a `trusted`.
  */
 export async function setMemberRole(actor: Actor, car: Car, uid: string, role: MemberRole) {
@@ -800,13 +776,12 @@ export async function setMemberRole(actor: Actor, car: Car, uid: string, role: M
 }
 
 /**
- * El dueño le pasa el auto a un miembro por uid (`to.uid`; uno sólo por el mail viejo no lo puede recibir). En un mismo
- * batch, el auto cambia de dueño con `transferPatch` (el nuevo dueño sale de `memberUids`, de `memberProfiles` con
- * `deleteField()` y sus mails viejos de `members`; yo entro como miembro con mi perfil: `myEmail`, el mail de mi login,
- * y mi nombre) y se borran todas las invitaciones del auto, con cualquier estado (`ctx.invites`: las mías, de
- * `useData()`): el id de una invitación es fijo y sólo la puede volver a mandar o borrar su dueño, así que el nuevo
- * dueño no podría invitar a esos mails ni borrarlas con el auto. `memberUids` y `members` van como listas enteras, no
- * con arrayUnion/arrayRemove, porque la regla (`ownerTransfer`) compara los conjuntos.
+ * El dueño le pasa el auto a un miembro (`to.uid`). En un mismo batch, el auto cambia de dueño con `transferPatch` (el
+ * nuevo dueño sale de `memberUids` y de `memberProfiles` con `deleteField()`; yo entro como miembro con mi perfil:
+ * `myEmail`, el mail de mi login, y mi nombre) y se borran todas las invitaciones del auto, con cualquier estado
+ * (`ctx.invites`: las mías, de `useData()`): el id de una invitación es fijo y sólo la puede volver a mandar o borrar su
+ * dueño, así que el nuevo dueño no podría invitar a esos mails ni borrarlas con el auto. `memberUids` va como lista
+ * entera, no con arrayUnion/arrayRemove, porque la regla (`ownerTransfer`) compara los conjuntos.
  */
 export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car: Car, to: CarMember, myEmail: string | null) {
   const patch = transferPatch(car, to, { uid: actor.uid, email: myEmail ?? '', name: actor.name })
@@ -816,7 +791,6 @@ export async function transferCar(actor: Actor, ctx: { invites: Invite[] }, car:
     ownerUid: patch.ownerUid,
     ownerName: patch.ownerName,
     memberUids: patch.memberUids,
-    members: patch.members,
     ...profiles,
     [`memberProfiles.${patch.ownerUid}`]: deleteField(),
   })
