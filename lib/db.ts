@@ -1250,9 +1250,15 @@ export async function savePushSubscription(uid: string, sub: PushSubscriptionJSO
   })
 }
 
-export async function deletePushSubscription(uid: string, endpoint: string) {
+/**
+ * Borra la suscripción push `endpoint` de `uid`. `shouldContinue` se consulta después de calcular el id y antes de
+ * tocar Firestore: si da false no escribe nada (al salir, para no volver a abrir Firestore si ya se pasó del tope).
+ */
+export async function deletePushSubscription(uid: string, endpoint: string, shouldContinue: () => boolean = () => true) {
+  const id = await sha256(endpoint)
+  if (!shouldContinue()) return
   const batch = writeBatch(firestore())
-  batch.delete(doc(userCol(uid, 'pushSubscriptions'), await sha256(endpoint)))
+  batch.delete(doc(userCol(uid, 'pushSubscriptions'), id))
   await batch.commit()
 }
 

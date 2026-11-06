@@ -23,3 +23,6 @@ next-env.d.ts
 
 # Config local de Claude Code
 .claude/
+
+# Respaldo local de scripts/cleanup-legacy.mjs (datos de usuarios)
+legacy-backup-*.json

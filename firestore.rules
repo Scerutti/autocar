@@ -612,29 +612,26 @@ service cloud.firestore {
       allow read, delete: if isOwner(uid);
       allow create, update: if isOwner(uid) && validSettings(request.resource.data);
 
+      // Estructura de antes de la 1.1.2 (cars, rules, jobs, fuel, odometer): la app ya no la usa. Sólo se lee y se borra;
+      // los datos ya copiados a cars/{carId}/… los borra scripts/cleanup-legacy.mjs.
       match /cars/{carId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validCar(request.resource.data);
       }
 
       match /rules/{ruleId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validRule(request.resource.data);
       }
 
       match /jobs/{jobId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validJob(request.resource.data);
       }
 
       match /fuel/{fuelId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validFuel(request.resource.data);
       }
 
       match /odometer/{readingId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && validReading(request.resource.data);
       }
 
       // El id es el SHA-256 (hex) del endpoint.
