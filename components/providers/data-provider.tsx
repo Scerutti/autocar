@@ -1,13 +1,49 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { groupByCar } from '@/lib/by-car'
 import { subscribeUserData, syncCarKm, syncRuleProjection, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
-import { activeRules, isCompleted, projectionDiff, projectionKey, projectRules, rulesWithState, type RuleWithState } from '@/lib/maintenance'
+import {
+  activeRules,
+  isCompleted,
+  projectionDiff,
+  projectionKey,
+  projectRule,
+  projectRules,
+  rulesWithState,
+  type RuleWithState,
+} from '@/lib/maintenance'
 import { kmCorrection, topReading } from '@/lib/odometer'
 import { canWrite, isCarOwner, isInviteOpen } from '@/lib/sharing'
-import { DEFAULT_SETTINGS, type Actor, type Car, type Invite, type MaintenanceRule } from '@/lib/types'
+import {
+  DEFAULT_SETTINGS,
+  type Actor,
+  type Car,
+  type FuelLoad,
+  type Invite,
+  type Job,
+  type MaintenanceRule,
+  type OdometerReading,
+} from '@/lib/types'
 import { useAuth } from './auth-provider'
+
+/** Los registros de un auto: mantenimientos (con la proyección en memoria), trabajos, cargas y lecturas de km. */
+interface CarData {
+  rules: MaintenanceRule[]
+  jobs: Job[]
+  fuel: FuelLoad[]
+  readings: OdometerReading[]
+}
+
+const NO_RECORDS: CarData = { rules: [], jobs: [], fuel: [], readings: [] }
+
+/** Orden de trabajos y cargas: la fecha más nueva primero; en el mismo día, el último cargado. */
+const byDateDesc = <T extends { date: string; createdAt: Date }>(a: T, b: T) =>
+  b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime()
+
+/** Orden de las lecturas de km: la más nueva primero. */
+const byNewest = (a: OdometerReading, b: OdometerReading) => b.date.getTime() - a.date.getTime()
 
 interface DataState extends UserData {
   uid: string
@@ -23,6 +59,12 @@ interface DataState extends UserData {
   rules: MaintenanceRule[]
   /** Mantenimientos activos de cada auto (sin los recordatorios cumplidos) con su estado, ordenados por urgencia. */
   rulesByCar: Map<string, RuleWithState[]>
+  /**
+   * Los registros de cada auto de `cars`, agrupados una vez por cambio de cada lista (`groupByCar`): todos los
+   * mantenimientos con la proyección, trabajos y cargas por fecha descendente y lecturas por fecha descendente. Un auto
+   * sin registros tiene listas vacías.
+   */
+  byCar: Map<string, CarData>
   /** Las invitaciones para mi mail que puedo responder: pendientes y sin vencer (se filtra al recalcular, con `today`). */
   myInvites: Invite[]
 }
@@ -47,6 +89,12 @@ const EMPTY: UserData = {
  * Datos del usuario en vivo desde Firestore. Si la app queda abierta pasada la medianoche, recalcula los
  * vencimientos. El km de un auto con lecturas es el de su lectura más alta (`topReading`), aunque el guardado en el
  * auto sea mayor o menor (puede haber quedado mal hasta que se corrige); sin lecturas, el guardado.
+ *
+ * Los registros se agrupan por auto con `groupByCar`, cada lista por separado: se reagrupa sólo la que cambió (o todas
+ * si cambian los ids de los autos, no otro campo de un auto). El km de cada auto, `rulesByCar`, la proyección, la
+ * corrección del km, la reconciliación y `useCar` (vía `byCar`) leen de ahí en vez de filtrar las listas completas, y
+ * cada uno depende sólo de las listas que usa: una carga nueva no reinicia la espera de la corrección del km. Un
+ * mantenimiento de un auto que todavía no está en `cars` se proyecta con las listas completas.
  *
  * Corrección automática del km: si el km guardado en el auto no es el de su lectura más alta, sea mayor o menor,
  * escribe el de las lecturas (`kmCorrection`, `syncCarKm`). Las lecturas son la fuente de verdad: así se arregla un
@@ -104,6 +152,16 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id)
   }, [])
 
+  const carKey = data.cars.map(c => c.id).join('/')
+  const carIds = useMemo(() => (carKey ? carKey.split('/') : []), [carKey])
+  const jobs = useMemo(() => [...data.jobs].sort(byDateDesc), [data.jobs])
+  const fuel = useMemo(() => [...data.fuel].sort(byDateDesc), [data.fuel])
+  const odometer = useMemo(() => [...data.odometer].sort(byNewest), [data.odometer])
+  const storedRulesByCar = useMemo(() => groupByCar(carIds, data.rules), [carIds, data.rules])
+  const jobsByCar = useMemo(() => groupByCar(carIds, jobs), [carIds, jobs])
+  const fuelByCar = useMemo(() => groupByCar(carIds, fuel), [carIds, fuel])
+  const readingsByCar = useMemo(() => groupByCar(carIds, odometer), [carIds, odometer])
+
   const fixing = useRef(new Set<string>())
   const kmReady = synced.has('cars') && synced.has('odometer')
   useEffect(() => {
@@ -111,7 +169,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const id = setTimeout(() => {
       for (const car of data.cars) {
         if (!canWrite(car, uid)) continue
-        const readings = data.odometer.filter(r => r.carId === car.id)
+        const readings = readingsByCar.get(car.id) ?? []
         const fix = kmCorrection(car, readings)
         if (!fix) continue
         const key = `${car.id}:${fix.currentKm}`
@@ -123,48 +181,75 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, data.odometer, kmReady, actor, uid])
+  }, [data.cars, readingsByCar, kmReady, actor, uid])
 
   const projecting = useRef(new Set<string>())
   const projectionReady = kmReady && synced.has('rules') && synced.has('jobs')
   useEffect(() => {
     if (!projectionReady) return
     const id = setTimeout(() => {
-      const own = new Set(data.cars.filter(c => isCarOwner(c, uid)).map(c => c.id))
-      for (const change of projectionDiff(data.rules.filter(r => own.has(r.carId)), data.jobs, data.odometer)) {
-        const key = projectionKey(change)
-        if (projecting.current.has(key)) continue
-        projecting.current.add(key)
-        syncRuleProjection(actor, change)
-          .then(() => projecting.current.delete(key))
-          .catch(e => console.warn('No se pudo actualizar el mantenimiento', change.ruleId, e))
+      for (const car of data.cars) {
+        if (!isCarOwner(car, uid)) continue
+        const rules = storedRulesByCar.get(car.id) ?? []
+        const carJobs = jobsByCar.get(car.id) ?? []
+        const readings = readingsByCar.get(car.id) ?? []
+        for (const change of projectionDiff(rules, carJobs, readings)) {
+          const key = projectionKey(change)
+          if (projecting.current.has(key)) continue
+          projecting.current.add(key)
+          syncRuleProjection(actor, change)
+            .then(() => projecting.current.delete(key))
+            .catch(e => console.warn('No se pudo actualizar el mantenimiento', change.ruleId, e))
+        }
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, data.rules, data.jobs, data.odometer, projectionReady, actor, uid])
+  }, [data.cars, storedRulesByCar, jobsByCar, readingsByCar, projectionReady, actor, uid])
+
+  const projection = useMemo(() => {
+    const rulesOf = new Map<string, MaintenanceRule[]>()
+    const projected = new Map<MaintenanceRule, MaintenanceRule>()
+    for (const [carId, stored] of storedRulesByCar) {
+      const next = projectRules(stored, jobsByCar.get(carId) ?? [], readingsByCar.get(carId) ?? [])
+      stored.forEach((rule, i) => projected.set(rule, next[i]))
+      rulesOf.set(carId, next)
+    }
+    const rules = data.rules.map(r => projected.get(r) ?? { ...r, ...projectRule(r, jobs, odometer) })
+    return { rulesOf, rules }
+  }, [storedRulesByCar, jobsByCar, readingsByCar, data.rules, jobs, odometer])
+
+  const byCar = useMemo(() => {
+    const map = new Map<string, CarData>()
+    for (const id of carIds) {
+      map.set(id, {
+        rules: projection.rulesOf.get(id) ?? [],
+        jobs: jobsByCar.get(id) ?? [],
+        fuel: fuelByCar.get(id) ?? [],
+        readings: readingsByCar.get(id) ?? [],
+      })
+    }
+    return map
+  }, [carIds, projection, jobsByCar, fuelByCar, readingsByCar])
 
   const value = useMemo<DataState>(() => {
     const cars = data.cars
       .map(c => {
-        const top = topReading(data.odometer.filter(r => r.carId === c.id))
+        const top = topReading(readingsByCar.get(c.id) ?? [])
         return top ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))
-    const rules = projectRules(data.rules, data.jobs, data.odometer)
     const rulesByCar = new Map<string, RuleWithState[]>()
     for (const car of cars) {
-      rulesByCar.set(car.id, rulesWithState(activeRules(rules.filter(r => r.carId === car.id)), car, today))
+      rulesByCar.set(car.id, rulesWithState(activeRules(projection.rulesOf.get(car.id) ?? []), car, today))
     }
-    const byDateDesc = <T extends { date: string; createdAt: Date }>(a: T, b: T) =>
-      b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime()
     return {
       ...data,
       cars,
-      rules,
-      jobs: [...data.jobs].sort(byDateDesc),
-      fuel: [...data.fuel].sort(byDateDesc),
-      odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
+      rules: projection.rules,
+      jobs,
+      fuel,
+      odometer,
       myInvites: data.myInvites.filter(i => isInviteOpen(i, new Date())),
       uid,
       email,
@@ -174,8 +259,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       today,
       carById,
       rulesByCar,
+      byCar,
     }
-  }, [data, loaded, error, today, uid, email, actor])
+  }, [data, jobs, fuel, odometer, readingsByCar, projection, byCar, loaded, error, today, uid, email, actor])
 
   return <DataContext value={value}>{children}</DataContext>
 }
@@ -188,21 +274,24 @@ export function useData() {
 
 /**
  * Datos de un auto puntual; null si no existe (o todavía está cargando). `rules` son los mantenimientos activos con su
- * estado; `completed`, los recordatorios cumplidos, y `allRules`, todos (con la proyección en memoria).
+ * estado; `completed`, los recordatorios cumplidos, y `allRules`, todos (con la proyección en memoria). Las listas
+ * salen de `byCar`: un auto que no existe las tiene vacías.
  */
 export function useCar(carId: string) {
   const d = useData()
   const car = d.carById.get(carId) ?? null
-  return useMemo(() => {
-    const allRules = d.rules.filter(r => r.carId === carId)
-    return {
+  const records = d.byCar.get(carId) ?? NO_RECORDS
+  const rules = d.rulesByCar.get(carId)
+  return useMemo(
+    () => ({
       car,
-      rules: d.rulesByCar.get(carId) ?? [],
-      completed: allRules.filter(isCompleted),
-      allRules,
-      jobs: d.jobs.filter(j => j.carId === carId),
-      fuel: d.fuel.filter(f => f.carId === carId),
-      readings: d.odometer.filter(r => r.carId === carId),
-    }
-  }, [car, carId, d.rules, d.rulesByCar, d.jobs, d.fuel, d.odometer])
+      rules: rules ?? [],
+      completed: records.rules.filter(isCompleted),
+      allRules: records.rules,
+      jobs: records.jobs,
+      fuel: records.fuel,
+      readings: records.readings,
+    }),
+    [car, records, rules],
+  )
 }

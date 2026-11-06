@@ -2,6 +2,12 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Mantenimiento
+
+- **Los datos se agrupan por auto una sola vez** (#63): `DataProvider` reparte mantenimientos, trabajos, cargas y lecturas por auto (`groupByCar`, `lib/by-car.ts`, con pruebas), cada lista por separado y sólo cuando cambia, y expone `byCar`. El km de cada auto, `rulesByCar`, la proyección de los mantenimientos (ahora por auto, con una prueba que la compara con la de las listas completas), la corrección del km, la reconciliación y `useCar` leen de ahí en vez de filtrar las listas completas por auto. Las pantallas muestran lo mismo.
+
 ## 1.6.0
 
 Cierra las epics de colaboración segura y de resiliencia y operación. Compartir un auto pasa a ser una invitación que la otra persona acepta, y los miembros pasan a ser por su cuenta (uid) y no por el mail. Los miembros reciben avisos, los trabajos para revisar avisan al momento, borrar un auto termina siempre y lo que se carga sin señal no se pierde. Antes de publicar hay que subir las reglas de Firestore y correr dos migraciones de datos (ver "Pasos manuales").

@@ -17,6 +17,7 @@ import {
   projectionDiff,
   projectionPatch,
   projectRule,
+  projectRules,
   summarizeRule,
   type ProjectionJob,
 } from './maintenance'
@@ -509,5 +510,39 @@ describe('intervalos en semanas, meses y años', () => {
     expect(intervalFromDoc({ intervalTime: { amount: 3, unit: 'week' } })).toEqual({ amount: 3, unit: 'week' })
     expect(intervalFromDoc({ intervalTime: { amount: 0, unit: 'week' } })).toBeNull()
     expect(intervalFromDoc({})).toBeNull()
+  })
+})
+
+describe('proyección por auto', () => {
+  const rules = [
+    mrule('s'),
+    mrule('once', { repeat: false, intervalKm: null, intervalTime: null }),
+    mrule('s', { carId: 'c2', baseKm: 80_000, baseDate: '2025-09-01', lastDoneKm: 80_000, lastDoneDate: '2025-09-01' }),
+    mrule('stale', { carId: 'c2', lastDoneKm: 1, lastDoneDate: '2020-01-01' }),
+  ]
+  const jobs = [
+    work({ id: 'j1', carId: 'c1', date: '2026-02-01', km: null, ruleIds: ['s', 'once'] }),
+    work({ id: 'j2', carId: 'c2', date: '2026-03-15', km: 95_000, ruleIds: ['s'] }),
+    work({ id: 'j3', carId: 'c2', date: '2026-04-01', km: null, ruleIds: ['s', 'stale'] }),
+    work({ id: 'j4', carId: 'c2', date: '2026-05-01', km: null, ruleIds: ['once'] }),
+  ]
+  const readings = [...series, odo('c', 90_000, '2026-03-01', 'c2'), odo('d', 100_000, '2026-05-01', 'c2')]
+  const perCar = <T>(fn: (carId: string) => T[]) => ['c1', 'c2'].flatMap(fn)
+  const ofCar = <T extends { carId: string }>(list: T[], carId: string) => list.filter(x => x.carId === carId)
+
+  it('projectRules da lo mismo con todas las listas que con las de cada auto', () => {
+    const full = projectRules(rules, jobs, readings)
+    const split = perCar(id => projectRules(ofCar(rules, id), ofCar(jobs, id), ofCar(readings, id)))
+    expect(split).toEqual(full)
+    expect(full.find(r => r.carId === 'c1' && r.id === 's')).toMatchObject({ lastDoneJobId: 'j1', lastDoneKmEstimated: true })
+    expect(full.find(r => r.carId === 'c1' && r.id === 'once')).toMatchObject({ completedByJobId: 'j1' })
+    expect(full.find(r => r.carId === 'c2' && r.id === 's')).toMatchObject({ lastDoneJobId: 'j3' })
+  })
+
+  it('projectionDiff da lo mismo con todas las listas que con las de cada auto', () => {
+    const full = projectionDiff(rules, jobs, readings)
+    const split = perCar(id => projectionDiff(ofCar(rules, id), ofCar(jobs, id), ofCar(readings, id)))
+    expect(split).toEqual(full)
+    expect(full.length).toBeGreaterThan(0)
   })
 })
