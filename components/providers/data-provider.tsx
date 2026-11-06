@@ -11,7 +11,7 @@ import { useAuth } from './auth-provider'
 
 interface DataState extends UserData {
   uid: string
-  /** Mail del login en minúscula (como se guarda en `members`); null si la cuenta no tiene mail. */
+  /** Mail del login en minúscula (el de mi perfil al aceptar una invitación); null si la cuenta no tiene mail. */
   email: string | null
   /** Quién escribe: va como autor de lo que se crea. */
   actor: Actor
