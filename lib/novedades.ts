@@ -48,6 +48,10 @@ export const NOVEDADES: Novedad[] = [
         title: 'Avisos al instante cuando cargan o revisan un trabajo',
         text: 'Cuando alguien carga un trabajo para revisar, al dueño le llega una notificación en el momento (y un recordatorio a la mañana si quedaron pendientes). Cuando el dueño lo aprueba o lo rechaza, le avisa en el acto a quien lo cargó. Y si al cargar km, combustible o un trabajo se vence un mantenimiento, te avisa enseguida en pantalla y por notificación al resto del auto.',
       },
+      {
+        title: 'Borrar un auto, de una',
+        text: 'Cuando borrás un auto desaparece en el acto, aunque no tengas señal, y terminamos de borrar su historial y su foto por vos aunque cierres la app.',
+      },
     ],
   },
   {
