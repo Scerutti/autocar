@@ -79,7 +79,8 @@ async function notifyRecipient(
  * proyección guardada en `rules`, porque los batches de `rules` se commitean recién después del batch del trabajo (y
  * un miembro `trusted` no los escribe). Si el cliente pasa `ruleIds`, evalúa sólo esos mantenimientos. Los trabajos y
  * las lecturas se leen de la fecha más nueva a la más vieja hasta `MAX_DOCS_PER_USER`, así un auto con más registros
- * que el tope conserva los que mandan en la proyección y en el km.
+ * que el tope conserva los que mandan en la proyección y en el km. Un auto marcado como borrado (`deletedAt`) cuenta
+ * como inexistente: 404.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
     const carRef = db.collection('cars').doc(carId)
     const carSnap = await carRef.get()
     const carData = carSnap.data()
-    if (!carData) {
+    if (!carData || carData.deletedAt != null) {
       return Response.json({ error: 'No encontrado' }, { status: 404 })
     }
 

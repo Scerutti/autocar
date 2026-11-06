@@ -9,6 +9,7 @@ const EVENTS: readonly JobNotificationEvent[] = ['submitted', 'approved', 'rejec
  * Aviso push al momento cuando un miembro manda un trabajo (`submitted`, al dueño) o cuando el dueño lo aprueba o
  * rechaza (`approved` | `rejected`, al miembro autor). Es idempotente: antes de enviar hace `create()` de
  * `notices/{jobId}_{event}_{revision}`; si ya existe (reintento o doble click), responde 200 sin volver a enviar.
+ * Un auto marcado como borrado (`deletedAt`) cuenta como inexistente: 404.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
     const [carSnap, jobSnap] = await Promise.all([carRef.get(), carRef.collection('jobs').doc(jobId).get()])
     const carData = carSnap.data()
     const jobData = jobSnap.data()
-    if (!carData || !jobData) {
+    if (!carData || carData.deletedAt != null || !jobData) {
       return Response.json({ error: 'No encontrado' }, { status: 404 })
     }
 
