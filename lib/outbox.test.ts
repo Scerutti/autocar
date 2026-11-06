@@ -176,7 +176,7 @@ describe('deniedReason', () => {
       id: 'c',
       carId: 'c9',
       carLabel: 'Ford Ka',
-      write: { kind: 'car', payload: { recordId: 'c9', data: { brand: 'Ford', model: 'Ka', fuelTypes: ['nafta'] }, original: null, initialKm: 1000 } },
+      write: { kind: 'car', payload: { recordId: 'c9', data: { brand: 'Ford', model: 'Ka', version: null, year: null, plate: null, fuelTypes: ['nafta'] }, original: null, initialKm: 1000 } },
     })
     expect(deniedReason(car, false)).toBe(NOT_SAVED)
   })
