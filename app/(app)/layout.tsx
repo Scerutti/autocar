@@ -7,10 +7,11 @@ import { AppShell } from '@/components/app-shell'
 import { BrandLogo } from '@/components/brand'
 import { NovedadesHost } from '@/components/novedades/novedades-host'
 import { OutboxSync } from '@/components/outbox/outbox'
-import { Loading } from '@/components/common'
+import { Loading, SignOutLabel } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/providers/auth-provider'
 import { DataProvider, useData } from '@/components/providers/data-provider'
+import { isAccountClosing } from '@/lib/db'
 import { isFirebaseConfigured } from '@/lib/firebase/client'
 import { errorMessage } from '@/lib/toast'
 import { NotConfigured } from '@/components/not-configured'
@@ -21,10 +22,11 @@ const isPermissionDenied = (e: Error | null) => (e as { code?: string } | null)?
  * Primera vez que entra una cuenta: Firestore todavía no la conoce (no está en allowlist) y rechaza la
  * carga. Le pedimos al servidor que la registre y volvemos a cargar. Si falla otra vez no reintenta
  * solo, para no quedar en un bucle. El intento automático corre una sola vez (en desarrollo React corre
- * los efectos dos veces).
+ * los efectos dos veces). Mientras esta pestaña borra la cuenta (`isAccountClosing`) tampoco: el rechazo es porque el
+ * servidor ya la sacó de allowlist.
  */
 function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
-  const { getToken, signOut } = useAuth()
+  const { getToken, signOut, signingOut } = useAuth()
   const [failure, setFailure] = useState<string | null>(auto ? null : 'No pudimos cargar tu cuenta.')
   const started = useRef(false)
 
@@ -56,8 +58,14 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
         <Button onClick={() => void join()} size="lg" className="mt-6 h-11 w-full">
           Reintentar
         </Button>
-        <Button onClick={() => void signOut()} variant="ghost" size="lg" className="mt-2 h-11 w-full">
-          Salir
+        <Button
+          onClick={() => void signOut()}
+          disabled={signingOut != null}
+          variant="ghost"
+          size="lg"
+          className="mt-2 h-11 w-full gap-2"
+        >
+          <SignOutLabel phase={signingOut} />
         </Button>
       </div>
     </div>
@@ -75,7 +83,7 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
     if (error && !isPermissionDenied(error)) console.error('Error cargando datos', error)
   }, [error])
 
-  if (isPermissionDenied(error)) return <Join auto={attempt === 0} onJoined={onRetry} />
+  if (isPermissionDenied(error)) return <Join auto={attempt === 0 && !isAccountClosing()} onJoined={onRetry} />
   return (
     <AppShell>
       {error ? (
