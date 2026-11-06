@@ -1,5 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type QueryDocumentSnapshot } from 'firebase-admin/firestore'
+import { purgeCutoff } from '@/lib/cars'
+import { purgeCar } from '@/lib/cars-server'
 import { adminDb } from '@/lib/firebase/admin'
 import {
   candidateUids,
@@ -31,6 +33,23 @@ const TIME_BUDGET_MS = 40_000
 
 /** Usuarios que se procesan a la vez: lo lento es esperar a Firestore y a los servicios de push. */
 const CONCURRENCY = 5
+
+/**
+ * Pasado este tiempo desde que arrancó la corrida, el barrido no empieza a borrar otro auto. Es menor que
+ * `TIME_BUDGET_MS`: un auto con mucho historial tarda, y el que está en curso tiene que terminar antes de
+ * `maxDuration`. Si se corta, `purgeCar` lo retoma en la próxima corrida.
+ */
+const SWEEP_BUDGET_MS = 30_000
+
+/** Autos marcados que levanta el barrido por corrida, los marcados hace más tiempo primero. */
+const SWEEP_LIMIT = 20
+
+/**
+ * Lo que hizo el barrido de autos borrados: cuántos encontró, cuántos terminó de borrar, cuántos quedaron con la foto
+ * pendiente (Cloudinary falló; el auto marcado queda para la próxima corrida), cuántos dieron error, y el error de la
+ * consulta si no pudo arrancar.
+ */
+type SweepReport = { found: number; purged: number; photoPending: number; errors: number; error?: string }
 
 const toDate = (v: unknown) => (v instanceof Timestamp ? v.toDate() : null)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -149,6 +168,8 @@ async function saveRunSummary(runRef: DocumentReference, date: string, summary: 
  * Cuando se leyeron todos los autos y mantenimientos del usuario (`sharedCars !== false` y sin llegar al tope), borra
  * con el mismo `bulkWriter` los `ruleNotices` huérfanos (`orphanNoticeIds`: mantenimientos o autos borrados, o autos de
  * los que salió). Un uid con suscripciones pero sin `users/{uid}` no tiene ajustes: cuenta como procesado sin mensajes.
+ * Los autos marcados como borrados (`deletedAt`) no cuentan: ya no existen para el usuario, y sus `ruleNotices` quedan
+ * huérfanos.
  */
 async function processUser(uid: string, now: Date): Promise<CronUserReport> {
   const db = adminDb()
@@ -165,7 +186,7 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
   const seen = new Set<string>()
   const carDocs: QueryDocumentSnapshot[] = []
   for (const d of [...ownSnap.docs, ...(sharedSnap?.docs ?? [])]) {
-    if (seen.has(d.id) || carDocs.length >= MAX_DOCS_PER_USER) continue
+    if (seen.has(d.id) || d.get('deletedAt') != null || carDocs.length >= MAX_DOCS_PER_USER) continue
     seen.add(d.id)
     carDocs.push(d)
   }
@@ -219,6 +240,43 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
 }
 
 /**
+ * Barrido de autos borrados: termina de borrar (`purgeCar`) los autos marcados (`deletedAt`) hace más de
+ * `PURGE_DELAY_MS` (`purgeCutoff`), que la app no llegó a borrar (se cerró antes de llamar a `DELETE /api/cars/[carId]`,
+ * la marca se sincronizó sin la app abierta, o Cloudinary falló). La consulta usa el índice simple automático de
+ * `deletedAt`. Borra de a un auto y no empieza otro pasado `SWEEP_BUDGET_MS`. Nunca tira: un error se cuenta en el
+ * reporte y va a los logs, así no frena los avisos.
+ */
+async function sweepDeletedCars(now: Date, startedAt: number): Promise<SweepReport> {
+  const report: SweepReport = { found: 0, purged: 0, photoPending: 0, errors: 0 }
+  let docs: QueryDocumentSnapshot[] = []
+  try {
+    const snap = await adminDb()
+      .collection('cars')
+      .where('deletedAt', '<', Timestamp.fromDate(purgeCutoff(now)))
+      .orderBy('deletedAt')
+      .limit(SWEEP_LIMIT)
+      .get()
+    docs = snap.docs
+  } catch (e) {
+    console.error('Cron: no se pudieron leer los autos borrados', e)
+    return { ...report, error: (e as Error).message }
+  }
+  report.found = docs.length
+  for (const d of docs) {
+    if (Date.now() - startedAt >= SWEEP_BUDGET_MS) break
+    try {
+      const { photo } = await purgeCar(d.ref, serverCarFrom(d.id, d.data()))
+      if (photo === 'pending') report.photoPending++
+      else report.purged++
+    } catch (e) {
+      report.errors++
+      console.error('Cron: no se pudo terminar de borrar el auto', d.id, e)
+    }
+  }
+  return report
+}
+
+/**
  * Vercel Cron la llama dos veces por día (ver vercel.json) con "Authorization: Bearer $CRON_SECRET". Toma el turno en
  * `cronRuns/{fecha}` con una transacción: sin registro procesa a todos; si ya terminó sin dejar a nadie afuera,
  * responde `alreadyDone`; si otra llamada está corriendo dentro de `RUN_LOCK_MS`, responde `busy`; si no, sigue
@@ -226,6 +284,10 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
  * cada uno que se procesa. Cada worker toma el próximo usuario hasta que no quedan o se acaba el tiempo; el error de
  * un usuario no corta a los demás. Si quedan usuarios afuera o hay errores, va un `console.error` para que salte en
  * los logs de Vercel.
+ * En paralelo con los usuarios corre el barrido de autos borrados (`sweepDeletedCars`, con su propio tope de tiempo),
+ * también cuando el día ya está hecho (`alreadyDone`), y no cuando otra llamada está en curso (`busy`: la barre esa).
+ * No toca el turno, el cursor ni las métricas de `cronRuns/{fecha}`: su resultado va sólo en la respuesta (`sweep`), y
+ * el cierre de la corrida se guarda sin esperarlo, así un auto que tarda en borrarse no deja la corrida sin cerrar.
  */
 export async function GET(request: Request) {
   const startedAt = Date.now()
@@ -238,7 +300,10 @@ export async function GET(request: Request) {
   const date = runDateOf(now)
   const runRef = db.collection('cronRuns').doc(date)
   const claim = await claimRun(runRef, now)
-  if (claim.status === 'done') return Response.json({ ok: true, date, alreadyDone: true })
+  if (claim.status === 'done') {
+    const sweep = await sweepDeletedCars(now, startedAt)
+    return Response.json({ ok: true, date, alreadyDone: true, sweep })
+  }
   if (claim.status === 'busy') return Response.json({ ok: true, date, busy: true })
   const { previous } = claim
 
@@ -259,11 +324,13 @@ export async function GET(request: Request) {
       }
     }
   }
+  const sweeping = sweepDeletedCars(now, startedAt)
   await Promise.all(Array.from({ length: CONCURRENCY }, worker))
 
   const summary = summarizeRun({ queue, next, reports: report, candidates: uids.length, previous })
   const run = tally(report)
   const logged = await saveRunSummary(runRef, date, summary)
+  const sweep = await sweeping
 
   if (summary.skipped || run.errors) {
     console.error(
@@ -281,6 +348,7 @@ export async function GET(request: Request) {
       errors: run.errors,
       sent: run.sent,
       report,
+      sweep,
     },
     logged ? undefined : { status: 500 },
   )
