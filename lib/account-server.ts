@@ -19,9 +19,14 @@ import { canonicalEmail } from './sharing'
 /**
  * Cómo terminó `deleteAccount`: `deleted` (no queda nada, ni la cuenta de Firebase Auth); `blocked` con los autos
  * propios que tienen miembros (no se borró nada); `photos-pending` si Cloudinary falló (no se borró la cuenta ni el
- * registro en `allowlist`: hay que volver a llamar).
+ * registro en `allowlist`: hay que volver a llamar); `unavailable` si faltan los índices de `firestore.indexes.json`
+ * (sin publicar o todavía no `READY`: no se borró nada).
  */
-export type AccountDeletion = { status: 'deleted' } | { status: 'blocked'; cars: BlockingCar[] } | { status: 'photos-pending' }
+export type AccountDeletion =
+  | { status: 'deleted' }
+  | { status: 'blocked'; cars: BlockingCar[] }
+  | { status: 'photos-pending' }
+  | { status: 'unavailable' }
 
 /**
  * Un fallo después de sacar la cuenta de `allowlist`: la app ya no puede usarla, así que la pantalla no tiene que
@@ -62,10 +67,18 @@ const authoredQuery = (db: Firestore, collection: (typeof AUTHORED_COLLECTIONS)[
 
 /**
  * Prueba las consultas de grupo (`limit(1)`) antes de borrar nada: si los índices no están publicados (o todavía no
- * están `READY`), Firestore tira `FAILED_PRECONDITION` acá y la cuenta queda intacta, en vez de a medio borrar.
+ * están `READY`), Firestore tira `FAILED_PRECONDITION` (código 9) y devuelve false, con la cuenta intacta en vez de a
+ * medio borrar. Cualquier otro error se tira.
  */
-async function probeIndexes(db: Firestore, uid: string) {
-  await Promise.all(AUTHORED_COLLECTIONS.map(c => authoredQuery(db, c, uid).select().limit(1).get()))
+async function probeIndexes(db: Firestore, uid: string): Promise<boolean> {
+  try {
+    await Promise.all(AUTHORED_COLLECTIONS.map(c => authoredQuery(db, c, uid).select().limit(1).get()))
+    return true
+  } catch (e) {
+    if ((e as { code?: unknown }).code !== 9) throw e
+    console.error('Borrado de cuenta: faltan los índices de grupo de firestore.indexes.json (publicarlos y esperar READY)', e)
+    return false
+  }
 }
 
 /**
@@ -209,7 +222,7 @@ export async function deleteAccount(uid: string, email: string): Promise<Account
     throw e
   }
   const db = adminDb()
-  await probeIndexes(db, uid)
+  if (!(await probeIndexes(db, uid))) return { status: 'unavailable' }
   const blocking = await markOwnedCars(db, uid)
   if (blocking.length) return { status: 'blocked', cars: blocking }
 
