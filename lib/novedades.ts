@@ -13,6 +13,24 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.7.0',
+    date: '2026-11-06',
+    items: [
+      {
+        title: 'Salir borra tus datos de este celular',
+        text: 'Al cerrar sesión se borra lo que AutoCar guardaba en este dispositivo y se apagan sus avisos, así la próxima persona que lo use no ve tus autos. Antes esperamos a que se guarde lo pendiente ("Sincronizando…") y, si algo no llegó a guardarse, te preguntamos antes de salir.',
+      },
+      {
+        title: 'Descargá tus datos',
+        text: 'En Ajustes → Tus datos, "Descargar mis datos" arma un archivo con todo lo que cargaste: autos, trabajos, cargas, km y mantenimientos, también en planillas que se abren con Excel o Google Sheets.',
+      },
+      {
+        title: 'Borrar tu cuenta',
+        text: 'En Ajustes podés borrar tu cuenta con todos tus autos, fotos y logros. Lo que cargaste en autos de otras personas queda en su historial, sin tu nombre. Si tenés autos compartidos, primero se los tenés que pasar a otra persona o borrarlos.',
+      },
+    ],
+  },
+  {
     version: '1.6.0',
     date: '2026-11-05',
     items: [

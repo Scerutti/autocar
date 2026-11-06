@@ -14,7 +14,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED 
 
 ## Dependency notes
 
-- Grupo familiar: el PR 1 (`move-cars-to-shareable-structure`) ya salió. El PR 2 es `share-cars-with-family`. El PR 3 (`member-and-instant-notifications`, #61) está implementado sobre la rama de E3. Falta la limpieza que borra los datos viejos (`members` en #66 y `users/{uid}/…`).
+- Grupo familiar: el PR 1 (`move-cars-to-shareable-structure`) ya salió. El PR 2 es `share-cars-with-family`. El PR 3 (`member-and-instant-notifications`, #61) está implementado sobre la rama de E3. La limpieza de los datos viejos: `members` salió en #66 (1.6.0); `users/{uid}/…` está en #64 (reglas sólo de lectura y borrado, y `scripts/cleanup-legacy.mjs`; faltan publicar las reglas y correr el script).
 
 ## Findings considered and rejected
 
