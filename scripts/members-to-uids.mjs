@@ -17,6 +17,7 @@
  * 3. Simulacro: `node --env-file=.env.local scripts/members-to-uids.mjs`.
  * 4. `node --env-file=.env.local scripts/members-to-uids.mjs --apply`. Una segunda corrida tiene que dar 0 cambios.
  * Mientras tanto nadie pierde el acceso: las reglas y la app siguen leyendo los autos compartidos por mail.
+ * Al menos una release después, `remove-member-emails.mjs` borra `members` y las reglas dejan de leerlo.
  */
 
 import { cert, initializeApp } from 'firebase-admin/app'
