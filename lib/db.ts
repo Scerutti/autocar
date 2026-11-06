@@ -14,6 +14,7 @@ import {
   serverTimestamp,
   setDoc,
   Timestamp,
+  waitForPendingWrites,
   where,
   writeBatch,
   type DocumentData,
@@ -543,8 +544,15 @@ function carKmUpdate(readings: OdometerReading[]) {
  * actual del auto y el promedio diario con las lecturas del auto más la nueva (`carKmFrom`: una lectura con fecha
  * pasada y menos km no lo baja).
  */
-function addManualReading(batch: WriteBatch, actor: Actor, car: Car, readings: OdometerReading[], km: number, date: Date) {
-  const id = newChildId(car.id, 'odometer')
+function addManualReading(
+  batch: WriteBatch,
+  actor: Actor,
+  car: Car,
+  readings: OdometerReading[],
+  km: number,
+  date: Date,
+  id = newChildId(car.id, 'odometer'),
+) {
   const reading: OdometerReading = {
     id,
     carId: car.id,
@@ -563,11 +571,12 @@ function addManualReading(batch: WriteBatch, actor: Actor, car: Car, readings: O
 /**
  * Carga los km del tablero en una fecha (validar antes con `validateKmReading`). Con la fecha de hoy la lectura
  * lleva la hora actual; con una fecha pasada, el mediodía de ese día (`readingDateOf`), como las vinculadas.
+ * `readingId`: el id de la lectura, si se generó antes (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number, date: ISODate) {
+export async function recordKm(actor: Actor, car: Car, readings: OdometerReading[], km: number, date: ISODate, readingId?: string) {
   const now = new Date()
   const batch = writeBatch(firestore())
-  addManualReading(batch, actor, car, readings, km, date === toISODate(now) ? now : readingDateOf(date))
+  addManualReading(batch, actor, car, readings, km, date === toISODate(now) ? now : readingDateOf(date), readingId)
   await batch.commit()
 }
 
@@ -885,10 +894,17 @@ export type WriteOutcome = 'saved' | 'unchanged'
  *   base, cambiaría la base que se lee.
  * Si no cambió nada, no escribe y devuelve `unchanged`. Si el mantenimiento se borró en otro dispositivo, el `update`
  * falla con `not-found` y no lo vuelve a crear. Si otro dispositivo aprobó un trabajo que la app todavía no tiene, la
- * reconciliación de `DataProvider` corrige la proyección cuando llega.
+ * reconciliación de `DataProvider` corrige la proyección cuando llega. `ruleId`: el id de un alta, si se generó antes
+ * (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function saveRule(actor: Actor, ctx: ProjectionContext, data: RuleInput, existing?: MaintenanceRule): Promise<WriteOutcome> {
-  const id = existing?.id ?? newChildId(data.carId, 'rules')
+export async function saveRule(
+  actor: Actor,
+  ctx: ProjectionContext,
+  data: RuleInput,
+  existing?: MaintenanceRule,
+  ruleId?: string,
+): Promise<WriteOutcome> {
+  const id = existing?.id ?? ruleId ?? newChildId(data.carId, 'rules')
   const declared: RuleInput = {
     carId: data.carId,
     name: data.name,
@@ -1181,8 +1197,9 @@ export type FuelInput = Omit<FuelLoad, 'id' | 'createdAt' | 'createdBy' | 'creat
  *   sigue a su nombre; la lectura se escribe sólo si cambió el km o la fecha. Si no cambió nada, no escribe y devuelve
  *   `unchanged`. Si la carga se borró en otro dispositivo, el `update` falla con `not-found` (el batch entero, también
  *   la lectura) y no la vuelve a crear.
+ * `fuelId`: el id de un alta, si se generó antes (`newChildId`) para seguirla en la bandeja (`lib/outbox.ts`).
  */
-export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, existing?: FuelLoad): Promise<WriteOutcome> {
+export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, existing?: FuelLoad, fuelId?: string): Promise<WriteOutcome> {
   const carId = ctx.car.id
   const batch = writeBatch(firestore())
   const entry = { date: data.date, km: data.km, author: authorOf(existing ?? {}, actor) }
@@ -1192,7 +1209,7 @@ export async function saveFuel(actor: Actor, ctx: KmContext, data: FuelInput, ex
     batch.update(doc(carCol(carId, 'fuel'), existing.id), changes)
     if ('km' in changes || 'date' in changes) writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: existing.id }, entry)
   } else {
-    const id = newChildId(carId, 'fuel')
+    const id = fuelId ?? newChildId(carId, 'fuel')
     batch.set(doc(carCol(carId, 'fuel'), id), { ...data, createdAt: Timestamp.now(), createdBy: actor.uid, createdByName: actor.name })
     writeLinkedReading(batch, ctx, { source: 'fuel', sourceId: id }, entry)
   }
@@ -1276,4 +1293,19 @@ export async function markAchievementsCelebrated(uid: string, ids: string[]) {
   const now = Timestamp.now()
   ids.forEach(id => batch.update(doc(userCol(uid, 'achievements'), id), { celebratedAt: now }))
   await batch.commit()
+}
+
+/**
+ * Espera a que el servidor confirme (o rechace) todas las escrituras pendientes de la cuenta, también las de una sesión
+ * anterior que Firestore guardó en la caché y vuelve a mandar al abrir la app. Sin conexión espera hasta que vuelva.
+ */
+export function waitForServerWrites() {
+  return waitForPendingWrites(firestore())
+}
+
+/** Un documento como lo tiene el servidor (no la caché); null si no existe. Sin conexión o sin permiso, falla. */
+export async function serverDocData(path: string[]): Promise<Record<string, unknown> | null> {
+  const [first, ...rest] = path
+  const snap = await getDocFromServer(doc(firestore(), first, ...rest))
+  return snap.exists() ? snap.data() : null
 }
