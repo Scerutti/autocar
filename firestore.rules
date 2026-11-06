@@ -477,10 +477,14 @@ service cloud.firestore {
     }
 
     // El dueño marca el auto como borrado (markCarDeleted): sólo escribe deletedAt, con la hora del pedido
-    // (serverTimestamp). Un reintento lo vuelve a marcar; desmarcarlo no se puede.
-    // Quien pide ya es el dueño según el documento antes del pedido (lo revisa el match).
+    // (serverTimestamp), y sólo si todavía no estaba marcado: volver a marcarlo correría deletedAt y postergaría el
+    // barrido, y desmarcarlo no se puede. Una escritura ya confirmada no se reenvía, así que el reintento de una marca
+    // sin señal no choca con esto. purgeAttempts y photoFailedAt los escribe sólo el servidor (purgeCar) en un auto
+    // marcado, que ya no acepta ningún update desde la app, así que validCar no los lista. Quien pide ya es el dueño
+    // según el documento antes del pedido (lo revisa el match).
     function ownerMarkDeleted() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedAt'])
+      return resource.data.get('deletedAt', null) == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedAt'])
         && request.resource.data.deletedAt == request.time;
     }
 
