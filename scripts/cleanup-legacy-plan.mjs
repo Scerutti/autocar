@@ -41,6 +41,22 @@ export function instantOf(value) {
   return null
 }
 
+/** Segundos y nanosegundos de un instante, con la precisión que tenga (un `Date`, al milisegundo), o null. */
+function preciseOf(value) {
+  if (value == null) return null
+  if (typeof value.seconds === 'number') return [value.seconds, value.nanoseconds ?? 0]
+  const ms = instantOf(value)
+  return ms == null ? null : [Math.floor(ms / 1000), (ms - Math.floor(ms / 1000) * 1000) * 1e6]
+}
+
+/** Compara dos instantes al nanosegundo: negativo si `a` es anterior, 0 si son iguales, null si falta alguno. */
+export function compareInstants(a, b) {
+  const x = preciseOf(a)
+  const y = preciseOf(b)
+  if (!x || !y) return null
+  return x[0] !== y[0] ? x[0] - y[0] : x[1] - y[1]
+}
+
 /** Día `YYYY-MM-DD` de un instante en la zona horaria dada, o null. */
 export function localDay(value, timeZone = DEFAULT_TIME_ZONE) {
   const ms = instantOf(value)
@@ -84,138 +100,153 @@ const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const sourceOf = data => (typeof data?.source === 'string' ? data.source : 'manual')
 
 /**
- * Busca la copia de cada lectura vieja de un auto en `cars/{carId}/odometer`. La copia puede tener otro id: la
- * migración la copió con el mismo id, pero `link-readings` movió las de cargas y trabajos a `{source}-{id}` (con la
- * fecha del registro a las 12:00) y borró la de ese id. En este orden:
+ * Busca la copia de cada lectura vieja de un auto en `cars/{carId}/odometer`. La migración copió cada lectura con el
+ * mismo id; después `link-readings` movió las de cargas y trabajos a `{source}-{id}` (con `sourceId` y la fecha del
+ * registro a las 12:00) y borró la de ese id. Las opciones de copia de cada lectura vieja son:
  *
- * 1. **Mismo id**: la lectura nueva con el id de la vieja, con el mismo km y la misma fecha. Si existe y es distinta,
- *    no se busca otra: queda (`copy-differs`).
- * 2. **`sourceId`** (si la vieja lo tiene): la lectura `{source}-{sourceId}` con el mismo km. Si no está, queda.
- * 3. **Mismo día**: las lecturas nuevas del mismo km, del mismo `source` (sin `source` = `manual`) y del mismo día
- *    local que la vieja, contando como su día el de su fecha o, en una vinculada, el del `createdAt` de su carga o
- *    su trabajo (la lectura vieja se grababa con la hora en que se guardaba el registro). Tiene que haber una sola:
- *    con ninguna queda (`no-copy`) y con más de una también (`ambiguous`).
+ * 1. **Mismo id**: la lectura nueva con el id de la vieja, con el mismo `carId`, km y fecha. Si existe y es distinta,
+ *    no tiene opciones (`copy-differs`).
+ * 2. **`sourceId`** (si la vieja lo tiene): la lectura `{source}-{sourceId}` con el mismo km.
+ * 3. **Mismo día**, sólo para una vieja de una carga o un trabajo (`source` `fuel` o `job`) sin copia con su id: las
+ *    lecturas nuevas vinculadas (con `sourceId`) del mismo `source`, `carId` y km, y del mismo día local que la vieja,
+ *    contando como su día el de su fecha o el del `createdAt` de su carga o su trabajo (la lectura vieja se grababa
+ *    con la hora en que se guardaba el registro). Una lectura sin `sourceId` nunca es candidata: es la copia de la
+ *    vieja con su mismo id, y cuando esa vieja ya se borró no habría cómo saberlo.
  *
- * Cada lectura nueva es la copia de una sola vieja, y una con el id de una vieja sólo puede ser la copia de esa.
- * Devuelve un Map de id viejo a `{ copy, via }` o a `{ reason, detail }`.
+ * Una vieja se da por copiada sólo si tiene una sola opción y esa lectura nueva no es opción de ninguna otra vieja del
+ * auto. Si una lectura nueva le sirve a más de una, todas quedan (`ambiguous`), así la decisión no cambia de una
+ * corrida a la siguiente: borrar una vieja copiada no le deja libre su copia a otra. Devuelve un Map de id viejo a
+ * `{ copy, via }` o a `{ reason, detail }`.
  */
 export function matchReadings({ legacy, current, records = {}, timeZone = DEFAULT_TIME_ZONE }) {
   const result = new Map()
+  const options = new Map()
   const byId = new Map(current.map(r => [r.id, r]))
-  const reserved = new Set(legacy.filter(r => byId.has(r.id)).map(r => r.id))
-  const claimed = new Set()
-  const ordered = [...legacy].sort((a, b) => a.id.localeCompare(b.id))
-
-  for (const r of ordered) {
-    const copy = byId.get(r.id)
-    if (!copy) continue
-    const diff = differences(['carId', 'km', 'date'], r.data, copy.data)
-    if (diff.length) {
-      result.set(r.id, { reason: 'copy-differs', detail: diff.join(', ') })
-      continue
-    }
-    claimed.add(copy.id)
-    result.set(r.id, { copy: copy.id, via: 'id' })
-  }
-
-  for (const r of ordered) {
-    if (result.has(r.id) || typeof r.data.sourceId !== 'string' || !LINKED_COLLECTIONS[r.data.source]) continue
-    const id = `${r.data.source}-${r.data.sourceId}`
-    const copy = byId.get(id)
-    if (copy && !claimed.has(id) && !reserved.has(id) && num(copy.data.km) != null && num(copy.data.km) === num(r.data.km)) {
-      claimed.add(id)
-      result.set(r.id, { copy: id, via: 'sourceId' })
-    } else {
-      result.set(r.id, { reason: 'no-copy', detail: `no está ${id} con ${r.data.km} km` })
-    }
-  }
+  const legacyIds = new Set(legacy.map(r => r.id))
 
   const daysOf = reading => {
     const days = new Set([localDay(reading.data.date, timeZone)])
     const collection = LINKED_COLLECTIONS[reading.data.source]
-    const record = collection && typeof reading.data.sourceId === 'string' ? records[collection]?.get(reading.data.sourceId) : null
+    const record = collection ? records[collection]?.get(reading.data.sourceId) : null
     if (record) days.add(localDay(record.createdAt, timeZone))
     days.delete(null)
     return days
   }
 
-  for (const r of ordered) {
-    if (result.has(r.id)) continue
+  for (const r of [...legacy].sort((a, b) => a.id.localeCompare(b.id))) {
+    const same = byId.get(r.id)
+    if (same) {
+      const diff = differences(['carId', 'km', 'date'], r.data, same.data)
+      if (diff.length) result.set(r.id, { reason: 'copy-differs', detail: diff.join(', ') })
+      else options.set(r.id, { ids: [r.id], via: 'id' })
+      continue
+    }
+    const source = sourceOf(r.data)
     const km = num(r.data.km)
+    if (typeof r.data.sourceId === 'string' && LINKED_COLLECTIONS[source]) {
+      const id = `${source}-${r.data.sourceId}`
+      const copy = byId.get(id)
+      if (copy && km != null && num(copy.data.km) === km) options.set(r.id, { ids: [id], via: 'sourceId' })
+      else result.set(r.id, { reason: 'no-copy', detail: `no está ${id} con ${r.data.km} km` })
+      continue
+    }
+    if (!LINKED_COLLECTIONS[source]) {
+      result.set(r.id, { reason: 'no-copy', detail: `no existe la lectura ${r.id}` })
+      continue
+    }
     const day = localDay(r.data.date, timeZone)
     if (km == null || day == null) {
       result.set(r.id, { reason: 'no-fingerprint', detail: 'sin km o sin fecha' })
       continue
     }
-    const candidates = current
-      .filter(c => !reserved.has(c.id) && !claimed.has(c.id))
-      .filter(c => num(c.data.km) === km && sourceOf(c.data) === sourceOf(r.data) && sameValue(c.data.carId, r.data.carId))
-      .filter(c => daysOf(c).has(day))
+    const ids = current
+      .filter(c => !legacyIds.has(c.id) && typeof c.data.sourceId === 'string' && sourceOf(c.data) === source)
+      .filter(c => num(c.data.km) === km && sameValue(c.data.carId, r.data.carId) && daysOf(c).has(day))
       .map(c => c.id)
       .sort()
-    if (candidates.length === 1) {
-      claimed.add(candidates[0])
-      result.set(r.id, { copy: candidates[0], via: 'day' })
-    } else if (candidates.length) {
-      result.set(r.id, { reason: 'ambiguous', detail: candidates.join(', ') })
-    } else {
-      result.set(r.id, { reason: 'no-copy', detail: `ninguna lectura de ${km} km del ${day}` })
-    }
+    if (ids.length) options.set(r.id, { ids, via: 'day' })
+    else result.set(r.id, { reason: 'no-copy', detail: `ninguna lectura vinculada de ${km} km del ${day}` })
   }
+
+  const users = new Map()
+  options.forEach(({ ids }, legacyId) => ids.forEach(id => users.set(id, [...(users.get(id) ?? []), legacyId])))
+
+  options.forEach(({ ids, via }, legacyId) => {
+    if (ids.length > 1) {
+      result.set(legacyId, { reason: 'ambiguous', detail: ids.join(', ') })
+      return
+    }
+    const shared = users.get(ids[0]).filter(id => id !== legacyId)
+    if (shared.length) result.set(legacyId, { reason: 'ambiguous', detail: `${ids[0]} también le sirve a ${shared.sort().join(', ')}` })
+    else result.set(legacyId, { copy: ids[0], via })
+  })
 
   return result
 }
 
-/** Ids de autos a leer en `cars/` para una cuenta: los de sus autos viejos y los `carId` de sus hijos viejos. */
+/** Ids de autos a leer en `cars/` para una cuenta: los de sus autos viejos (los hijos de otro auto son huérfanos). */
 export function referencedCarIds(legacy) {
-  const ids = new Set(legacy.cars.map(c => c.id))
-  for (const name of LEGACY_CHILDREN) {
-    for (const child of legacy[name]) if (typeof child.data?.carId === 'string') ids.add(child.data.carId)
-  }
-  return [...ids].filter(id => CAR_ID.test(id)).sort()
+  return [...new Set(legacy.cars.map(c => c.id))].filter(id => CAR_ID.test(id)).sort()
 }
 
-/** Por qué no se puede usar `cars/{carId}` como prueba de una copia, o null si se puede. */
-function carProblem(carId, current) {
-  if (typeof carId !== 'string' || !CAR_ID.test(carId)) return { reason: 'no-car-id', detail: `carId ${JSON.stringify(carId ?? null)}` }
-  const car = current.get(carId)?.car
-  if (!car) return { reason: 'car-missing', detail: `no existe cars/${carId}` }
-  if (car.deletedAt != null) return { reason: 'car-deleted', detail: `cars/${carId} está marcado como borrado` }
-  return null
+/** Si el auto nuevo es de la cuenta: es la dueña o está en `memberUids` (le pudo pasar el auto a un miembro). */
+function belongsTo(car, uid) {
+  return car.ownerUid === uid || (Array.isArray(car.memberUids) && car.memberUids.includes(uid))
 }
 
 /**
  * Decide qué documentos viejos de una cuenta se borran y cuáles quedan, a partir de lo que ya se leyó de Firestore.
  * No toca Firestore: lo corre `cleanup-legacy.mjs` y lo prueba vitest.
  *
- * `legacy` trae los documentos de `users/{uid}/{cars|rules|jobs|fuel|odometer}` como `{ id, data }`, y
+ * `legacy` trae los documentos de `users/{uid}/{cars|rules|jobs|fuel|odometer}` como `{ id, data, updateTime }`, y
  * `legacyCarsWithChildren` los ids de autos viejos que tienen alguna subcolección (esos quedan: borrar el documento
  * dejaría sus hijos sueltos). `current` es un Map de id de auto a lo que hay en `cars/{carId}`: `{ car, rules, jobs,
- * fuel, odometer }`, con `car` = los datos del auto o null, `rules`/`jobs`/`fuel` Maps de id a datos y `odometer`
- * una lista `{ id, data }`.
+ * fuel, odometer, createTimes }`, con `car` = los datos del auto o null, `rules`/`jobs`/`fuel` Maps de id a datos,
+ * `odometer` una lista `{ id, data }` y `createTimes` un Map de ruta (`cars/…`) a su `createTime`.
  *
- * Un documento viejo se borra sólo si su copia está probada: el auto `cars/{carId}` existe y no está marcado como
- * borrado, y la copia existe con el mismo id y los mismos `fingerprintFields` (las lecturas de km, con
- * `matchReadings`). Un auto viejo se borra sólo si además se borran todos sus hijos viejos (los que tienen su
- * `carId`). Todo lo demás queda, con el motivo.
+ * Un documento viejo se borra sólo si su copia está probada:
+ * - un hijo tiene que ser de un auto viejo de la cuenta (si no, `orphan`);
+ * - el auto `cars/{carId}` existe, no está marcado como borrado y es de la cuenta (dueña o en `memberUids`; si no,
+ *   `conflict`);
+ * - la copia existe con el mismo id y los mismos `fingerprintFields` (las lecturas de km, con `matchReadings`);
+ * - el documento viejo no cambió después de que se creó la copia (`updateTime` viejo > `createTime` de la copia:
+ *   `legacy-newer`, lo editó la versión vieja de la PWA después de migrar). Si falta alguno de los dos, no se compara.
+ * Un auto viejo se borra sólo si además se borran todos sus hijos viejos. Todo lo demás queda, con el motivo.
  *
- * Devuelve `deletes` (primero los hijos y al final los autos, cada uno `{ path, collection, carId, data }`; un auto
- * trae `children` con las rutas de sus hijos, que tienen que haberse borrado antes) y el `report` de la cuenta:
- * `{ uid, deleted: [{ path, carId, via }], kept: [{ path, carId, reason, detail }] }`.
+ * Devuelve `deletes` (primero los hijos y al final los autos, cada uno `{ path, collection, carId, data, copyPath,
+ * carPath }`; un auto trae `children` con las rutas de sus hijos, que tienen que haberse borrado antes) y el `report`
+ * de la cuenta: `{ uid, deleted: [{ path, carId, via }], kept: [{ path, carId, reason, detail }] }`.
  */
 export function planAccountCleanup({ uid, legacy, legacyCarsWithChildren = new Set(), current, timeZone = DEFAULT_TIME_ZONE }) {
   const report = { uid, deleted: [], kept: [] }
   const deletes = []
   const keptCars = new Set()
   const childrenOf = new Map()
+  const legacyCarIds = new Set(legacy.cars.map(c => c.id))
 
+  const carProblem = carId => {
+    const car = current.get(carId)?.car
+    if (!car) return { reason: 'car-missing', detail: `no existe cars/${carId}` }
+    if (car.deletedAt != null) return { reason: 'car-deleted', detail: `cars/${carId} está marcado como borrado` }
+    if (!belongsTo(car, uid)) return { reason: 'conflict', detail: `cars/${carId} es de otra cuenta` }
+    return null
+  }
+  const parentProblem = carId => {
+    if (typeof carId !== 'string' || !CAR_ID.test(carId)) return { reason: 'no-car-id', detail: `carId ${JSON.stringify(carId ?? null)}` }
+    if (!legacyCarIds.has(carId)) return { reason: 'orphan', detail: `${carId} no es un auto viejo de la cuenta` }
+    return carProblem(carId)
+  }
+  const newer = (doc, copyPath, carId) => {
+    const order = compareInstants(doc.updateTime, current.get(carId)?.createTimes?.get(copyPath))
+    return order != null && order > 0
+  }
   const keep = (path, carId, reason, detail = null) => {
     report.kept.push({ path, carId: carId ?? null, reason, detail })
     if (typeof carId === 'string') keptCars.add(carId)
   }
-  const remove = (collection, doc, carId, via) => {
+  const remove = (collection, doc, carId, copyPath, via) => {
     const path = legacyPath(uid, collection, doc.id)
-    deletes.push({ path, collection, carId, data: doc.data })
+    deletes.push({ path, collection, carId, data: doc.data, copyPath, carPath: `cars/${carId}` })
     report.deleted.push({ path, carId, via })
     if (!childrenOf.has(carId)) childrenOf.set(carId, [])
     childrenOf.get(carId).push(path)
@@ -227,7 +258,7 @@ export function planAccountCleanup({ uid, legacy, legacyCarsWithChildren = new S
     if (name === 'odometer') {
       const byCar = new Map()
       for (const r of docs) {
-        if (typeof r.data?.carId !== 'string' || carProblem(r.data.carId, current)) continue
+        if (parentProblem(r.data?.carId)) continue
         if (!byCar.has(r.data.carId)) byCar.set(r.data.carId, [])
         byCar.get(r.data.carId).push(r)
       }
@@ -246,34 +277,51 @@ export function planAccountCleanup({ uid, legacy, legacyCarsWithChildren = new S
     for (const doc of docs) {
       const path = legacyPath(uid, name, doc.id)
       const carId = doc.data?.carId
-      const problem = carProblem(carId, current)
+      const problem = parentProblem(carId)
       if (problem) {
         keep(path, carId, problem.reason, problem.detail)
         continue
       }
+      let copyPath
+      let via
       if (name === 'odometer') {
         const match = readingMatches.get(doc.id)
-        if (match?.copy) remove(name, doc, carId, `cars/${carId}/odometer/${match.copy} (${match.via})`)
-        else keep(path, carId, match?.reason ?? 'no-copy', match?.detail ?? null)
+        if (!match?.copy) {
+          keep(path, carId, match?.reason ?? 'no-copy', match?.detail ?? null)
+          continue
+        }
+        copyPath = `cars/${carId}/odometer/${match.copy}`
+        via = `${copyPath} (${match.via})`
+      } else {
+        copyPath = `cars/${carId}/${name}/${doc.id}`
+        const copy = current.get(carId)[name]?.get(doc.id)
+        if (!copy) {
+          keep(path, carId, 'no-copy', `no existe ${copyPath}`)
+          continue
+        }
+        const diff = differences(fingerprintFields(name, doc.data), doc.data, copy)
+        if (diff.length) {
+          keep(path, carId, 'copy-differs', diff.join(', '))
+          continue
+        }
+        via = copyPath
+      }
+      if (newer(doc, copyPath, carId)) {
+        keep(path, carId, 'legacy-newer', `cambió después de crearse ${copyPath}`)
         continue
       }
-      const copy = current.get(carId)[name]?.get(doc.id)
-      if (!copy) {
-        keep(path, carId, 'no-copy', `no existe cars/${carId}/${name}/${doc.id}`)
-        continue
-      }
-      const diff = differences(fingerprintFields(name, doc.data), doc.data, copy)
-      if (diff.length) {
-        keep(path, carId, 'copy-differs', diff.join(', '))
-        continue
-      }
-      remove(name, doc, carId, `cars/${carId}/${name}/${doc.id}`)
+      remove(name, doc, carId, copyPath, via)
     }
   }
 
   for (const doc of [...legacy.cars].sort((a, b) => a.id.localeCompare(b.id))) {
     const path = legacyPath(uid, 'cars', doc.id)
-    const problem = carProblem(doc.id, current)
+    const copyPath = `cars/${doc.id}`
+    if (!CAR_ID.test(doc.id)) {
+      keep(path, null, 'no-car-id', `id ${JSON.stringify(doc.id)}`)
+      continue
+    }
+    const problem = carProblem(doc.id)
     if (problem) {
       keep(path, doc.id, problem.reason, problem.detail)
       continue
@@ -296,19 +344,38 @@ export function planAccountCleanup({ uid, legacy, legacyCarsWithChildren = new S
       keep(path, doc.id, 'copy-differs', diff.join(', '))
       continue
     }
-    deletes.push({ path, collection: 'cars', carId: doc.id, data: doc.data, children: childrenOf.get(doc.id) ?? [] })
-    report.deleted.push({ path, carId: doc.id, via: `cars/${doc.id}` })
+    if (newer(doc, copyPath, doc.id)) {
+      keep(path, doc.id, 'legacy-newer', `cambió después de crearse ${copyPath}`)
+      continue
+    }
+    deletes.push({ path, collection: 'cars', carId: doc.id, data: doc.data, copyPath, carPath: copyPath, children: childrenOf.get(doc.id) ?? [] })
+    report.deleted.push({ path, carId: doc.id, via: copyPath })
   }
 
   return { deletes, report }
 }
 
 /**
+ * Vuelve a mirar, justo antes de borrar, que nada cambió desde que se decidió: el documento viejo, su copia y el auto
+ * nuevo tienen que existir con el mismo `updateTime` que cuando se leyeron. `expected` y `fresh` traen `legacy`,
+ * `copy` y `car`; en `fresh`, cada uno es `{ exists, updateTime }`. Devuelve null si se puede borrar o el motivo.
+ */
+export function recheck({ expected, fresh }) {
+  for (const key of ['legacy', 'copy', 'car']) {
+    const now = fresh[key]
+    if (!now?.exists) return `${key}: ya no existe`
+    if (expected[key] == null || compareInstants(expected[key], now.updateTime) !== 0) return `${key}: cambió desde que se leyó`
+  }
+  return null
+}
+
+/**
  * Pasa los datos de un documento a algo que JSON guarda sin perder información: los instantes como
  * `{ __time: ISO, seconds, nanoseconds }`, las referencias como `{ __ref: ruta }`, los bytes en base64 y los
- * GeoPoint como `{ __geo: [lat, lng] }`.
+ * GeoPoint como `{ __geo: [lat, lng] }`. Tira error con un número no finito (JSON lo guardaría como null).
  */
 export function toBackupValue(value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(`número no finito: ${value}`)
   if (value == null || typeof value !== 'object') return value ?? null
   if (Array.isArray(value)) return value.map(toBackupValue)
   if (value instanceof Date) {
@@ -328,8 +395,46 @@ export function buildBackup(deletes, now = new Date()) {
   return {
     createdAt: now.toISOString(),
     count: deletes.length,
-    docs: deletes.map(d => ({ path: d.path, data: toBackupValue(d.data) })),
+    docs: deletes.map(d => {
+      try {
+        return { path: d.path, data: toBackupValue(d.data) }
+      } catch (e) {
+        throw new Error(`${d.path}: ${e.message}`)
+      }
+    }),
   }
+}
+
+/** Si dos valores ya pasados por JSON son iguales, campo por campo y en el mismo orden de las listas. */
+function deepEqual(a, b) {
+  if (a === b) return true
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const ka = Object.keys(a)
+  const kb = Object.keys(b)
+  return ka.length === kb.length && ka.every(k => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]))
+}
+
+/**
+ * Verifica el respaldo releído del disco contra lo que se va a borrar: que sea JSON, que tenga un documento por cada
+ * borrado, en el mismo orden, con la misma ruta y los mismos datos. Devuelve null si coincide o el motivo.
+ */
+export function verifyBackup(text, deletes) {
+  let read
+  try {
+    read = JSON.parse(text)
+  } catch {
+    return 'el respaldo no es JSON válido'
+  }
+  if (read?.count !== deletes.length || !Array.isArray(read.docs) || read.docs.length !== deletes.length) {
+    return 'el respaldo no tiene la misma cantidad de documentos'
+  }
+  for (let i = 0; i < deletes.length; i++) {
+    const doc = read.docs[i]
+    if (doc?.path !== deletes[i].path) return `el documento ${i + 1} del respaldo no es ${deletes[i].path}`
+    if (!deepEqual(doc.data, toBackupValue(deletes[i].data))) return `los datos de ${deletes[i].path} no coinciden`
+  }
+  return null
 }
 
 /** Nombre del archivo de respaldo: `legacy-backup-<fecha y hora UTC>.json`, sin caracteres que Windows no acepta. */
@@ -340,12 +445,15 @@ export function backupFileName(now = new Date()) {
 /** Textos de cada motivo por el que un documento viejo queda. */
 export const KEEP_REASONS = {
   'no-car-id': 'sin un carId válido',
+  orphan: 'no es de un auto viejo de la cuenta',
   'car-missing': 'el auto no existe en cars/',
   'car-deleted': 'el auto está marcado como borrado en cars/',
+  conflict: 'el auto de cars/ es de otra cuenta',
   'no-copy': 'sin copia en cars/',
   'copy-differs': 'la copia es distinta',
   ambiguous: 'más de una copia posible',
   'no-fingerprint': 'sin datos para comparar con la copia',
+  'legacy-newer': 'el documento viejo cambió después de copiarse',
   'child-kept': 'queda algún hijo',
   'has-subcollections': 'tiene subcolecciones',
 }

@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest'
 import {
   backupFileName,
   buildBackup,
+  compareInstants,
   isLegacyPath,
   legacyPath,
   localDay,
   matchReadings,
   planAccountCleanup,
+  recheck,
   referencedCarIds,
   sameValue,
   toBackupValue,
+  verifyBackup,
 } from './cleanup-legacy-plan.mjs'
 
 /** Un `Timestamp` de Firestore de mentira: lo que usa el plan (`toMillis`, `toDate`, `seconds`, `nanoseconds`). */
@@ -205,27 +208,113 @@ describe('planAccountCleanup', () => {
     expect(deletes).toHaveLength(5)
   })
 
-  it('deja un hijo sin carId válido, y borra uno de otro auto que sí tiene copia', () => {
+  it('deja un hijo sin carId válido o de un auto que no es viejo de la cuenta (huérfano)', () => {
     const src = legacy()
     src.fuel.push(doc('f9', { total: 1 }), doc('f8', { carId: '../x', total: 1 }))
     src.rules.push(doc('r2', { carId: 'c2', name: 'VTV' }))
     const cur = current()
     cur.set('c2', {
-      car: { createdAt: ts('2026-01-01T00:00:00Z') },
+      car: { createdAt: ts('2026-01-01T00:00:00Z'), ownerUid: 'u1' },
       rules: new Map([['r2', { carId: 'c2', name: 'VTV' }]]),
       jobs: new Map(),
       fuel: new Map(),
       odometer: [],
     })
     const { deletes, report } = plan({ legacy: src, current: cur })
-    expect(keptBy(report)).toEqual({ 'users/u1/fuel/f9': 'no-car-id', 'users/u1/fuel/f8': 'no-car-id' })
-    expect(deletes.map(d => d.path)).toContain('users/u1/rules/r2')
+    expect(keptBy(report)).toEqual({
+      'users/u1/fuel/f9': 'no-car-id',
+      'users/u1/fuel/f8': 'no-car-id',
+      'users/u1/rules/r2': 'orphan',
+    })
     expect(deletes.map(d => d.path)).toContain('users/u1/cars/c1')
+  })
+
+  it('deja todo si el auto nuevo es de otra cuenta', () => {
+    const cur = current()
+    cur.get('c1').car.ownerUid = 'otra'
+    const { deletes, report } = plan({ current: cur })
+    expect(deletes).toEqual([])
+    expect(new Set(report.kept.map(k => k.reason))).toEqual(new Set(['conflict']))
+  })
+
+  it('borra si la cuenta es miembro del auto nuevo (le pasó el auto a otro)', () => {
+    const cur = current()
+    Object.assign(cur.get('c1').car, { ownerUid: 'otra', memberUids: ['u1'] })
+    expect(plan({ current: cur }).report.kept).toEqual([])
+  })
+
+  it('deja un documento viejo editado después de crearse su copia (legacy-newer), y con él el auto', () => {
+    const src = legacy()
+    src.jobs[0].updateTime = ts('2026-05-01T00:00:00Z')
+    src.odometer[1].updateTime = ts('2026-02-05T20:00:00Z')
+    const cur = current()
+    cur.get('c1').createTimes = new Map([
+      ['cars/c1/jobs/j1', ts('2026-04-01T00:00:00Z')],
+      ['cars/c1/odometer/fuel-f1', ts('2026-04-01T00:00:00Z')],
+    ])
+    const { deletes, report } = plan({ legacy: src, current: cur })
+    expect(keptBy(report)).toEqual({ 'users/u1/jobs/j1': 'legacy-newer', 'users/u1/cars/c1': 'child-kept' })
+    expect(deletes.map(d => d.path)).toContain('users/u1/odometer/o2')
+  })
+
+  it('deja el auto viejo editado después de crearse cars/{carId}', () => {
+    const src = legacy()
+    src.cars[0].updateTime = ts('2026-06-01T00:00:00Z')
+    const cur = current()
+    cur.get('c1').createTimes = new Map([['cars/c1', ts('2026-05-31T23:59:59Z')]])
+    expect(keptBy(plan({ legacy: src, current: cur }).report)).toEqual({ 'users/u1/cars/c1': 'legacy-newer' })
+  })
+
+  it('cada borrado trae la ruta de su copia y la del auto nuevo, para volver a leerlas antes de borrar', () => {
+    const { deletes } = plan()
+    const byPath = new Map(deletes.map(d => [d.path, d]))
+    expect(byPath.get('users/u1/odometer/o2')).toMatchObject({ copyPath: 'cars/c1/odometer/fuel-f1', carPath: 'cars/c1' })
+    expect(byPath.get('users/u1/jobs/j1')).toMatchObject({ copyPath: 'cars/c1/jobs/j1', carPath: 'cars/c1' })
+    expect(byPath.get('users/u1/cars/c1')).toMatchObject({ copyPath: 'cars/c1', carPath: 'cars/c1' })
+  })
+
+  it('dos corridas seguidas: la segunda no borra nada que no tenga su propia copia', () => {
+    const odo = (id, km, iso, extra = {}) => doc(id, { carId: 'c1', km, date: ts(iso), source: 'manual', ...extra })
+    const src = legacy()
+    src.odometer = [
+      odo('m1', 500, '2026-01-10T15:00:00Z'),
+      odo('m2', 500, '2026-01-10T16:00:00Z'),
+      odo('a1', 950, '2026-02-05T20:00:00Z', { source: 'fuel' }),
+      odo('a2', 950, '2026-02-05T21:00:00Z', { source: 'fuel' }),
+      odo('b1', 990, '2026-02-09T20:00:00Z', { source: 'fuel' }),
+    ]
+    const cur = current()
+    cur.get('c1').odometer = [
+      odo('m1', 500, '2026-01-10T15:00:00Z'),
+      odo('fuel-f1', 950, '2026-02-05T15:00:00Z', { source: 'fuel', sourceId: 'f1' }),
+      odo('fuel-f2', 990, '2026-02-09T15:00:00Z', { source: 'fuel', sourceId: 'f2' }),
+    ]
+
+    const first = plan({ legacy: src, current: cur })
+    const removed = new Set(first.deletes.map(d => d.path))
+    expect([...removed].filter(p => p.includes('/odometer/')).sort()).toEqual(['users/u1/odometer/b1', 'users/u1/odometer/m1'])
+    expect(keptBy(first.report)).toMatchObject({
+      'users/u1/odometer/m2': 'no-copy',
+      'users/u1/odometer/a1': 'ambiguous',
+      'users/u1/odometer/a2': 'ambiguous',
+    })
+
+    const after = Object.fromEntries(
+      Object.entries(src).map(([name, docs]) => [name, docs.filter(d => !removed.has(`users/u1/${name}/${d.id}`))]),
+    )
+    const second = plan({ legacy: after, current: cur })
+    expect(second.deletes).toEqual([])
+    expect(keptBy(second.report)).toMatchObject({
+      'users/u1/odometer/m2': 'no-copy',
+      'users/u1/odometer/a1': 'ambiguous',
+      'users/u1/odometer/a2': 'ambiguous',
+    })
   })
 })
 
 describe('matchReadings', () => {
   const reading = (id, km, iso, extra = {}) => doc(id, { carId: 'c1', km, date: ts(iso), source: 'manual', ...extra })
+  const linked = (id, km, iso, source = 'fuel') => reading(id, km, iso, { source, sourceId: id.split('-').slice(1).join('-') })
 
   it('mismo id: tiene que tener el mismo km y la misma fecha', () => {
     const r = reading('o1', 100, '2026-01-01T12:00:00Z')
@@ -235,67 +324,78 @@ describe('matchReadings', () => {
   })
 
   it('con el mismo id distinto no busca otra copia por día', () => {
-    const r = reading('o1', 100, '2026-01-01T12:00:00Z')
-    const current = [reading('o1', 101, '2026-01-01T12:00:00Z'), reading('x', 100, '2026-01-01T13:00:00Z')]
+    const r = reading('o1', 100, '2026-01-01T12:00:00Z', { source: 'fuel' })
+    const current = [reading('o1', 101, '2026-01-01T12:00:00Z', { source: 'fuel' }), linked('fuel-f1', 100, '2026-01-01T15:00:00Z')]
     expect(matchReadings({ legacy: [r], current }).get('o1').reason).toBe('copy-differs')
   })
 
   it('por sourceId: la lectura {source}-{sourceId} con el mismo km', () => {
     const r = reading('o1', 100, '2026-01-01T12:00:00Z', { source: 'job', sourceId: 'j1' })
-    const copy = reading('job-j1', 100, '2026-03-01T12:00:00Z', { source: 'job', sourceId: 'j1' })
-    expect(matchReadings({ legacy: [r], current: [copy] }).get('o1')).toEqual({ copy: 'job-j1', via: 'sourceId' })
-    const wrong = reading('job-j1', 120, '2026-01-01T12:00:00Z', { source: 'job', sourceId: 'j1' })
-    expect(matchReadings({ legacy: [r], current: [wrong] }).get('o1').reason).toBe('no-copy')
+    expect(matchReadings({ legacy: [r], current: [linked('job-j1', 100, '2026-03-01T12:00:00Z', 'job')] }).get('o1')).toEqual({
+      copy: 'job-j1',
+      via: 'sourceId',
+    })
+    expect(matchReadings({ legacy: [r], current: [linked('job-j1', 120, '2026-01-01T12:00:00Z', 'job')] }).get('o1').reason).toBe('no-copy')
   })
 
-  it('por día: mismo km, mismo origen y mismo día local', () => {
-    const r = reading('o1', 100, '2026-01-01T20:00:00Z')
-    const copy = reading('n1', 100, '2026-01-01T13:00:00Z')
-    expect(matchReadings({ legacy: [r], current: [copy] }).get('o1')).toEqual({ copy: 'n1', via: 'day' })
+  it('por día: una lectura vinculada del mismo km, origen y día local', () => {
+    const r = reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel' })
+    expect(matchReadings({ legacy: [r], current: [linked('fuel-f1', 100, '2026-01-01T15:00:00Z')] }).get('o1')).toEqual({
+      copy: 'fuel-f1',
+      via: 'day',
+    })
+  })
+
+  it('por día sólo valen las vinculadas: una lectura manual o sin sourceId no es candidata', () => {
+    const manual = reading('o1', 100, '2026-01-01T20:00:00Z')
+    expect(matchReadings({ legacy: [manual], current: [reading('n1', 100, '2026-01-01T13:00:00Z')] }).get('o1').reason).toBe('no-copy')
+    const fuel = reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel' })
+    const unlinked = reading('n1', 100, '2026-01-01T13:00:00Z', { source: 'fuel' })
+    expect(matchReadings({ legacy: [fuel], current: [unlinked] }).get('o1').reason).toBe('no-copy')
   })
 
   it('el día es el de Argentina: 01:00 UTC todavía es el día anterior', () => {
     expect(localDay(ts('2026-03-10T01:00:00Z'))).toBe('2026-03-09')
-    const r = reading('o1', 100, '2026-03-10T01:00:00Z')
-    expect(matchReadings({ legacy: [r], current: [reading('n1', 100, '2026-03-09T15:00:00Z')] }).get('o1').copy).toBe('n1')
-    expect(matchReadings({ legacy: [r], current: [reading('n1', 100, '2026-03-10T15:00:00Z')] }).get('o1').reason).toBe('no-copy')
+    const r = reading('o1', 100, '2026-03-10T01:00:00Z', { source: 'fuel' })
+    expect(matchReadings({ legacy: [r], current: [linked('fuel-f1', 100, '2026-03-09T15:00:00Z')] }).get('o1').copy).toBe('fuel-f1')
+    expect(matchReadings({ legacy: [r], current: [linked('fuel-f1', 100, '2026-03-10T15:00:00Z')] }).get('o1').reason).toBe('no-copy')
   })
 
   it('otro origen u otro km no cuentan', () => {
     const r = reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel' })
-    const current = [reading('n1', 100, '2026-01-01T13:00:00Z'), reading('n2', 99, '2026-01-01T13:00:00Z', { source: 'fuel' })]
+    const current = [linked('job-j1', 100, '2026-01-01T13:00:00Z', 'job'), linked('fuel-f1', 99, '2026-01-01T13:00:00Z')]
     expect(matchReadings({ legacy: [r], current }).get('o1').reason).toBe('no-copy')
   })
 
-  it('una vieja sin source cuenta como manual', () => {
-    const r = doc('o1', { carId: 'c1', km: 100, date: ts('2026-01-01T20:00:00Z') })
-    expect(matchReadings({ legacy: [r], current: [reading('n1', 100, '2026-01-01T13:00:00Z')] }).get('o1').copy).toBe('n1')
-  })
-
   it('más de un candidato: ambigua, no se borra', () => {
-    const r = reading('o1', 100, '2026-01-01T20:00:00Z')
-    const current = [reading('n1', 100, '2026-01-01T13:00:00Z'), reading('n2', 100, '2026-01-01T14:00:00Z')]
-    expect(matchReadings({ legacy: [r], current }).get('o1')).toEqual({ reason: 'ambiguous', detail: 'n1, n2' })
+    const r = reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel' })
+    const current = [linked('fuel-f1', 100, '2026-01-01T13:00:00Z'), linked('fuel-f2', 100, '2026-01-01T14:00:00Z')]
+    expect(matchReadings({ legacy: [r], current }).get('o1')).toEqual({ reason: 'ambiguous', detail: 'fuel-f1, fuel-f2' })
   })
 
-  it('cada lectura nueva es la copia de una sola vieja', () => {
-    const legacyReadings = [reading('o1', 100, '2026-01-01T20:00:00Z'), reading('o2', 100, '2026-01-01T21:00:00Z')]
-    const result = matchReadings({ legacy: legacyReadings, current: [reading('n1', 100, '2026-01-01T13:00:00Z')] })
-    expect(result.get('o1')).toEqual({ copy: 'n1', via: 'day' })
-    expect(result.get('o2').reason).toBe('no-copy')
+  it('una lectura nueva que le sirve a dos viejas deja a las dos (ambiguas)', () => {
+    const legacyReadings = [
+      reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel' }),
+      reading('o2', 100, '2026-01-01T21:00:00Z', { source: 'fuel' }),
+    ]
+    const result = matchReadings({ legacy: legacyReadings, current: [linked('fuel-f1', 100, '2026-01-01T13:00:00Z')] })
+    expect(result.get('o1')).toEqual({ reason: 'ambiguous', detail: 'fuel-f1 también le sirve a o2' })
+    expect(result.get('o2')).toEqual({ reason: 'ambiguous', detail: 'fuel-f1 también le sirve a o1' })
   })
 
-  it('una lectura nueva con el id de una vieja no es candidata de otra', () => {
-    const legacyReadings = [reading('o1', 100, '2026-01-01T20:00:00Z'), reading('o2', 100, '2026-01-01T21:00:00Z')]
-    const current = [reading('o2', 101, '2026-01-01T21:00:00Z')]
-    const result = matchReadings({ legacy: legacyReadings, current })
-    expect(result.get('o1').reason).toBe('no-copy')
-    expect(result.get('o2').reason).toBe('copy-differs')
+  it('cuenta también la copia por sourceId: si otra vieja la toma por día, quedan las dos', () => {
+    const legacyReadings = [
+      reading('o1', 100, '2026-01-01T20:00:00Z', { source: 'fuel', sourceId: 'f1' }),
+      reading('o2', 100, '2026-01-01T21:00:00Z', { source: 'fuel' }),
+    ]
+    const result = matchReadings({ legacy: legacyReadings, current: [linked('fuel-f1', 100, '2026-01-01T13:00:00Z')] })
+    expect(result.get('o1').reason).toBe('ambiguous')
+    expect(result.get('o2').reason).toBe('ambiguous')
   })
 
   it('una lectura movida por link-readings a la fecha de la carga se encuentra por el createdAt de la carga', () => {
     const r = reading('o1', 950, '2026-02-07T20:00:00Z', { source: 'fuel' })
-    const copy = reading('fuel-f1', 950, '2026-02-05T15:00:00Z', { source: 'fuel', sourceId: 'f1' })
+    const copy = linked('fuel-f1', 950, '2026-02-05T15:00:00Z')
     const records = { fuel: new Map([['f1', { createdAt: ts('2026-02-07T20:00:00Z') }]]), jobs: new Map() }
     expect(matchReadings({ legacy: [r], current: [copy], records }).get('o1')).toEqual({ copy: 'fuel-f1', via: 'day' })
     const otherDay = { fuel: new Map([['f1', { createdAt: ts('2026-02-08T20:00:00Z') }]]), jobs: new Map() }
@@ -303,26 +403,61 @@ describe('matchReadings', () => {
   })
 
   it('sin km o sin fecha no se puede comparar', () => {
-    const r = doc('o1', { carId: 'c1', km: null, date: ts('2026-01-01T20:00:00Z') })
+    const r = doc('o1', { carId: 'c1', km: null, date: ts('2026-01-01T20:00:00Z'), source: 'fuel' })
     expect(matchReadings({ legacy: [r], current: [] }).get('o1').reason).toBe('no-fingerprint')
   })
 })
 
 describe('referencedCarIds', () => {
-  it('junta los autos viejos y los carId de los hijos, sin ids inválidos', () => {
+  it('lee sólo los autos viejos de la cuenta, sin ids inválidos', () => {
     const src = legacy()
-    src.jobs.push(doc('j2', { carId: 'c2' }), doc('j3', { carId: 'a/b' }), doc('j4', {}))
-    expect(referencedCarIds(src)).toEqual(['c1', 'c2'])
+    src.cars.push(doc('a/b', {}))
+    src.jobs.push(doc('j2', { carId: 'c2' }))
+    expect(referencedCarIds(src)).toEqual(['c1'])
   })
 })
 
-describe('sameValue', () => {
+describe('sameValue y compareInstants', () => {
   it('null y ausente son iguales; los instantes se comparan por milisegundo', () => {
     expect(sameValue(undefined, null)).toBe(true)
     expect(sameValue(ts('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'))).toBe(true)
     expect(sameValue(ts('2026-01-01T00:00:00Z'), ts('2026-01-01T00:00:01Z'))).toBe(false)
     expect(sameValue('a', null)).toBe(false)
     expect(sameValue(0, null)).toBe(false)
+  })
+
+  it('compareInstants compara al nanosegundo y da null si falta uno', () => {
+    expect(compareInstants({ seconds: 10, nanoseconds: 2 }, { seconds: 10, nanoseconds: 1 })).toBeGreaterThan(0)
+    expect(compareInstants({ seconds: 10, nanoseconds: 1 }, { seconds: 10, nanoseconds: 1 })).toBe(0)
+    expect(compareInstants(ts('2026-01-01T00:00:00Z'), ts('2026-01-02T00:00:00Z'))).toBeLessThan(0)
+    expect(compareInstants(null, ts('2026-01-01T00:00:00Z'))).toBeNull()
+  })
+})
+
+describe('recheck', () => {
+  const t = { seconds: 10, nanoseconds: 0 }
+  const fresh = (over = {}) => ({
+    legacy: { exists: true, updateTime: t },
+    copy: { exists: true, updateTime: t },
+    car: { exists: true, updateTime: t },
+    ...over,
+  })
+  const expected = { legacy: t, copy: t, car: t }
+
+  it('deja borrar si nada cambió', () => {
+    expect(recheck({ expected, fresh: fresh() })).toBeNull()
+  })
+
+  it('no deja borrar si la copia, el auto o el viejo ya no están o cambiaron', () => {
+    expect(recheck({ expected, fresh: fresh({ copy: { exists: false, updateTime: null } }) })).toBe('copy: ya no existe')
+    expect(recheck({ expected, fresh: fresh({ copy: { exists: true, updateTime: { seconds: 11, nanoseconds: 0 } } }) })).toBe(
+      'copy: cambió desde que se leyó',
+    )
+    expect(recheck({ expected, fresh: fresh({ car: { exists: false, updateTime: null } }) })).toBe('car: ya no existe')
+    expect(recheck({ expected, fresh: fresh({ legacy: { exists: true, updateTime: { seconds: 10, nanoseconds: 1 } } }) })).toBe(
+      'legacy: cambió desde que se leyó',
+    )
+    expect(recheck({ expected: { ...expected, copy: undefined }, fresh: fresh() })).toBe('copy: cambió desde que se leyó')
   })
 })
 
@@ -337,12 +472,41 @@ describe('respaldo', () => {
     })
   })
 
+  it('tira error con un número no finito, que JSON guardaría como null', () => {
+    expect(() => toBackupValue({ km: Number.NaN })).toThrow()
+    expect(() => buildBackup([{ path: 'users/u1/fuel/f1', data: { total: Infinity } }])).toThrow('users/u1/fuel/f1')
+  })
+
   it('arma el respaldo con la ruta y los datos de cada documento que se borra, y sobrevive a JSON', () => {
     const { deletes } = plan()
     const backup = JSON.parse(JSON.stringify(buildBackup(deletes, new Date('2026-11-06T10:00:00Z'))))
     expect(backup.count).toBe(6)
     expect(backup.docs.map(d => d.path)).toEqual(deletes.map(d => d.path))
     expect(backup.docs.find(d => d.path === 'users/u1/cars/c1').data.createdAt.__time).toBe('2026-01-10T15:00:00.000Z')
+  })
+
+  it('verifyBackup acepta el respaldo releído y rechaza uno con otros datos, otra ruta o incompleto', () => {
+    const { deletes } = plan()
+    const text = JSON.stringify(buildBackup(deletes), null, 2)
+    expect(verifyBackup(text, deletes)).toBeNull()
+
+    const changed = JSON.parse(text)
+    changed.docs[2].data.total = 1
+    expect(verifyBackup(JSON.stringify(changed), deletes)).toBe('los datos de users/u1/fuel/f1 no coinciden')
+
+    const missingField = JSON.parse(text)
+    delete missingField.docs[3].data.title
+    expect(verifyBackup(JSON.stringify(missingField), deletes)).toBe('los datos de users/u1/jobs/j1 no coinciden')
+
+    const otherPath = JSON.parse(text)
+    otherPath.docs[0].path = 'users/u1/odometer/x'
+    expect(verifyBackup(JSON.stringify(otherPath), deletes)).toMatch(/no es users\/u1\/odometer\/o1/)
+
+    const short = JSON.parse(text)
+    short.docs.pop()
+    expect(verifyBackup(JSON.stringify(short), deletes)).toBe('el respaldo no tiene la misma cantidad de documentos')
+
+    expect(verifyBackup(text.slice(0, 50), deletes)).toBe('el respaldo no es JSON válido')
   })
 
   it('el nombre del archivo no tiene caracteres que Windows no acepta', () => {
