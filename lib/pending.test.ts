@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RuleState, RuleWithState } from './maintenance'
+import { outboxEntry, withFailure, type OutboxEntry } from './outbox'
 import { kmDueDay, kmDueSince, pendingItems, urgentCount, type PendingItem } from './pending'
 import type { Car, Invite, Job, MaintenanceRule, UserSettings } from './types'
 
@@ -22,7 +23,8 @@ const car: Car = {
   createdAt: new Date(0),
   ownerUid: OWNER,
   ownerName: 'Ana',
-  members: ['beto@gmail.com'],
+  memberUids: [MEMBER],
+  memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto' } },
 }
 
 const rule: MaintenanceRule = {
@@ -112,6 +114,7 @@ const key = (i: PendingItem) => {
   if (i.kind === 'rule') return i.rule.id
   if (i.kind === 'review' || i.kind === 'rejected') return `${i.kind}:${i.job.id}`
   if (i.kind === 'invite') return `invite:${i.invite.id}`
+  if (i.kind === 'failed-write') return `failed:${i.entry.id}`
   return 'km'
 }
 
@@ -217,7 +220,14 @@ describe('pendingItems', () => {
   })
 
   it('ordena vencidos, para revisar, km, rechazados, invitaciones y por vencer, y todos suman salvo los por vencer', () => {
-    const shared: Car = { ...car, id: 'c2', ownerUid: 'u3', ownerName: 'Caro', members: ['ana@gmail.com'] }
+    const shared: Car = {
+      ...car,
+      id: 'c2',
+      ownerUid: 'u3',
+      ownerName: 'Caro',
+      memberUids: [OWNER],
+      memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+    }
     const jobs = [
       job({ id: 'p', status: 'pending', createdBy: MEMBER }),
       job({ id: 'x', carId: 'c2', status: 'rejected', createdBy: OWNER }),
@@ -226,5 +236,26 @@ describe('pendingItems', () => {
     const items = pendingItems({ ...base, jobs, invites: [invite()], cars: [car, shared], rulesByCar: rules, today: '2026-09-28' })
     expect(items.map(key)).toEqual(['overdue', 'review:p', 'km', 'km', 'rejected:x', 'invite:c9_beto@gmail.com', 'soon'])
     expect(urgentCount(items)).toBe(6)
+  })
+
+  it('lo que no se pudo guardar va primero, de lo más nuevo a lo más viejo, con su auto si todavía está', () => {
+    const entry = (id: string, carId: string, createdAt: number): OutboxEntry =>
+      outboxEntry({
+        id,
+        carId,
+        carLabel: 'Ford Focus',
+        now: createdAt,
+        write: { kind: 'km', payload: { recordId: `r-${id}`, data: { km: 15000, date: '2026-09-21' }, original: null } },
+      })
+    const outbox = [
+      ...withFailure([entry('old', 'c1', 1), entry('new', 'gone', 2)], 'old', 'x'),
+      entry('waiting', 'c1', 3),
+    ].map(e => (e.id === 'new' ? { ...e, state: 'failed' as const, error: 'y' } : e))
+    const rules = new Map([['c1', [withState('overdue', 'overdue')]]])
+    const items = pendingItems({ ...base, outbox, cars: [car], rulesByCar: rules, today: '2026-09-21' })
+    expect(items.map(key)).toEqual(['failed:new', 'failed:old', 'overdue'])
+    expect(items[0].kind === 'failed-write' && items[0].car).toBeNull()
+    expect(items[1].kind === 'failed-write' && items[1].car?.id).toBe('c1')
+    expect(urgentCount(items)).toBe(3)
   })
 })

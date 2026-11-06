@@ -56,15 +56,16 @@ export interface Car {
   /** Uid del dueño. Opcional en el tipo porque el cron y los logros arman autos sin él; lib/db.ts siempre lo completa. */
   ownerUid?: string
   ownerName?: string | null
-  /**
-   * Mails en minúscula de las personas con las que el dueño compartió el auto antes de las invitaciones (hasta 2). El
-   * dueño no figura. Sólo se leen y se sacan: se borra en #66.
-   */
-  members?: string[]
   /** Uids de las personas que aceptaron una invitación al auto (hasta 2). El dueño no figura. */
   memberUids?: string[]
   /** Mail y nombre de cada miembro, por uid: para mostrarlos. Tiene las mismas claves que `memberUids`. */
   memberProfiles?: Record<string, MemberProfile>
+  /**
+   * Cuándo el dueño lo borró (`markCarDeleted`): desde ahí el auto desaparece de la app y nadie carga nada en él, y el
+   * servidor (`DELETE /api/cars/[carId]` o el barrido del cron) termina de borrarlo con su historial y su foto. Falta
+   * o es null en los autos vivos.
+   */
+  deletedAt?: Date | null
 }
 
 /**
@@ -249,11 +250,24 @@ export interface AchievementRecord {
 export interface UserSettings {
   reminder: { enabled: boolean; weekday: number }
   timezone: string
+  /** Si el usuario recibe vencimientos y recordatorios de km de los autos donde es miembro (falta = true). */
+  sharedCars?: boolean
+}
+
+/**
+ * Estado de "avisado" de un mantenimiento para una persona (`users/{uid}/ruleNotices/{ruleId}`): lo escribe el
+ * servidor (cron y `/api/notify/rules`) y reemplaza a `rule.lastNotified*` para que el dueño y cada miembro tengan su
+ * propio seguimiento.
+ */
+export interface RuleNotice {
+  status: 'soon' | 'overdue' | null
+  at: Date | null
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   reminder: { enabled: true, weekday: 0 },
   timezone: 'America/Argentina/Buenos_Aires',
+  sharedCars: true,
 }
 
 export interface RulePreset {

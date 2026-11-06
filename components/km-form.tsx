@@ -5,11 +5,14 @@ import { Gauge, Pencil, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FormError, Input } from '@/components/ui/form'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
-import { recordKm } from '@/lib/db'
+import { newChildId, recordKm } from '@/lib/db'
 import { formatDate, formatKm, formatNumber, parseNumberInput, timeAgo } from '@/lib/format'
 import { rulesWithState, summarizeRule } from '@/lib/maintenance'
-import { validateKmReading } from '@/lib/odometer'
+import { checkCarRuleEscalations } from '@/lib/notify-client'
+import { readingDateOf, validateKmReading } from '@/lib/odometer'
+import { newOutboxId, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import type { Car } from '@/lib/types'
 import { settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { carName } from './common'
@@ -20,6 +23,9 @@ import { carName } from './common'
  * Va dentro del mismo formulario (no un diálogo encima de otro). Al guardar, el aviso muestra cuánto falta
  * para el próximo mantenimiento. La fecha es hoy salvo que se elija otra (nunca futura): unos km de un día pasado
  * tienen que entrar entre las lecturas de antes y de después (`validateKmReading`) y no bajan el km del auto.
+ * Lo guardado va a la bandeja (`settle` con la entrada) con el id de la lectura generado antes de escribir. `draft`: unos
+ * km de la bandeja que el servidor no guardó (`?borrador=`): el número y la fecha arrancan con los de entonces y se
+ * guardan con la misma entrada y el mismo id.
  */
 export function KmForm({
   car,
@@ -27,16 +33,19 @@ export function KmForm({
   onCancel,
   inputRef,
   autoFocus,
+  draft,
 }: {
   car: Car
   onDone: () => void
   onCancel?: () => void
   inputRef?: React.RefObject<HTMLInputElement | null>
   autoFocus?: boolean
+  draft?: OutboxEntryOf<'km'> | null
 }) {
-  const { actor, odometer, rulesByCar, today } = useData()
-  const [value, setValue] = useState('')
-  const [date, setDate] = useState(today)
+  const { getToken } = useAuth()
+  const { actor, uid, odometer, rules: allRules, jobs, rulesByCar, today } = useData()
+  const [value, setValue] = useState(draft ? String(draft.payload.data.km) : '')
+  const [date, setDate] = useState(draft?.payload.data.date ?? today)
   const [step, setStep] = useState<'enter' | 'confirm'>('enter')
   const [warning, setWarning] = useState<string | null>(null)
   const { saving, error, setError, run } = useSaver()
@@ -58,7 +67,7 @@ export function KmForm({
     e.preventDefault()
     if (km == null) return setError('Ingresá los km que marca el tablero.')
     if (day > today) return setError('La fecha no puede ser futura.')
-    const v = validateKmReading(km, day, odometer.filter(r => r.carId === car.id))
+    const v = validateKmReading(km, day, odometer.filter(r => r.carId === car.id && r.id !== draft?.payload.recordId))
     if (!v.ok) return setError(v.error)
     setWarning(v.warning ?? null)
     setStep('confirm')
@@ -66,14 +75,42 @@ export function KmForm({
 
   async function save() {
     if (km == null) return
+    const readingId = draft?.payload.recordId ?? newChildId(car.id, 'odometer')
+    const entry = outboxEntry({
+      id: draft?.id ?? newOutboxId(),
+      carId: car.id,
+      carLabel: carName(car),
+      write: { kind: 'km', payload: { recordId: readingId, data: { km, date: day }, original: null } },
+    })
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(recordKm(actor, car, odometer, km, day))
+      status = await settle(recordKm(actor, car, odometer, km, day, readingId), { uid, entry })
     })
     if (!ok) return setStep('enter')
     const active = (rulesByCar.get(car.id) ?? []).map(r => r.rule)
     const next = rulesWithState(active, { ...car, currentKm: Math.max(km, car.currentKm) }, today)[0]
     toastSaved(`${formatKm(km)} guardados`, status, next ? summarizeRule(next.rule.name, next.state) : carName(car))
+    if (status === 'saved') {
+      const added = {
+        id: 'new',
+        carId: car.id,
+        km,
+        date: day === today ? new Date() : readingDateOf(day),
+        source: 'manual' as const,
+        sourceId: null,
+        createdAt: new Date(),
+      }
+      checkCarRuleEscalations({
+        car,
+        rawRules: allRules,
+        jobsBefore: jobs,
+        jobsAfter: jobs,
+        readingsBefore: odometer,
+        readingsAfter: [...odometer, added],
+        today,
+        getToken,
+      })
+    }
     onDone()
   }
 

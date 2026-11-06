@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
+  didRuleEscalate,
+  effectiveRuleNotice,
+  escalatedRules,
   isPushEndpoint,
   KM_TAG,
   MAX_MESSAGES_PER_RUN,
   MORE_TAG,
+  orphanNoticeIds,
   planDailyNotifications,
+  planJobNotification,
+  planRuleAlerts,
+  REVIEW_TAG,
+  ruleAlertRecipients,
   ruleTag,
   updatesToPersist,
 } from './notifications'
-import type { Car, MaintenanceRule, UserSettings } from './types'
+import type { Car, Job, MaintenanceRule, RuleNotice, UserSettings } from './types'
 
 const car: Car = {
   id: 'c1',
@@ -101,6 +109,122 @@ describe('planDailyNotifications', () => {
     expect(messages).toHaveLength(0)
     expect(ruleUpdates).toEqual([{ ruleId: 'r1', lastNotifiedStatus: null, notified: false }])
   })
+
+  it('usa el estado de avisado por persona: el miembro recibe su aviso aunque el dueño ya haya sido avisado', () => {
+    const sharedCar: Car = { ...car, ownerUid: 'owner', memberUids: ['member'] }
+    const notifiedOnRule: MaintenanceRule = { ...rule, lastNotifiedAt: now, lastNotifiedStatus: 'soon' }
+
+    const ownerRun = planDailyNotifications({
+      settings,
+      cars: [sharedCar],
+      rules: [notifiedOnRule],
+      today: '2026-09-22',
+      now: new Date('2026-09-21T12:00:00Z'),
+      uid: 'owner',
+      notices: new Map(),
+    })
+    expect(ownerRun.messages).toHaveLength(0)
+
+    const memberRun = planDailyNotifications({
+      settings,
+      cars: [sharedCar],
+      rules: [notifiedOnRule],
+      today: '2026-09-22',
+      now: new Date('2026-09-21T12:00:00Z'),
+      uid: 'member',
+      notices: new Map(),
+    })
+    expect(memberRun.messages).toHaveLength(1)
+    expect(memberRun.ruleUpdates).toEqual([{ ruleId: 'r1', lastNotifiedStatus: 'soon', notified: true }])
+
+    const memberRepeat = planDailyNotifications({
+      settings,
+      cars: [sharedCar],
+      rules: [notifiedOnRule],
+      today: '2026-09-22',
+      now: new Date('2026-09-21T12:00:00Z'),
+      uid: 'member',
+      notices: new Map<string, RuleNotice>([['r1', { status: 'soon', at: now }]]),
+    })
+    expect(memberRepeat.messages).toHaveLength(0)
+  })
+
+  it('si el dueño tiene ruleNotices en null (se limpió al volver al día), no cae en el lastNotified viejo del documento', () => {
+    const ownCar: Car = { ...car, ownerUid: 'owner' }
+    const staleRule: MaintenanceRule = { ...rule, lastNotifiedAt: now, lastNotifiedStatus: 'soon' }
+    const out = planDailyNotifications({
+      settings,
+      cars: [ownCar],
+      rules: [staleRule],
+      today: '2026-09-22',
+      now: new Date('2026-09-21T12:00:00Z'),
+      uid: 'owner',
+      notices: new Map<string, RuleNotice>([['r1', { status: null, at: null }]]),
+    })
+    expect(out.messages).toHaveLength(1)
+  })
+
+  it('respeta el switch de avisos de autos compartidos y no pide km a un viewer', () => {
+    const sharedCar: Car = {
+      ...car,
+      ownerUid: 'owner',
+      memberUids: ['member'],
+      memberProfiles: { member: { email: 'm@test.com', name: 'M', role: 'viewer' } },
+    }
+    const viewerSunday = planDailyNotifications({
+      settings,
+      cars: [sharedCar],
+      rules: [rule],
+      today: '2026-09-20',
+      now,
+      uid: 'member',
+    })
+    expect(viewerSunday.messages.map(m => m.tag)).toEqual([ruleTag('r1')])
+
+    const muted = planDailyNotifications({
+      settings: { ...settings, sharedCars: false },
+      cars: [sharedCar],
+      rules: [rule],
+      today: '2026-09-20',
+      now,
+      uid: 'member',
+    })
+    expect(muted.messages).toHaveLength(0)
+  })
+
+  it('agrega el resumen de trabajos para revisar al dueño y le reserva lugar dentro del tope', () => {
+    const single = planDailyNotifications({
+      settings,
+      cars: [car],
+      rules: [],
+      today: '2026-09-21',
+      now,
+      pendingReview: { count: 1, carId: 'c1' },
+    })
+    expect(single.messages).toEqual([
+      {
+        title: 'Tenés 1 trabajo para revisar',
+        body: 'Tocá para aprobarlo o rechazarlo.',
+        url: '/autos/c1?tab=trabajos',
+        tag: REVIEW_TAG,
+      },
+    ])
+
+    const rules = Array.from({ length: 10 }, (_, i) => ({ ...rule, id: `s${i}` }))
+    const crowded = planDailyNotifications({
+      settings,
+      cars: [car],
+      rules,
+      today: '2026-09-20',
+      now,
+      pendingReview: { count: 2, carId: null },
+    })
+    expect(crowded.messages).toHaveLength(MAX_MESSAGES_PER_RUN)
+    expect(crowded.messages.map(m => m.tag)).toContain(REVIEW_TAG)
+    expect(crowded.messages.map(m => m.tag)).toContain('km-c1')
+    expect(crowded.messages.map(m => m.tag)).toContain(MORE_TAG)
+    expect(crowded.ruleUpdates).toHaveLength(MAX_MESSAGES_PER_RUN - 3)
+  })
 })
 
 describe('planDailyNotifications con muchos avisos', () => {
@@ -175,6 +299,181 @@ describe('planDailyNotifications con muchos avisos', () => {
     const nextTags = next.messages.map(m => m.tag).filter(t => t !== MORE_TAG)
     expect(nextTags.length).toBeGreaterThan(0)
     expect(nextTags.some(t => firstTags.includes(t))).toBe(false)
+  })
+})
+
+describe('planRuleAlerts y escalatedRules', () => {
+  it('avisa sólo cuando el mantenimiento sube de estado (ok → soon/overdue, soon → overdue)', () => {
+    expect(didRuleEscalate(null, 'soon')).toBe(true)
+    expect(didRuleEscalate('ok', 'overdue')).toBe(true)
+    expect(didRuleEscalate('soon', 'overdue')).toBe(true)
+    expect(didRuleEscalate('soon', 'soon')).toBe(false)
+    expect(didRuleEscalate('overdue', 'soon')).toBe(false)
+    expect(didRuleEscalate('overdue', 'overdue')).toBe(false)
+    expect(didRuleEscalate(null, 'ok')).toBe(false)
+  })
+
+  it('effectiveRuleNotice usa rule.lastNotifiedStatus sólo como semilla del dueño', () => {
+    const r = { lastNotifiedStatus: 'soon' as const, lastNotifiedAt: now }
+    expect(effectiveRuleNotice(r, true, undefined)).toEqual({ status: 'soon', at: now })
+    expect(effectiveRuleNotice(r, false, undefined)).toEqual({ status: null, at: null })
+    expect(effectiveRuleNotice(r, true, { status: null, at: null })).toEqual({ status: null, at: null })
+    const notices = new Map<string, RuleNotice>([
+      ['r1', { status: 'soon', at: now }],
+      ['deleted-rule', { status: 'overdue', at: now }],
+    ])
+    expect(orphanNoticeIds(notices, [rule])).toEqual(['deleted-rule'])
+    expect(orphanNoticeIds(notices, [rule, { id: 'deleted-rule' }])).toEqual([])
+  })
+
+  it('planRuleAlerts arma el aviso con el mismo tag que el cron y no repite si ya estaba en ese estado', () => {
+    const overdueCar = { ...car, currentKm: 15200 }
+    const first = planRuleAlerts({ car: overdueCar, rules: [rule], owner: false, notices: new Map(), today: '2026-09-21' })
+    expect(first).toHaveLength(1)
+    expect(first[0].message.tag).toBe(ruleTag('r1'))
+    expect(first[0].status).toBe('overdue')
+
+    const repeat = planRuleAlerts({
+      car: overdueCar,
+      rules: [rule],
+      owner: false,
+      notices: new Map([['r1', { status: 'overdue', at: now }]]),
+      today: '2026-09-21',
+    })
+    expect(repeat).toHaveLength(0)
+
+    const fromSoon = planRuleAlerts({
+      car: overdueCar,
+      rules: [rule],
+      owner: false,
+      notices: new Map([['r1', { status: 'soon', at: now }]]),
+      today: '2026-09-21',
+    })
+    expect(fromSoon).toHaveLength(1)
+  })
+
+  it('escalatedRules detecta qué mantenimiento pasó a por vencer o vencido con la nueva carga', () => {
+    const beforeCar = { currentKm: 14000, avgKmPerDay: null }
+    const afterSoon = { currentKm: 14600, avgKmPerDay: null }
+    const afterOverdue = { currentKm: 15100, avgKmPerDay: null }
+
+    expect(
+      escalatedRules({ carBefore: beforeCar, carAfter: beforeCar, rulesBefore: [rule], rulesAfter: [rule], today: '2026-09-21' }),
+    ).toEqual([])
+
+    const toSoon = escalatedRules({
+      carBefore: beforeCar,
+      carAfter: afterSoon,
+      rulesBefore: [rule],
+      rulesAfter: [rule],
+      today: '2026-09-21',
+    })
+    expect(toSoon.map(e => e.status)).toEqual(['soon'])
+
+    const sameSoon = escalatedRules({
+      carBefore: afterSoon,
+      carAfter: { currentKm: 14700, avgKmPerDay: null },
+      rulesBefore: [rule],
+      rulesAfter: [rule],
+      today: '2026-09-21',
+    })
+    expect(sameSoon).toEqual([])
+
+    const toOverdue = escalatedRules({
+      carBefore: afterSoon,
+      carAfter: afterOverdue,
+      rulesBefore: [rule],
+      rulesAfter: [rule],
+      today: '2026-09-21',
+    })
+    expect(toOverdue.map(e => e.status)).toEqual(['overdue'])
+  })
+})
+
+describe('ruleAlertRecipients', () => {
+  const sharedCar: Car = { ...car, ownerUid: 'owner', memberUids: ['m1', 'm2'] }
+
+  it('avisa al resto del grupo sin quien hizo la carga', () => {
+    expect(ruleAlertRecipients(sharedCar, 'm1')).toEqual(['owner', 'm2'])
+    expect(ruleAlertRecipients(sharedCar, 'owner')).toEqual(['m1', 'm2'])
+  })
+
+  it('un auto sin miembros no tiene a quién avisar', () => {
+    expect(ruleAlertRecipients({ ownerUid: 'owner', memberUids: [] }, 'owner')).toEqual([])
+  })
+
+  it('quien no es del grupo no puede pedir avisos', () => {
+    expect(ruleAlertRecipients(sharedCar, 'otro')).toBeNull()
+  })
+})
+
+describe('planJobNotification', () => {
+  const sharedCar: Car = { ...car, ownerUid: 'owner', memberUids: ['m1', 'm2'] }
+  const baseJob: Job = {
+    id: 'j1',
+    carId: 'c1',
+    date: '2026-09-20',
+    km: 14600,
+    title: 'Cambio de aceite',
+    category: 'service',
+    cost: 50000,
+    workshop: null,
+    notes: null,
+    ruleIds: ['r1'],
+    status: 'pending',
+    reviewedAt: null,
+    revision: 2,
+    createdBy: 'm1',
+    createdByName: 'Ana',
+    createdAt: now,
+  }
+
+  it('el miembro que mandó el trabajo avisa al dueño, con el id de idempotencia por revisión', () => {
+    const res = planJobNotification({ uid: 'm1', car: sharedCar, job: baseJob, event: 'submitted' })
+    expect(res).toEqual({
+      ok: true,
+      recipientUid: 'owner',
+      noticeId: 'j1_submitted_2',
+      message: expect.objectContaining({
+        url: '/autos/c1/trabajos/j1',
+        tag: 'job-review-j1',
+      }),
+    })
+  })
+
+  it('el dueño que aprueba o rechaza avisa al miembro autor', () => {
+    const approved = planJobNotification({
+      uid: 'owner',
+      car: sharedCar,
+      job: { ...baseJob, status: 'approved' },
+      event: 'approved',
+    })
+    expect(approved).toMatchObject({ ok: true, recipientUid: 'm1', noticeId: 'j1_approved_2' })
+
+    const rejected = planJobNotification({
+      uid: 'owner',
+      car: sharedCar,
+      job: { ...baseJob, status: 'rejected' },
+      event: 'rejected',
+    })
+    expect(rejected).toMatchObject({ ok: true, recipientUid: 'm1', noticeId: 'j1_rejected_2' })
+  })
+
+  it('rechaza a quien no es el autor ni el dueño o cuando el estado no coincide', () => {
+    expect(planJobNotification({ uid: 'm2', car: sharedCar, job: baseJob, event: 'submitted' })).toEqual({ ok: false })
+    expect(planJobNotification({ uid: 'owner', car: sharedCar, job: baseJob, event: 'submitted' })).toEqual({ ok: false })
+    expect(planJobNotification({ uid: 'm1', car: sharedCar, job: { ...baseJob, status: 'approved' }, event: 'approved' })).toEqual({
+      ok: false,
+    })
+    expect(planJobNotification({ uid: 'owner', car: sharedCar, job: baseJob, event: 'approved' })).toEqual({ ok: false })
+    expect(
+      planJobNotification({
+        uid: 'owner',
+        car: sharedCar,
+        job: { ...baseJob, status: 'approved', createdBy: 'owner' },
+        event: 'approved',
+      }),
+    ).toEqual({ ok: false })
   })
 })
 

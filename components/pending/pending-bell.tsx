@@ -8,11 +8,13 @@ import { useJobReview } from '@/components/forms/job-form'
 import { inviterName, useInviteResponse } from '@/components/invites/invite-card'
 import { KmDialog } from '@/components/km-form'
 import { useNovedades } from '@/components/novedades/use-novedades'
+import { FailedWriteRow } from '@/components/outbox/outbox'
 import { useData } from '@/components/providers/data-provider'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatDate, formatMoney } from '@/lib/format'
 import { describeRemaining } from '@/lib/maintenance'
+import { useOutbox } from '@/lib/outbox'
 import { kmDueDay, pendingItems, urgentCount, type PendingItem } from '@/lib/pending'
 import { authorLabel } from '@/lib/sharing'
 import { cn } from '@/lib/utils'
@@ -141,20 +143,21 @@ function InviteRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'i
 }
 
 /**
- * Campanita de la cabecera: junta lo pendiente (km por cargar, mantenimientos vencidos o por vencer, trabajos de
- * los miembros para revisar, mis trabajos rechazados y las invitaciones a compartir un auto) y las novedades sin
- * ver. Todo sale de los datos, no de las notificaciones: lo resuelto desaparece solo, aunque se haya descartado el
+ * Campanita de la cabecera: junta lo pendiente (lo que el servidor no guardó, de la bandeja de `lib/outbox.ts`; km por
+ * cargar, mantenimientos vencidos o por vencer, trabajos de los miembros para revisar, mis trabajos rechazados y las
+ * invitaciones a compartir un auto) y las novedades sin ver. Todo sale de los datos, no de las notificaciones: lo resuelto desaparece solo, aunque se haya descartado el
  * aviso del celular. El número cuenta todo menos los por vencer, más las novedades.
  */
 export function PendingBell() {
   const { settings, cars, rulesByCar, jobs, uid, today, carById, myInvites } = useData()
   const { unseen } = useNovedades()
+  const outbox = useOutbox(uid)
   const [open, setOpen] = useState(false)
   const [kmCarId, setKmCarId] = useState<string | null>(null)
 
   const items = useMemo(
-    () => pendingItems({ settings, cars, rulesByCar, jobs, uid, invites: myInvites, now: new Date(), today }),
-    [settings, cars, rulesByCar, jobs, uid, myInvites, today],
+    () => pendingItems({ settings, cars, rulesByCar, jobs, uid, invites: myInvites, outbox, now: new Date(), today }),
+    [settings, cars, rulesByCar, jobs, uid, myInvites, outbox, today],
   )
   const count = urgentCount(items) + (unseen.length ? 1 : 0)
   const close = () => setOpen(false)
@@ -209,6 +212,7 @@ export function PendingBell() {
                 </Link>
               )}
               {items.map(item => {
+                if (item.kind === 'failed-write') return <FailedWriteRow key={`failed-${item.entry.id}`} item={item} onNavigate={close} />
                 if (item.kind === 'km') {
                   return (
                     <div key={`km-${item.car.id}`} className="flex items-center gap-3 px-4 py-3.5">

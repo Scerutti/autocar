@@ -6,6 +6,7 @@ import { AchievementsProvider } from '@/components/achievements/achievements-pro
 import { AppShell } from '@/components/app-shell'
 import { BrandLogo } from '@/components/brand'
 import { NovedadesHost } from '@/components/novedades/novedades-host'
+import { OutboxSync } from '@/components/outbox/outbox'
 import { Loading } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/providers/auth-provider'
@@ -64,8 +65,8 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
 }
 
 /**
- * Muestra la app cuando cargan los datos. Si falla, el detalle técnico va a la consola y en pantalla un mensaje
- * claro. Firestore cancela el listener que falló: reintentar vuelve a montar DataProvider.
+ * Muestra la app cuando cargan los datos (con `OutboxSync`, que resuelve lo que quedó sin sincronizar de la sesión
+ * anterior). Si falla, el detalle técnico va a la consola y en pantalla un mensaje claro. Firestore cancela el listener que falló: reintentar vuelve a montar DataProvider.
  */
 function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: () => void; children: React.ReactNode }) {
   const { loading, error } = useData()
@@ -91,6 +92,7 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
         <AchievementsProvider>
           {children}
           <NovedadesHost />
+          <OutboxSync />
         </AchievementsProvider>
       )}
     </AppShell>

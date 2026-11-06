@@ -1,44 +1,23 @@
 import { authorize } from '@/lib/firebase/admin'
-import { cloudinaryConfig, signParams, userFolder } from '@/lib/cloudinary-server'
+import { cloudinaryConfig, destroyImage, userFolder } from '@/lib/cloudinary-server'
 import { isOwnPublicId } from '@/lib/photo-limits'
 
 /**
- * Borra una foto del usuario en Cloudinary. Sólo acepta imágenes de su carpeta, y sin caracteres que
+ * Borra una foto del usuario en Cloudinary (`destroyImage`). Sólo acepta imágenes de su carpeta, y sin caracteres que
  * puedan escaparse de ella. Si no se puede contactar a Cloudinary (sin señal, DNS caído o más de 10 s) responde 502.
  */
 export async function POST(request: Request) {
   const auth = await authorize(request)
   if (auth instanceof Response) return auth
   const { uid } = auth
-  const config = cloudinaryConfig()
-  if (!config) return Response.json({ error: 'Cloudinary no está configurado' }, { status: 500 })
+  if (!cloudinaryConfig()) return Response.json({ error: 'Cloudinary no está configurado' }, { status: 500 })
 
   const { publicId } = (await request.json().catch(() => ({}))) as { publicId?: unknown }
   if (!isOwnPublicId(publicId, userFolder(uid))) {
     return Response.json({ error: 'Imagen inválida' }, { status: 400 })
   }
 
-  const params = { public_id: publicId, timestamp: Math.floor(Date.now() / 1000), invalidate: 'true' }
-  const body = new URLSearchParams({
-    ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
-    api_key: config.apiKey,
-    signature: signParams(params, config.apiSecret),
-  })
-  let res: Response
-  try {
-    res = await fetch(`https://api.cloudinary.com/v1_1/${config.cloudName}/image/destroy`, {
-      method: 'POST',
-      body,
-      signal: AbortSignal.timeout(10_000),
-    })
-  } catch (e) {
-    console.error('Borrado en Cloudinary', publicId, e)
-    return Response.json({ error: 'No se pudo contactar a Cloudinary' }, { status: 502 })
-  }
-  const json = (await res.json().catch(() => ({}))) as { result?: string }
-  if (!res.ok) {
-    console.error('Cloudinary rechazó el borrado', publicId, res.status, json)
-    return Response.json({ error: 'Cloudinary rechazó el borrado' }, { status: 502 })
-  }
-  return Response.json({ result: json.result })
+  const destroyed = await destroyImage(publicId)
+  if (!destroyed.ok) return Response.json({ error: destroyed.error }, { status: destroyed.status })
+  return Response.json({ result: destroyed.result })
 }

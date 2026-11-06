@@ -9,17 +9,20 @@ import { IntervalPicker } from '@/components/interval-picker'
 import { Button } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
 import { Checkbox, Field, FormError, Input, Textarea } from '@/components/ui/form'
+import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { addInterval, toISODate } from '@/lib/dates'
-import { approveJob, deleteJob, rejectJob, restoreJob, saveJob, type FollowUp, type JobInput } from '@/lib/db'
+import { approveJob, deleteJob, newChildId, rejectJob, restoreJob, saveJob, type FollowUp, type JobInput } from '@/lib/db'
 import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
+import { checkCarRuleEscalations, notifyJobInBackground, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { approvesOwnJobs, authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type MaintenanceRule, type OdometerReading, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
-import { CompletedBadge, StatusBadge } from '../common'
+import { CompletedBadge, StatusBadge, carName } from '../common'
 
 const CATEGORY_FOR_RULE: [RegExp, JobCategory][] = [
   [/service|aceite|filtro/i, 'service'],
@@ -69,7 +72,8 @@ function ruleChangeLines(rules: MaintenanceRule[], changes: ReturnType<typeof jo
  */
 export function useJobReview() {
   const confirm = useConfirm()
-  const { actor, uid, rules: allRules, jobs, odometer } = useData()
+  const { getToken } = useAuth()
+  const { actor, uid, rules: allRules, jobs, odometer, today } = useData()
 
   async function approve(car: Car, job: Job) {
     const ctx = jobContext(car, allRules, jobs, odometer)
@@ -95,8 +99,23 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(approveJob(actor, ctx, job), 'No se pudo aprobar')
+      const p = approveJob(actor, ctx, job)
+      p.then(() => notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'approved' }, getToken)).catch(() => {})
+      const status = await settle(p, 'No se pudo aprobar')
       toastSaved('Trabajo aprobado', status, job.title)
+      if (status === 'saved') {
+        const afterJob: Job = { ...job, status: 'approved' }
+        checkCarRuleEscalations({
+          car,
+          rawRules: allRules,
+          jobsBefore: jobs,
+          jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
+          readingsBefore: odometer,
+          readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, { date: job.date, km: job.km }),
+          today,
+          getToken,
+        })
+      }
       return true
     } catch (e) {
       toast.error('No se pudo aprobar', { description: errorMessage(e) })
@@ -114,8 +133,23 @@ export function useJobReview() {
     })
     if (!confirmed) return false
     try {
-      const status = await settle(rejectJob(actor, jobContext(car, allRules, jobs, odometer), job), 'No se pudo rechazar')
+      const p = rejectJob(actor, jobContext(car, allRules, jobs, odometer), job)
+      p.then(() => notifyJobInBackground({ carId: car.id, jobId: job.id, event: 'rejected' }, getToken)).catch(() => {})
+      const status = await settle(p, 'No se pudo rechazar')
       toastSaved('Trabajo rechazado', status, job.title)
+      if (status === 'saved' && isApproved(job)) {
+        const afterJob: Job = { ...job, status: 'rejected' }
+        checkCarRuleEscalations({
+          car,
+          rawRules: allRules,
+          jobsBefore: jobs,
+          jobsAfter: [...jobs.filter(j => j.id !== job.id), afterJob],
+          readingsBefore: odometer,
+          readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+          today,
+          getToken,
+        })
+      }
       return true
     } catch (e) {
       toast.error('No se pudo rechazar', { description: errorMessage(e) })
@@ -174,11 +208,22 @@ function JobDetails({ car, job }: { car: Car; job: Job }) {
 
 /**
  * Alta y edición de un trabajo. Si el trabajo no se puede editar (`canEditJob`), se muestra en modo solo lectura.
+ * `draft`: un trabajo de la bandeja que el servidor no guardó (`?borrador=`), para corregirlo y volver a guardarlo.
  */
-export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
+export function JobForm({
+  car,
+  job,
+  preselectedRuleId,
+  draft,
+}: {
+  car: Car
+  job?: Job
+  preselectedRuleId?: string | null
+  draft?: OutboxEntryOf<'job'> | null
+}) {
   const { uid } = useData()
   if (job && !canEditJob(car, uid, job)) return <JobDetails car={car} job={job} />
-  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} />
+  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} draft={draft ?? null} />
 }
 
 /**
@@ -196,10 +241,25 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
  * obligatorio.
  * Al guardar, los cambios se miden contra el trabajo como estaba al abrir el formulario (`original`): lo que otro
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
+ * Con un borrador (`draft`), los campos (y la vuelta al taller) arrancan con lo que se había cargado (`draftSeed`): al
+ * editar, el trabajo como está ahora con los cambios del borrador encima, y se mide contra el trabajo de ahora. Lo
+ * guardado va a la bandeja (`settle` con la entrada; la misma del borrador, si hay) con el id del trabajo generado
+ * antes de escribir.
  */
-function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
+function JobEditor({
+  car,
+  job,
+  preselectedRuleId,
+  draft,
+}: {
+  car: Car
+  job?: Job
+  preselectedRuleId?: string | null
+  draft: OutboxEntryOf<'job'> | null
+}) {
   const router = useRouter()
   const confirm = useConfirm()
+  const { getToken } = useAuth()
   const { actor, uid, today, odometer } = useData()
   const { rules, allRules, jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
@@ -211,18 +271,19 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const selectable = [...rules.map(r => r.rule), ...completedHere]
 
   const preRule = rules.find(r => r.rule.id === preselectedRuleId)?.rule
-  const [date, setDate] = useState(job?.date ?? toISODate(new Date()))
-  const [km, setKm] = useState(job?.km != null ? String(job.km) : '')
-  const [title, setTitle] = useState(job?.title ?? preRule?.name ?? '')
+  const seed: JobInput | undefined = draftSeed(job, draft)
+  const [date, setDate] = useState(seed?.date ?? toISODate(new Date()))
+  const [km, setKm] = useState(seed?.km != null ? String(seed.km) : '')
+  const [title, setTitle] = useState(seed?.title ?? preRule?.name ?? '')
   const [category, setCategory] = useState<JobCategory>(
-    job?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
+    seed?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
   )
-  const [cost, setCost] = useState(job ? toNumberInput(job.cost) : '')
-  const [workshop, setWorkshop] = useState(job?.workshop ?? '')
-  const [notes, setNotes] = useState(job?.notes ?? '')
-  const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
-  const [comeBack, setComeBack] = useState(false)
-  const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
+  const [cost, setCost] = useState(seed ? toNumberInput(seed.cost) : '')
+  const [workshop, setWorkshop] = useState(seed?.workshop ?? '')
+  const [notes, setNotes] = useState(seed?.notes ?? '')
+  const [ruleIds, setRuleIds] = useState<string[]>(seed?.ruleIds ?? (preRule ? [preRule.id] : []))
+  const [comeBack, setComeBack] = useState(Boolean(draft?.payload.followUp))
+  const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>(draft?.payload.followUp?.intervalTime ?? { amount: 1, unit: 'month' })
   const [original] = useState(job)
 
   const kmNum = parseNumberInput(km)
@@ -315,9 +376,22 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     })
     if (!confirmed) return
 
+    const jobId = job?.id ?? draft?.payload.recordId ?? newChildId(car.id, 'jobs')
+    const entry = outboxEntry({
+      id: draft?.id ?? newOutboxId(),
+      carId: car.id,
+      carLabel: carName(car),
+      write: { kind: 'job', payload: { recordId: jobId, data: input, original: original ? originalFields(original, input) : null, followUp } },
+    })
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveJob(actor, ctx, input, original, followUp))
+      const p = saveJob(actor, ctx, input, original, followUp, jobId)
+      if (!owner && !autoApproved) {
+        p.then(out => {
+          if (out !== 'unchanged') notifyJobInBackground({ carId: car.id, jobId, event: 'submitted' }, getToken)
+        }).catch(() => {})
+      }
+      status = await settle(p, { uid, entry })
     })
     if (!ok) return
     const note = applies
@@ -333,6 +407,21 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
         ? 'Sigue esperando tu aprobación.'
         : `Queda pendiente hasta que ${ownerName} lo apruebe.`
     toastSaved(owner ? (job ? 'Trabajo actualizado' : 'Trabajo guardado') : autoApproved ? 'Trabajo guardado' : 'Trabajo enviado', status, note)
+    if (status === 'saved' && applies) {
+      const afterJob: Job = job
+        ? { ...job, ...input, status: 'approved' }
+        : { ...input, id: jobId, status: 'approved', reviewedAt: null, revision: 0, createdAt: new Date(), createdBy: uid, createdByName: actor.name }
+      checkCarRuleEscalations({
+        car,
+        rawRules: allRules,
+        jobsBefore: jobs,
+        jobsAfter: [...jobs.filter(j => j.id !== jobId), afterJob],
+        readingsBefore: odometer,
+        readingsAfter: readingsWithLinked(odometer, car.id, 'job', jobId, { date, km: kmNum }),
+        today,
+        getToken,
+      })
+    }
     router.replace(`/autos/${car.id}?tab=trabajos`)
   }
 
@@ -352,8 +441,36 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     router.replace(`/autos/${car.id}?tab=trabajos`)
     removeWithUndo({
       message: 'Trabajo borrado',
-      remove: () => deleteJob(actor, ctx, job),
-      restore: () => restoreJob(actor, ctx, job),
+      remove: async () => {
+        await deleteJob(actor, ctx, job)
+        if (isApproved(job)) {
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs,
+            jobsAfter: jobs.filter(j => j.id !== job.id),
+            readingsBefore: odometer,
+            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+            today,
+            getToken,
+          })
+        }
+      },
+      restore: async () => {
+        await restoreJob(actor, ctx, job)
+        if (isApproved(job)) {
+          checkCarRuleEscalations({
+            car,
+            rawRules: allRules,
+            jobsBefore: jobs.filter(j => j.id !== job.id),
+            jobsAfter: [...jobs.filter(j => j.id !== job.id), job],
+            readingsBefore: readingsWithLinked(odometer, car.id, 'job', job.id, null),
+            readingsAfter: readingsWithLinked(odometer, car.id, 'job', job.id, { date: job.date, km: job.km }),
+            today,
+            getToken,
+          })
+        }
+      },
     })
   }
 

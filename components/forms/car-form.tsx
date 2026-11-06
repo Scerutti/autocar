@@ -10,14 +10,15 @@ import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Field, FormError, Input } from '@/components/ui/form'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
+import { purgeCarInBackground } from '@/lib/cars-client'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { deleteImage, PhotoError, preparePhoto, uploadImage } from '@/lib/cloudinary-client'
 import { PHOTO_MAX_INPUT_MB } from '@/lib/photo-limits'
 import { toISODate } from '@/lib/dates'
 import {
   createCar,
-  deleteCar,
   inviteMember,
+  markCarDeleted,
   newCarId,
   removeMember,
   revokeInvite,
@@ -27,6 +28,7 @@ import {
   type CarInput,
 } from '@/lib/db'
 import { formatDate, formatKm, parseNumberInput } from '@/lib/format'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import {
   INVITE_DAYS,
   MAX_MEMBERS,
@@ -40,7 +42,8 @@ import {
 } from '@/lib/sharing'
 import type { Car, FuelType, Invite, MemberRole } from '@/lib/types'
 import { errorMessage, toast } from '@/lib/toast'
-import { runInBackground, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
+import { settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
+import { changedFields, isUnchanged } from '@/lib/utils'
 
 /** Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC). */
 type FuelChoice = 'nafta' | 'dual' | 'gasoil'
@@ -60,8 +63,14 @@ const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gasoil') ? 'gasoil'
  * guardado (enseguida o al volver la señal), se borra la foto nueva para que no quede huérfana. La foto vieja se
  * borra recién cuando el servidor confirma (si rechaza el cambio, el auto la sigue usando), y sin esperarlo: sin
  * señal el guardado quedaría colgado hasta que vuelva.
+ * Lo guardado va a la bandeja (`settle` con la entrada) con el id del auto generado antes de escribir, sin la foto: si
+ * el servidor rechaza el guardado, la foto nueva se borra de Cloudinary, así que el borrador no la puede usar. `draft`:
+ * un auto de la bandeja que el servidor no guardó (`?borrador=`): los datos (y los km, en un alta) arrancan con los de
+ * entonces y se guardan con la misma entrada; la foto se vuelve a elegir. Al editar, el borrador sólo pisa los campos
+ * que había cambiado (`draftSeed`). Un cambio sólo de la foto no va a la bandeja (no hay datos que guardar en la
+ * entrada): si el servidor lo rechaza, queda el toast de siempre.
  */
-export function CarForm({ car }: { car?: Car }) {
+export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'> | null }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
@@ -69,13 +78,14 @@ export function CarForm({ car }: { car?: Car }) {
   const { saving, error, setError, run } = useSaver()
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [brand, setBrand] = useState(car?.brand ?? '')
-  const [model, setModel] = useState(car?.model ?? '')
-  const [version, setVersion] = useState(car?.version ?? '')
-  const [year, setYear] = useState(car?.year ? String(car.year) : '')
-  const [plate, setPlate] = useState(car?.plate ?? '')
-  const [fuel, setFuel] = useState<FuelChoice>(car ? toChoice(car.fuelTypes) : 'nafta')
-  const [km, setKm] = useState('')
+  const seed: CarInput | undefined = draftSeed(car, draft)
+  const [brand, setBrand] = useState(seed?.brand ?? '')
+  const [model, setModel] = useState(seed?.model ?? '')
+  const [version, setVersion] = useState(seed?.version ?? '')
+  const [year, setYear] = useState(seed?.year ? String(seed.year) : '')
+  const [plate, setPlate] = useState(seed?.plate ?? '')
+  const [fuel, setFuel] = useState<FuelChoice>(seed ? toChoice(seed.fuelTypes) : 'nafta')
+  const [km, setKm] = useState(!car && draft?.payload.initialKm != null ? String(draft.payload.initialKm) : '')
   const [photo, setPhoto] = useState<Blob | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
@@ -154,6 +164,17 @@ export function CarForm({ car }: { car?: Car }) {
     })
     if (!confirmed) return
 
+    const carId = car?.id ?? draft?.payload.recordId ?? newCarId()
+    const entry = outboxEntry({
+      id: draft?.id ?? newOutboxId(),
+      carId,
+      carLabel: [data.brand, data.model].join(' '),
+      write: {
+        kind: 'car',
+        payload: { recordId: carId, data: { ...data }, original: car ? originalFields(car, data) : null, initialKm: car ? null : kmNum },
+      },
+    })
+    const photoOnly = car != null && !draft && isUnchanged(changedFields(originalFields(car, data), data))
     const ok = await run(async () => {
       const oldPublicId = car?.photoPublicId ?? null
       const dropImage = (publicId: string) => getToken().then(t => deleteImage(publicId, t)).catch(() => {})
@@ -170,11 +191,10 @@ export function CarForm({ car }: { car?: Car }) {
         data.photoPublicId = null
       }
       setStatus('Guardando…')
-      const carId = car?.id ?? newCarId()
       const write: Promise<unknown> = car ? updateCar(actor, car.id, data) : createCar(actor, data, kmNum!, carId)
       const newPublicId = uploadedId
       if (newPublicId) write.catch(() => dropImage(newPublicId))
-      const saved: SaveStatus = await settle(write)
+      const saved: SaveStatus = await settle(write, photoOnly ? 'No se pudo guardar' : { uid, entry })
       if (oldPublicId && (photo || removePhoto)) write.then(() => dropImage(oldPublicId), () => {})
       if (car) toastSaved('Cambios guardados', saved)
       else toastSaved('Auto agregado', saved, 'Ahora sumale los mantenimientos: service, VTV, seguro…')
@@ -298,10 +318,9 @@ const inviteUrl = (invite: Invite) => `${window.location.origin}/invitaciones/${
  * pendientes (vencen a los `INVITE_DAYS` días; "Compartir", "Copiar link" y "Cancelar") y las rechazadas o vencidas,
  * que se pueden volver a mandar. El tope (`MAX_MEMBERS`) cuenta miembros e invitaciones pendientes. Cada cambio se
  * guarda apenas se confirma, sin esperar a "Guardar cambios". No se manda ningún mail: "Compartir" abre el menú de
- * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro por uid se le puede
- * pasar el auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto. A un miembro por uid también se
- * le elige el rol (`ROLES`), con un control segmentado que se aplica al confirmar; uno sólo por el mail viejo no tiene
- * perfil, es `editor` y no muestra el control.
+ * compartir del celular y, si el navegador no lo tiene, copia el mensaje con el link. A un miembro se le puede pasar el
+ * auto ("Pasarle el auto"): yo quedo como miembro y vuelvo al detalle del auto. A cada miembro también se le elige el rol
+ * (`ROLES`), con un control segmentado que se aplica al confirmar.
  */
 function ShareSection({ car }: { car: Car }) {
   const router = useRouter()
@@ -399,7 +418,7 @@ function ShareSection({ car }: { car: Car }) {
   }
 
   async function changeRole(member: CarMember, role: MemberRole) {
-    if (!member.uid || role === memberRole(car, member.uid)) return
+    if (role === memberRole(car, member.uid)) return
     const who = member.name ?? member.email
     const confirmed = await confirm({
       title: `¿Cambiar lo que puede hacer ${who}?`,
@@ -484,24 +503,22 @@ function ShareSection({ car }: { car: Car }) {
       {rows > 0 && (
         <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
           {members.map(m => (
-            <li key={m.uid ?? m.email} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
+            <li key={m.uid} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm">{m.name ?? m.email}</p>
                 {m.name && <p className="truncate text-xs text-muted-foreground">{m.email}</p>}
               </div>
-              {m.uid && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`Pasarle el auto a ${m.name ?? m.email}`}
-                  className="gap-1.5"
-                  disabled={busy}
-                  onClick={() => void transfer(m)}
-                >
-                  <KeyRound /> Pasarle el auto
-                </Button>
-              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={`Pasarle el auto a ${m.name ?? m.email}`}
+                className="gap-1.5"
+                disabled={busy}
+                onClick={() => void transfer(m)}
+              >
+                <KeyRound /> Pasarle el auto
+              </Button>
               <Button
                 type="button"
                 variant="ghost"
@@ -512,16 +529,14 @@ function ShareSection({ car }: { car: Car }) {
               >
                 <UserMinus /> Sacar
               </Button>
-              {m.uid && (
-                <Segmented
-                  value={memberRole(car, m.uid)}
-                  onChange={role => void changeRole(m, role)}
-                  options={ROLE_OPTIONS}
-                  aria-label={`Qué puede hacer ${m.name ?? m.email}`}
-                  disabled={busy}
-                  className="w-full"
-                />
-              )}
+              <Segmented
+                value={memberRole(car, m.uid)}
+                onChange={role => void changeRole(m, role)}
+                options={ROLE_OPTIONS}
+                aria-label={`Qué puede hacer ${m.name ?? m.email}`}
+                disabled={busy}
+                className="w-full"
+              />
             </li>
           ))}
           {open.map(i => (
@@ -597,14 +612,17 @@ function ShareSection({ car }: { car: Car }) {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /**
- * Borrar un auto borra todo su historial y la foto: no se puede deshacer. Primero sale de la pantalla del
- * auto, para no mostrar "no encontrado" mientras se borra.
+ * Borrar un auto borra todo su historial y la foto: no se puede deshacer. Primero sale de la pantalla del auto, para
+ * no mostrar "no encontrado" mientras se borra. La app sólo lo marca (`markCarDeleted`), y desaparece en el acto,
+ * también sin señal. Cuando el servidor confirma la marca, le pide que termine de borrarlo (`purgeCarInBackground`);
+ * si la app se cierra antes, lo termina el barrido del cron. Si el servidor rechaza la marca, el auto vuelve a
+ * aparecer y se avisa con un toast.
  */
 function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { actor } = useData()
+  const { actor, invites } = useData()
   const { allRules, jobs, fuel, readings } = useCar(car.id)
   const name = `${car.brand} ${car.model}`
 
@@ -628,19 +646,14 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
     if (!confirmed) return
 
     router.replace('/')
-    runInBackground(
-      (async () => {
-        await deleteCar(actor, car.id, {
-          rules: allRules.map(r => r.id),
-          jobs: jobs.map(j => j.id),
-          fuel: fuel.map(f => f.id),
-          odometer: readings.map(r => r.id),
-        })
-        if (car.photoPublicId) await deleteImage(car.photoPublicId, await getToken())
-      })(),
-      `No se pudo borrar ${name}`,
-    )
-    toast.success(`${name} borrado`)
+    const mark = markCarDeleted(actor, { invites }, car.id)
+    try {
+      toastSaved(`${name} borrado`, await settle(mark, `No se pudo borrar ${name}`))
+    } catch (e) {
+      toast.error(`No se pudo borrar ${name}`, { description: errorMessage(e) })
+      return
+    }
+    mark.then(() => purgeCarInBackground(car.id, getToken)).catch(() => {})
   }
 
   return (

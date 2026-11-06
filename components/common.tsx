@@ -152,7 +152,7 @@ export function PageHeader({
         {!back && leading}
         <div className="min-w-0">
           {eyebrow && <p className="truncate text-xs font-medium uppercase text-primary">{eyebrow}</p>}
-          <h1 className="mt-0.5 truncate text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h1>
+          <h1 className="mt-0.5 line-clamp-2 break-words text-xl font-semibold leading-tight tracking-tight sm:line-clamp-1 sm:text-3xl">{title}</h1>
           {subtitle && <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p>}
         </div>
       </div>
