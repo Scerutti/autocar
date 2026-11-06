@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { LayoutDashboard, Settings, Trophy, Wallet, Wrench } from 'lucide-react'
 import { BrandMark, BrandWordmark } from '@/components/brand'
+import { OutboxIndicator } from '@/components/outbox/outbox'
 import { useAuth } from '@/components/providers/auth-provider'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,7 @@ export function initials(name: string | null | undefined) {
     .join('')
 }
 
+/** Marco de la app: navegación lateral (escritorio) o inferior (celular) y el indicador de lo que falta sincronizar. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { user } = useAuth()
@@ -80,6 +82,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <main className="w-full min-w-0 pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10">{children}</main>
       </div>
+
+      <OutboxIndicator />
 
       <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-white/8 bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
         <div className="mx-auto flex max-w-md items-center">
