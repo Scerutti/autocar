@@ -14,7 +14,7 @@ export interface Novedad {
 export const NOVEDADES: Novedad[] = [
   {
     version: '1.6.0',
-    date: '2026-10-30',
+    date: '2026-11-05',
     items: [
       {
         title: 'Compartir es una invitación',
