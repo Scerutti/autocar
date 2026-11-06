@@ -1,4 +1,4 @@
-import { deleteAccount } from '@/lib/account-server'
+import { deleteAccount, isAccountClosedError } from '@/lib/account-server'
 import { accountEmail, verifyUser } from '@/lib/firebase/admin'
 
 export const maxDuration = 60
@@ -7,9 +7,10 @@ export const maxDuration = 60
  * Borra la cuenta de quien llama con todos sus datos (`deleteAccount`, `lib/account-server.ts`). Pide el token y el
  * mail verificado como `authorize`, pero no el registro en `allowlist`: el borrado lo saca antes de borrar la cuenta
  * de Firebase Auth, y una llamada que se cortó entre esos dos pasos se tiene que poder repetir. Respuestas: 200
- * `{ deleted: true }` (también si ya estaba borrada); 409 `{ error, cars }` si tiene autos propios con miembros (no
- * borra nada); 502 si Cloudinary falló (la cuenta de Auth y el registro siguen: reintentar); 500 si falló otra cosa (reintentar: cada paso
- * tolera que ya esté hecho).
+ * `{ deleted: true }` (también si la cuenta de Auth ya no existe); 409 `{ error, cars }` si tiene autos propios con
+ * miembros (no borra nada); 502 si Cloudinary falló (la cuenta de Auth y el registro siguen: reintentar); 500 si falló
+ * otra cosa (reintentar: cada paso tolera que ya esté hecho), con `closed: true` si ya la sacó de `allowlist` (la app
+ * no tiene que volver a registrarla).
  */
 export async function DELETE(request: Request) {
   const decoded = await verifyUser(request)
@@ -30,7 +31,8 @@ export async function DELETE(request: Request) {
     }
     return Response.json({ deleted: true })
   } catch (e) {
-    console.error('Borrado de cuenta', decoded.uid, e)
-    return Response.json({ error: 'No se pudo terminar de borrar la cuenta. Probá de nuevo.' }, { status: 500 })
+    const closed = isAccountClosedError(e)
+    console.error('Borrado de cuenta', decoded.uid, closed ? e.reason : e)
+    return Response.json({ error: 'No se pudo terminar de borrar la cuenta. Probá de nuevo.', closed }, { status: 500 })
   }
 }

@@ -16,7 +16,7 @@ import { PageBody, PageHeader } from '@/components/common'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
 import { accountDeleteOutcome, DELETE_ACCOUNT_WORD, isDeleteConfirmed, type AccountDeleteOutcome, type BlockingCar } from '@/lib/account'
-import { saveSettings, setAccountClosing } from '@/lib/db'
+import { readExportExtras, saveSettings, setAccountClosing } from '@/lib/db'
 import { buildExportZip, exportFileName } from '@/lib/export'
 import { everyWeekday, WEEKDAYS } from '@/lib/format'
 import { currentSubscription, disablePush, enablePush, pushSupport, type PushSupport } from '@/lib/push-client'
@@ -250,15 +250,17 @@ function DataExport() {
     const confirmed = await confirm({
       title: '¿Preparar tus datos para descargar?',
       description:
-        'Vas a bajar un archivo .zip con tus autos, mantenimientos, trabajos, cargas, km, logros e invitaciones: un archivo JSON con todo y una planilla (CSV) por cada cosa, que se abre con Excel o Google Sheets.',
+        'Vas a bajar un archivo .zip con tus autos, mantenimientos, trabajos, cargas, km, logros, invitaciones, dispositivos con notificaciones y avisos: un archivo JSON con todo y una planilla (CSV) por cada cosa, que se abre con Excel o Google Sheets.',
       confirmLabel: 'Sí, preparar',
       icon: Download,
     })
     if (!confirmed) return
     try {
+      const extras = await readExportExtras(data.uid)
       const now = new Date()
       const zip = buildExportZip(
         {
+          ...extras,
           uid: data.uid,
           email: data.email,
           settings: data.settings,
@@ -300,11 +302,16 @@ function DataExport() {
   )
 }
 
+/** Reintentos automáticos de `DELETE /api/account` cuando falla después de sacar la cuenta de `allowlist` (`closed`). */
+const CLOSED_RETRIES = 2
+
 /**
  * "Borrar mi cuenta": hay que escribir "BORRAR" (`isDeleteConfirmed`) y después confirmar. Llama a `DELETE /api/account`
  * con `setAccountClosing` prendido (así esta pestaña no vuelve a crear lo que el servidor borra). Si tiene autos
  * compartidos (409), muestra cuáles y cómo resolverlos, sin borrar nada. Si sale bien, cierra la sesión y vuelve al
- * login con un aviso.
+ * login con un aviso. Si falla después de que el servidor la sacó de `allowlist` (`closed`), no desmarca
+ * `setAccountClosing` (la app ya no puede usar la cuenta): reintenta `CLOSED_RETRIES` veces y, si sigue fallando,
+ * cierra la sesión y explica que hay que entrar y volver a borrarla.
  */
 function DeleteAccount() {
   const { getToken, signOut } = useAuth()
@@ -315,12 +322,21 @@ function DeleteAccount() {
   const [blocked, setBlocked] = useState<BlockingCar[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  async function requestDeletion(): Promise<AccountDeleteOutcome> {
+    try {
+      const res = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${await getToken()}` } })
+      return accountDeleteOutcome(res.status, await res.json().catch(() => ({})))
+    } catch (e) {
+      return { kind: 'error', message: errorMessage(e), closed: false }
+    }
+  }
+
   async function remove() {
     if (!isDeleteConfirmed(word)) return
     const confirmed = await confirm({
       title: '¿Borrar tu cuenta para siempre?',
       description:
-        'Se borran tus autos con todo su historial, tus fotos, tus logros, tus ajustes y tus invitaciones. Lo que cargaste en autos de otras personas queda en su historial, sin tu nombre. No se puede deshacer.',
+        'Se borran tus autos con todo su historial, tus fotos, tus logros, tus ajustes y tus invitaciones. Lo que cargaste en autos de otras personas queda en su historial, sin tu nombre, y un auto que le pasaste a otra persona conserva su foto. No se puede deshacer.',
       warning: 'Si querés guardar una copia, primero tocá "Descargar mis datos".',
       confirmLabel: 'Sí, borrar mi cuenta',
       tone: 'danger',
@@ -332,18 +348,27 @@ function DeleteAccount() {
     setError(null)
     setBlocked(null)
     setAccountClosing(true)
-    let outcome: AccountDeleteOutcome
-    try {
-      const res = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${await getToken()}` } })
-      outcome = accountDeleteOutcome(res.status, await res.json().catch(() => ({})))
-    } catch (e) {
-      outcome = { kind: 'error', message: errorMessage(e) }
+    let outcome = await requestDeletion()
+    for (let retry = 0; outcome.kind === 'error' && outcome.closed && retry < CLOSED_RETRIES; retry++) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      outcome = await requestDeletion()
     }
 
     if (outcome.kind === 'deleted') {
       await signOut().catch(() => undefined)
       router.replace('/login')
+      setAccountClosing(false)
       toast.success('Tu cuenta se borró', { description: 'Borramos tus datos y tus fotos. Gracias por usar AutoCar.' })
+      return
+    }
+    if (outcome.kind === 'error' && outcome.closed) {
+      await signOut().catch(() => undefined)
+      router.replace('/login')
+      setAccountClosing(false)
+      toast.error('No se terminó de borrar tu cuenta', {
+        description: 'Tus datos ya se borraron casi todos. Volvé a entrar y tocá otra vez "Borrar mi cuenta" para terminar.',
+        timeout: 0,
+      })
       return
     }
     setAccountClosing(false)

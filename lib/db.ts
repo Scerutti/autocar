@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   getDocFromServer,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -63,6 +64,7 @@ import {
   type UserSettings,
 } from './types'
 import { changedFields, isUnchanged } from './utils'
+import type { ExportExtras } from './export'
 
 /**
  * Los ajustes, las suscripciones push y los logros cuelgan de users/{uid}. Cada auto es un documento de
@@ -77,7 +79,7 @@ const carCol = (carId: string, name: RelatedName) => collection(firestore(), 'ca
 const invitesCol = () => collection(firestore(), 'invites')
 const inviteDoc = (id: string) => doc(invitesCol(), id)
 
-type UserCollectionName = 'pushSubscriptions' | 'achievements'
+type UserCollectionName = 'pushSubscriptions' | 'achievements' | 'ruleNotices'
 type RelatedName = 'rules' | 'jobs' | 'fuel' | 'odometer'
 
 const RELATED: readonly RelatedName[] = ['rules', 'jobs', 'fuel', 'odometer']
@@ -1252,6 +1254,25 @@ export async function deletePushSubscription(uid: string, endpoint: string) {
   const batch = writeBatch(firestore())
   batch.delete(doc(userCol(uid, 'pushSubscriptions'), await sha256(endpoint)))
   await batch.commit()
+}
+
+/**
+ * Lo de `users/{uid}` que no está en `useData()`, para "Descargar mis datos": los dispositivos con notificaciones
+ * (`pushSubscriptions`, sin `keys`: son las claves de cifrado del navegador y no le sirven a nadie fuera de él) y el
+ * estado de avisado de cada mantenimiento (`ruleNotices`). Lee de la caché si no hay señal.
+ */
+export async function readExportExtras(uid: string): Promise<ExportExtras> {
+  const [subs, notices] = await Promise.all([getDocs(userCol(uid, 'pushSubscriptions')), getDocs(userCol(uid, 'ruleNotices'))])
+  return {
+    pushSubscriptions: subs.docs.map(d => {
+      const x = d.data()
+      return { id: d.id, endpoint: str(x.endpoint), userAgent: str(x.userAgent), createdAt: toDate(x.createdAt) }
+    }),
+    ruleNotices: notices.docs.map(d => {
+      const x = d.data()
+      return { ruleId: d.id, status: x.status === 'soon' || x.status === 'overdue' ? x.status : null, at: toDate(x.at) }
+    }),
+  }
 }
 
 /**

@@ -17,8 +17,29 @@ import {
 } from './types'
 import { zipFiles } from './zip'
 
-/** Lo que se exporta: lo que la app ya tiene en memoria (`useData()`), más la cuenta. */
-export interface ExportInput {
+/** Un dispositivo con notificaciones (`users/{uid}/pushSubscriptions`), sin las claves de cifrado. */
+export interface ExportDevice {
+  id: string
+  endpoint: string | null
+  userAgent: string | null
+  createdAt: Date | null
+}
+
+/** El estado de avisado de un mantenimiento para la cuenta (`users/{uid}/ruleNotices/{ruleId}`). */
+export interface ExportRuleNotice {
+  ruleId: string
+  status: 'soon' | 'overdue' | null
+  at: Date | null
+}
+
+/** Lo de `users/{uid}` que no está en `useData()` (`readExportExtras` en `lib/db.ts`). */
+export interface ExportExtras {
+  pushSubscriptions: ExportDevice[]
+  ruleNotices: ExportRuleNotice[]
+}
+
+/** Lo que se exporta: lo que la app ya tiene en memoria (`useData()`), lo que se lee aparte (`ExportExtras`) y la cuenta. */
+export interface ExportInput extends ExportExtras {
   uid: string
   email: string | null
   settings: UserSettings
@@ -97,6 +118,8 @@ const INVITE_STATUS_LABELS: Record<Invite['status'], string> = {
   revoked: 'Cancelada',
 }
 
+const NOTICE_LABELS: Record<'soon' | 'overdue', string> = { soon: 'Por vencer', overdue: 'Vencido' }
+
 const SOURCE_LABELS: Record<OdometerReading['source'], string> = {
   initial: 'Alta del auto',
   manual: 'Carga de km',
@@ -135,6 +158,8 @@ export function buildExportJson(input: ExportInput, now: Date): string {
     fuel: input.fuel,
     odometer: input.odometer,
     achievements: input.achievements,
+    pushSubscriptions: input.pushSubscriptions,
+    ruleNotices: input.ruleNotices,
     invites: { sent: input.invites, received: input.myInvites },
   }
   return JSON.stringify(data, null, 2)
@@ -142,7 +167,8 @@ export function buildExportJson(input: ExportInput, now: Date): string {
 
 /**
  * Una planilla por colección, con encabezados en castellano: autos, mantenimientos, trabajos, cargas de combustible,
- * lecturas de km, logros e invitaciones. Cada registro de un auto lleva el nombre del auto y quién lo cargó
+ * lecturas de km, logros, invitaciones, dispositivos con notificaciones y avisos de mantenimientos. Cada registro de un
+ * auto lleva el nombre del auto y quién lo cargó
  * (`authorLabel`: "vos", el nombre, u "otra persona").
  */
 export function buildExportCsvs(input: ExportInput): ExportFile[] {
@@ -152,6 +178,7 @@ export function buildExportCsvs(input: ExportInput): ExportFile[] {
     const car = carById.get(record.carId)
     return car ? authorLabel(record, car, input.uid) : (record.createdByName ?? '')
   }
+  const ruleById = new Map(input.rules.map(r => [r.id, r]))
   const ruleNames = new Map(input.rules.map(r => [r.id, r.name]))
 
   const cars = toCsv(
@@ -269,6 +296,23 @@ export function buildExportCsvs(input: ExportInput): ExportFile[] {
     { name: 'km.csv', content: km },
     { name: 'logros.csv', content: achievements },
     { name: 'invitaciones.csv', content: invites },
+    {
+      name: 'dispositivos.csv',
+      content: toCsv(
+        ['Id', 'Navegador', 'Endpoint', 'Activado'],
+        input.pushSubscriptions.map(d => [d.id, d.userAgent, d.endpoint, d.createdAt]),
+      ),
+    },
+    {
+      name: 'avisos.csv',
+      content: toCsv(
+        ['Mantenimiento', 'Auto', 'Último aviso', 'Fecha del aviso'],
+        input.ruleNotices.map(n => {
+          const rule = ruleById.get(n.ruleId)
+          return [rule?.name ?? n.ruleId, rule ? carOf(rule.carId) : null, n.status ? NOTICE_LABELS[n.status] : null, n.at]
+        }),
+      ),
+    },
   ]
 }
 

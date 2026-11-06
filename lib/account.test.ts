@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { accountDeleteOutcome, accountImagePrefix, carsBlockingAccountDeletion, isDeleteConfirmed, otherCarOfRecord } from './account'
+import {
+  accountDeleteOutcome,
+  accountImagePrefix,
+  accountPhotoRange,
+  carsBlockingAccountDeletion,
+  chunks,
+  imagesToDelete,
+  isDeleteConfirmed,
+  otherCarOfRecord,
+  photosToKeep,
+} from './account'
 
 const ME = 'me-uid'
 
@@ -81,8 +91,52 @@ describe('accountDeleteOutcome', () => {
   })
 
   it('error con el mensaje del servidor o uno genérico', () => {
-    expect(accountDeleteOutcome(502, { error: 'No pudimos borrar tus fotos.' })).toEqual({ kind: 'error', message: 'No pudimos borrar tus fotos.' })
-    expect(accountDeleteOutcome(500, {})).toEqual({ kind: 'error', message: 'El servidor tuvo un problema (error 500). Probá de nuevo en un rato.' })
+    expect(accountDeleteOutcome(502, { error: 'No pudimos borrar tus fotos.' })).toEqual({ kind: 'error', message: 'No pudimos borrar tus fotos.', closed: false })
+    expect(accountDeleteOutcome(500, {})).toEqual({ kind: 'error', message: 'El servidor tuvo un problema (error 500). Probá de nuevo en un rato.', closed: false })
     expect(accountDeleteOutcome(200, null).kind).toBe('error')
+  })
+
+  it('error después de sacar la cuenta de allowlist', () => {
+    expect(accountDeleteOutcome(500, { error: 'x', closed: true })).toEqual({ kind: 'error', message: 'x', closed: true })
+  })
+})
+
+describe('accountPhotoRange', () => {
+  it('abarca todo lo que empieza con la carpeta de la cuenta', () => {
+    const { start, end } = accountPhotoRange('abc')
+    expect(start).toBe('autocar/abc/')
+    expect('autocar/abc/x1' >= start && 'autocar/abc/x1' < end).toBe(true)
+    expect('autocar/abcd/x1' >= start && 'autocar/abcd/x1' < end).toBe(false)
+    expect('autocar/ab/x1' >= start && 'autocar/ab/x1' < end).toBe(false)
+  })
+})
+
+describe('photosToKeep', () => {
+  it('conserva las fotos de la cuenta que usan autos de otras personas', () => {
+    const keep = photosToKeep(
+      [
+        { ownerUid: 'other', photoPublicId: 'autocar/me-uid/a' },
+        { ownerUid: ME, photoPublicId: 'autocar/me-uid/b' },
+        { ownerUid: 'other', photoPublicId: 'autocar/other/c' },
+        { ownerUid: 'other', photoPublicId: null },
+      ],
+      ME,
+    )
+    expect([...keep]).toEqual(['autocar/me-uid/a'])
+  })
+})
+
+describe('imagesToDelete', () => {
+  it('borra las de la carpeta menos las que se conservan, sin repetir', () => {
+    const listed = ['autocar/me-uid/a', 'autocar/me-uid/b', 'autocar/me-uid/b', 'autocar/other/c']
+    expect(imagesToDelete(listed, new Set(['autocar/me-uid/a']), ME)).toEqual(['autocar/me-uid/b'])
+    expect(imagesToDelete([], new Set(), ME)).toEqual([])
+  })
+})
+
+describe('chunks', () => {
+  it('divide en partes de hasta el tamaño pedido', () => {
+    expect(chunks([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
+    expect(chunks([], 100)).toEqual([])
   })
 })

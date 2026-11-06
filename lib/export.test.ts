@@ -119,6 +119,8 @@ const input = (extra: Partial<ExportInput> = {}): ExportInput => ({
   jobs: [job()],
   fuel: [load],
   odometer: [reading],
+  pushSubscriptions: [{ id: 'abc', endpoint: 'https://push.example/1', userAgent: 'Mozilla/5.0 (iPhone)', createdAt: new Date('2026-05-01T12:00:00Z') }],
+  ruleNotices: [{ ruleId: 'r1', status: 'soon', at: new Date('2026-08-01T12:00:00Z') }],
   achievements: [{ id: 'primer-auto', carId: 'c1', unlockedAt: new Date('2026-01-01T12:00:00Z'), celebratedAt: null }],
   invites: [invite()],
   myInvites: [invite({ id: 'c9_ana@gmail.com', carId: 'c9', ownerUid: OTHER, ownerName: 'Carla', carLabel: 'VW Gol', email: 'ana@gmail.com', status: 'pending', respondedAt: null, acceptedUid: null })],
@@ -191,6 +193,8 @@ describe('buildExportJson', () => {
     expect(json.achievements).toHaveLength(1)
     expect(json.invites.sent).toHaveLength(1)
     expect(json.invites.received).toHaveLength(1)
+    expect(json.pushSubscriptions[0].endpoint).toBe('https://push.example/1')
+    expect(json.ruleNotices[0].status).toBe('soon')
     expect(json.settings.timezone).toBe(DEFAULT_SETTINGS.timezone)
   })
 })
@@ -200,7 +204,17 @@ describe('buildExportCsvs', () => {
   const byName = new Map(files.map(f => [f.name, f.content]))
 
   it('arma una planilla por colección, todas con la marca UTF-8', () => {
-    expect(files.map(f => f.name)).toEqual(['autos.csv', 'mantenimientos.csv', 'trabajos.csv', 'cargas.csv', 'km.csv', 'logros.csv', 'invitaciones.csv'])
+    expect(files.map(f => f.name)).toEqual([
+      'autos.csv',
+      'mantenimientos.csv',
+      'trabajos.csv',
+      'cargas.csv',
+      'km.csv',
+      'logros.csv',
+      'invitaciones.csv',
+      'dispositivos.csv',
+      'avisos.csv',
+    ])
     expect(files.every(f => f.content.startsWith(CSV_BOM))).toBe(true)
   })
 
@@ -241,6 +255,14 @@ describe('buildExportCsvs', () => {
     expect(kmRow[kmHeader.indexOf('Creado')]).toBe('')
   })
 
+  it('dispositivos y avisos', () => {
+    const [devHeader, devRow] = rows(byName.get('dispositivos.csv')!)
+    expect(devRow[devHeader.indexOf('Navegador')]).toBe('Mozilla/5.0 (iPhone)')
+    const [noticeHeader, noticeRow] = rows(byName.get('avisos.csv')!)
+    expect(noticeRow[noticeHeader.indexOf('Mantenimiento')]).toBe('Service')
+    expect(noticeRow[noticeHeader.indexOf('Último aviso')]).toBe('Por vencer')
+  })
+
   it('invitaciones: las enviadas y las recibidas, sin repetir', () => {
     const lines = rows(byName.get('invitaciones.csv')!)
     expect(lines).toHaveLength(3)
@@ -252,7 +274,7 @@ describe('buildExportCsvs', () => {
   })
 
   it('sin datos, sólo los encabezados', () => {
-    const empty = buildExportCsvs(input({ cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [], invites: [], myInvites: [] }))
+    const empty = buildExportCsvs(input({ cars: [], rules: [], jobs: [], fuel: [], odometer: [], achievements: [], invites: [], myInvites: [], pushSubscriptions: [], ruleNotices: [] }))
     expect(empty.every(f => rows(f.content).length === 1)).toBe(true)
   })
 })
@@ -262,7 +284,7 @@ describe('buildExportZip', () => {
     const zip = buildExportZip(input(), new Date('2026-11-06T12:00:00Z'))
     const text = new TextDecoder().decode(zip)
     expect(new DataView(zip.buffer).getUint32(0, true)).toBe(0x04034b50)
-    for (const name of ['datos.json', 'autos.csv', 'mantenimientos.csv', 'trabajos.csv', 'cargas.csv', 'km.csv', 'logros.csv', 'invitaciones.csv']) {
+    for (const name of ['datos.json', 'autos.csv', 'mantenimientos.csv', 'trabajos.csv', 'cargas.csv', 'km.csv', 'logros.csv', 'invitaciones.csv', 'dispositivos.csv', 'avisos.csv']) {
       expect(text).toContain(name)
     }
   })

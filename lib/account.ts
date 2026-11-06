@@ -47,14 +47,57 @@ export function otherCarOfRecord(path: string, ownedCarIds: ReadonlySet<string>)
 export const accountImagePrefix = (uid: string) => `autocar/${uid}/`
 
 /**
- * Cómo terminó `DELETE /api/account`, para la pantalla: `deleted` (cerrar sesión), `blocked` con los autos que hay
- * que resolver antes (409) o `error` con el mensaje para mostrar.
+ * Rango de `photoPublicId` para buscar los autos que usan una foto de la carpeta de la cuenta (`>= start` y `< end`):
+ * todo lo que empieza con `accountImagePrefix(uid)`. Es una consulta de rango sobre un solo campo (índice automático).
  */
-export type AccountDeleteOutcome = { kind: 'deleted' } | { kind: 'blocked'; cars: BlockingCar[] } | { kind: 'error'; message: string }
+export function accountPhotoRange(uid: string) {
+  const start = accountImagePrefix(uid)
+  return { start, end: `${start}` }
+}
+
+/**
+ * Las fotos de la carpeta de la cuenta que se conservan: las de autos que ya no son suyos (por ejemplo, se lo pasó a
+ * un miembro con `transferCar`, que deja la foto en la carpeta del dueño anterior). Así el auto del nuevo dueño no se
+ * queda sin foto. Las de sus autos propios se borran.
+ */
+export function photosToKeep(cars: { ownerUid?: string | null; photoPublicId?: string | null }[], uid: string): Set<string> {
+  const prefix = accountImagePrefix(uid)
+  return new Set(
+    cars
+      .filter(c => c.ownerUid !== uid && typeof c.photoPublicId === 'string' && c.photoPublicId.startsWith(prefix))
+      .map(c => c.photoPublicId as string),
+  )
+}
+
+/**
+ * Las fotos que se borran de Cloudinary: las que listó por carpeta (`listed`), sólo las de esa carpeta, sin las que se
+ * conservan (`photosToKeep`) y sin repetir.
+ */
+export function imagesToDelete(listed: string[], keep: ReadonlySet<string>, uid: string): string[] {
+  const prefix = accountImagePrefix(uid)
+  return [...new Set(listed)].filter(id => id.startsWith(prefix) && !keep.has(id))
+}
+
+/** Divide una lista en partes de hasta `size` (la Admin API de Cloudinary borra hasta 100 `public_ids` por llamada). */
+export function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * Cómo terminó `DELETE /api/account`, para la pantalla: `deleted` (cerrar sesión), `blocked` con los autos que hay
+ * que resolver antes (409) o `error` con el mensaje para mostrar. `closed`: el servidor ya sacó la cuenta de
+ * `allowlist` (la app no puede volver a usarla): la pantalla no la vuelve a registrar, reintenta o cierra la sesión.
+ */
+export type AccountDeleteOutcome =
+  | { kind: 'deleted' }
+  | { kind: 'blocked'; cars: BlockingCar[] }
+  | { kind: 'error'; message: string; closed: boolean }
 
 /** Lee la respuesta de `DELETE /api/account` (`json` = el cuerpo, o `{}` si no era JSON). */
 export function accountDeleteOutcome(status: number, json: unknown): AccountDeleteOutcome {
-  const body = (json && typeof json === 'object' ? json : {}) as { deleted?: unknown; error?: unknown; cars?: unknown }
+  const body = (json && typeof json === 'object' ? json : {}) as { deleted?: unknown; error?: unknown; cars?: unknown; closed?: unknown }
   if (status >= 200 && status < 300 && body.deleted === true) return { kind: 'deleted' }
   if (status === 409 && Array.isArray(body.cars)) {
     const cars = body.cars
@@ -63,5 +106,5 @@ export function accountDeleteOutcome(status: number, json: unknown): AccountDele
     return { kind: 'blocked', cars }
   }
   const message = typeof body.error === 'string' && body.error ? body.error : `El servidor tuvo un problema (error ${status}). Probá de nuevo en un rato.`
-  return { kind: 'error', message }
+  return { kind: 'error', message, closed: body.closed === true }
 }
