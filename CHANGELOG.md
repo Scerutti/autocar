@@ -6,7 +6,7 @@ Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión tambi�
 
 ### Mantenimiento
 
-- **Los datos se agrupan por auto una sola vez** (#63): `DataProvider` reparte mantenimientos, trabajos, cargas y lecturas por auto en cada cambio (`groupByCar`, `lib/by-car.ts`, con pruebas) y expone `byCar`. El km de cada auto, `rulesByCar`, la proyección de los mantenimientos (ahora por auto), la corrección del km, la reconciliación y `useCar` leen de ahí en vez de filtrar las listas completas por auto. Las pantallas muestran lo mismo.
+- **Los datos se agrupan por auto una sola vez** (#63): `DataProvider` reparte mantenimientos, trabajos, cargas y lecturas por auto (`groupByCar`, `lib/by-car.ts`, con pruebas), cada lista por separado y sólo cuando cambia, y expone `byCar`. El km de cada auto, `rulesByCar`, la proyección de los mantenimientos (ahora por auto, con una prueba que la compara con la de las listas completas), la corrección del km, la reconciliación y `useCar` leen de ahí en vez de filtrar las listas completas por auto. Las pantallas muestran lo mismo.
 
 ## 1.6.0
 

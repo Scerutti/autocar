@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { groupByCar, type CarRecords } from '@/lib/by-car'
+import { groupByCar } from '@/lib/by-car'
 import { subscribeUserData, syncCarKm, syncRuleProjection, type UserData } from '@/lib/db'
 import { toISODate } from '@/lib/dates'
 import {
@@ -29,13 +29,21 @@ import {
 import { useAuth } from './auth-provider'
 
 /** Los registros de un auto: mantenimientos (con la proyección en memoria), trabajos, cargas y lecturas de km. */
-type CarData = CarRecords<MaintenanceRule, Job, FuelLoad, OdometerReading>
+interface CarData {
+  rules: MaintenanceRule[]
+  jobs: Job[]
+  fuel: FuelLoad[]
+  readings: OdometerReading[]
+}
 
 const NO_RECORDS: CarData = { rules: [], jobs: [], fuel: [], readings: [] }
 
 /** Orden de trabajos y cargas: la fecha más nueva primero; en el mismo día, el último cargado. */
 const byDateDesc = <T extends { date: string; createdAt: Date }>(a: T, b: T) =>
   b.date.localeCompare(a.date) || b.createdAt.getTime() - a.createdAt.getTime()
+
+/** Orden de las lecturas de km: la más nueva primero. */
+const byNewest = (a: OdometerReading, b: OdometerReading) => b.date.getTime() - a.date.getTime()
 
 interface DataState extends UserData {
   uid: string
@@ -52,9 +60,9 @@ interface DataState extends UserData {
   /** Mantenimientos activos de cada auto (sin los recordatorios cumplidos) con su estado, ordenados por urgencia. */
   rulesByCar: Map<string, RuleWithState[]>
   /**
-   * Los registros de cada auto de `cars`, agrupados una vez por cambio (`groupByCar`): todos los mantenimientos con la
-   * proyección, trabajos y cargas por fecha descendente y lecturas por fecha descendente. Un auto sin registros tiene
-   * listas vacías.
+   * Los registros de cada auto de `cars`, agrupados una vez por cambio de cada lista (`groupByCar`): todos los
+   * mantenimientos con la proyección, trabajos y cargas por fecha descendente y lecturas por fecha descendente. Un auto
+   * sin registros tiene listas vacías.
    */
   byCar: Map<string, CarData>
   /** Las invitaciones para mi mail que puedo responder: pendientes y sin vencer (se filtra al recalcular, con `today`). */
@@ -82,8 +90,11 @@ const EMPTY: UserData = {
  * vencimientos. El km de un auto con lecturas es el de su lectura más alta (`topReading`), aunque el guardado en el
  * auto sea mayor o menor (puede haber quedado mal hasta que se corrige); sin lecturas, el guardado.
  *
- * Los registros se agrupan por auto una sola vez por cambio (`groupByCar`, `byCar`): el km de cada auto, `rulesByCar`,
- * la proyección, la corrección del km, la reconciliación y `useCar` leen de ahí en vez de filtrar las listas completas.
+ * Los registros se agrupan por auto con `groupByCar`, cada lista por separado: se reagrupa sólo la que cambió (o todas
+ * si cambian los ids de los autos, no otro campo de un auto). El km de cada auto, `rulesByCar`, la proyección, la
+ * corrección del km, la reconciliación y `useCar` (vía `byCar`) leen de ahí en vez de filtrar las listas completas, y
+ * cada uno depende sólo de las listas que usa: una carga nueva no reinicia la espera de la corrección del km. Un
+ * mantenimiento de un auto que todavía no está en `cars` se proyecta con las listas completas.
  *
  * Corrección automática del km: si el km guardado en el auto no es el de su lectura más alta, sea mayor o menor,
  * escribe el de las lecturas (`kmCorrection`, `syncCarKm`). Las lecturas son la fuente de verdad: así se arregla un
@@ -141,22 +152,15 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id)
   }, [])
 
-  const sorted = useMemo(
-    () => ({
-      jobs: [...data.jobs].sort(byDateDesc),
-      fuel: [...data.fuel].sort(byDateDesc),
-      odometer: [...data.odometer].sort((a, b) => b.date.getTime() - a.date.getTime()),
-    }),
-    [data.jobs, data.fuel, data.odometer],
-  )
-  const grouped = useMemo(
-    () =>
-      groupByCar(
-        data.cars.map(c => c.id),
-        { rules: data.rules, jobs: sorted.jobs, fuel: sorted.fuel, readings: sorted.odometer },
-      ),
-    [data.cars, data.rules, sorted],
-  )
+  const carKey = data.cars.map(c => c.id).join('/')
+  const carIds = useMemo(() => (carKey ? carKey.split('/') : []), [carKey])
+  const jobs = useMemo(() => [...data.jobs].sort(byDateDesc), [data.jobs])
+  const fuel = useMemo(() => [...data.fuel].sort(byDateDesc), [data.fuel])
+  const odometer = useMemo(() => [...data.odometer].sort(byNewest), [data.odometer])
+  const storedRulesByCar = useMemo(() => groupByCar(carIds, data.rules), [carIds, data.rules])
+  const jobsByCar = useMemo(() => groupByCar(carIds, jobs), [carIds, jobs])
+  const fuelByCar = useMemo(() => groupByCar(carIds, fuel), [carIds, fuel])
+  const readingsByCar = useMemo(() => groupByCar(carIds, odometer), [carIds, odometer])
 
   const fixing = useRef(new Set<string>())
   const kmReady = synced.has('cars') && synced.has('odometer')
@@ -165,7 +169,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const id = setTimeout(() => {
       for (const car of data.cars) {
         if (!canWrite(car, uid)) continue
-        const readings = (grouped.get(car.id) ?? NO_RECORDS).readings
+        const readings = readingsByCar.get(car.id) ?? []
         const fix = kmCorrection(car, readings)
         if (!fix) continue
         const key = `${car.id}:${fix.currentKm}`
@@ -177,7 +181,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, grouped, kmReady, actor, uid])
+  }, [data.cars, readingsByCar, kmReady, actor, uid])
 
   const projecting = useRef(new Set<string>())
   const projectionReady = kmReady && synced.has('rules') && synced.has('jobs')
@@ -186,8 +190,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const id = setTimeout(() => {
       for (const car of data.cars) {
         if (!isCarOwner(car, uid)) continue
-        const { rules, jobs, readings } = grouped.get(car.id) ?? NO_RECORDS
-        for (const change of projectionDiff(rules, jobs, readings)) {
+        const rules = storedRulesByCar.get(car.id) ?? []
+        const carJobs = jobsByCar.get(car.id) ?? []
+        const readings = readingsByCar.get(car.id) ?? []
+        for (const change of projectionDiff(rules, carJobs, readings)) {
           const key = projectionKey(change)
           if (projecting.current.has(key)) continue
           projecting.current.add(key)
@@ -198,40 +204,52 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       }
     }, 2000)
     return () => clearTimeout(id)
-  }, [data.cars, grouped, projectionReady, actor, uid])
+  }, [data.cars, storedRulesByCar, jobsByCar, readingsByCar, projectionReady, actor, uid])
 
   const projection = useMemo(() => {
-    const byCar = new Map<string, CarData>()
+    const rulesOf = new Map<string, MaintenanceRule[]>()
     const projected = new Map<MaintenanceRule, MaintenanceRule>()
-    for (const [carId, records] of grouped) {
-      const carRules = projectRules(records.rules, records.jobs, records.readings)
-      records.rules.forEach((rule, i) => projected.set(rule, carRules[i]))
-      byCar.set(carId, { ...records, rules: carRules })
+    for (const [carId, stored] of storedRulesByCar) {
+      const next = projectRules(stored, jobsByCar.get(carId) ?? [], readingsByCar.get(carId) ?? [])
+      stored.forEach((rule, i) => projected.set(rule, next[i]))
+      rulesOf.set(carId, next)
     }
-    const rules = data.rules.map(r => projected.get(r) ?? { ...r, ...projectRule(r, [], []) })
-    return { byCar, rules }
-  }, [grouped, data.rules])
+    const rules = data.rules.map(r => projected.get(r) ?? { ...r, ...projectRule(r, jobs, odometer) })
+    return { rulesOf, rules }
+  }, [storedRulesByCar, jobsByCar, readingsByCar, data.rules, jobs, odometer])
+
+  const byCar = useMemo(() => {
+    const map = new Map<string, CarData>()
+    for (const id of carIds) {
+      map.set(id, {
+        rules: projection.rulesOf.get(id) ?? [],
+        jobs: jobsByCar.get(id) ?? [],
+        fuel: fuelByCar.get(id) ?? [],
+        readings: readingsByCar.get(id) ?? [],
+      })
+    }
+    return map
+  }, [carIds, projection, jobsByCar, fuelByCar, readingsByCar])
 
   const value = useMemo<DataState>(() => {
-    const { byCar, rules } = projection
     const cars = data.cars
       .map(c => {
-        const top = topReading((byCar.get(c.id) ?? NO_RECORDS).readings)
+        const top = topReading(readingsByCar.get(c.id) ?? [])
         return top ? { ...c, currentKm: top.km, kmUpdatedAt: top.date } : c
       })
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
     const carById = new Map(cars.map(c => [c.id, c]))
     const rulesByCar = new Map<string, RuleWithState[]>()
     for (const car of cars) {
-      rulesByCar.set(car.id, rulesWithState(activeRules((byCar.get(car.id) ?? NO_RECORDS).rules), car, today))
+      rulesByCar.set(car.id, rulesWithState(activeRules(projection.rulesOf.get(car.id) ?? []), car, today))
     }
     return {
       ...data,
       cars,
-      rules,
-      jobs: sorted.jobs,
-      fuel: sorted.fuel,
-      odometer: sorted.odometer,
+      rules: projection.rules,
+      jobs,
+      fuel,
+      odometer,
       myInvites: data.myInvites.filter(i => isInviteOpen(i, new Date())),
       uid,
       email,
@@ -243,7 +261,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       rulesByCar,
       byCar,
     }
-  }, [data, sorted, projection, loaded, error, today, uid, email, actor])
+  }, [data, jobs, fuel, odometer, readingsByCar, projection, byCar, loaded, error, today, uid, email, actor])
 
   return <DataContext value={value}>{children}</DataContext>
 }
