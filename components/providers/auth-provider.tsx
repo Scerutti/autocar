@@ -11,11 +11,21 @@ import {
 } from 'firebase/auth'
 import { LogOut } from 'lucide-react'
 import { Loading } from '@/components/common'
-import { useConfirm, type ConfirmOptions } from '@/components/confirm-provider'
+import { useConfirm, useDismissConfirm, type ConfirmOptions } from '@/components/confirm-provider'
+import { waitForServerWrites } from '@/lib/db'
 import { firebaseAuth, isFirebaseConfigured, releaseFirestore } from '@/lib/firebase/client'
 import { readOutbox } from '@/lib/outbox'
-import { DEVICE_CHANNEL, FOLLOWER_RELOAD_MS, isSignOutMessage, unsavedChangesWarning } from '@/lib/sign-out'
-import { clearDeviceData } from '@/lib/sign-out-client'
+import {
+  DEVICE_CHANNEL,
+  FOLLOWER_RELOAD_MS,
+  PENDING_WRITES_WAIT_MS,
+  followsSignOut,
+  leavesOnSignedOut,
+  settleWithin,
+  signOutWarning,
+  unsavedOutbox,
+} from '@/lib/sign-out'
+import { TAB_ID, clearDeviceData } from '@/lib/sign-out-client'
 import { toast } from '@/lib/toast'
 
 /** Opciones de `signOut`. */
@@ -27,7 +37,14 @@ export interface SignOutOptions {
 }
 
 /**
- * `cancelled`: no confirmó. `signed-out`: salió y se borraron los datos del dispositivo. `cache-kept`: salió, pero
+ * En qué está "Salir" en esta pestaña: `syncing`, esperando las escrituras pendientes (el botón dice "Sincronizando…");
+ * `confirming`, con la confirmación abierta; `closing`, borrando los datos ("Cerrando sesión…" en lugar de la app, también
+ * cuando sale otra pestaña). null: no está saliendo.
+ */
+export type SignOutPhase = 'syncing' | 'confirming' | 'closing' | null
+
+/**
+ * `cancelled`: no confirmó, o ya estaba saliendo (esta pestaña u otra). `signed-out`: salió y se borraron los datos del dispositivo. `cache-kept`: salió, pero
  * otra pestaña no soltó la caché de Firestore (ya se avisó con un toast que hay que cerrarla).
  */
 export type SignOutResult = 'cancelled' | 'signed-out' | 'cache-kept'
@@ -38,10 +55,14 @@ interface AuthState {
   /** Google con popup; donde no hay popups (algunas PWA instaladas en iOS) pasa a redirect. */
   signIn: () => Promise<void>
   /**
-   * "Salir": si la bandeja tiene cambios sin guardar pide confirmación ("Tenés N cambios sin guardar…"), borra los
-   * datos de la cuenta de este dispositivo (`clearDeviceData`) y cierra la sesión. Las otras pestañas se cierran solas.
+   * "Salir": espera hasta `PENDING_WRITES_WAIT_MS` las escrituras pendientes; si la bandeja tiene cambios sin guardar
+   * o quedan escrituras, pide confirmación (`signOutWarning`); borra los datos de la cuenta de este dispositivo
+   * (`clearDeviceData`) y cierra la sesión. Las otras pestañas se cierran solas. Mientras está en curso, otra llamada
+   * no hace nada (`cancelled`).
    */
   signOut: (options?: SignOutOptions) => Promise<SignOutResult>
+  /** En qué está "Salir", para el botón (`SignOutPhase`). */
+  signingOut: SignOutPhase
   /** ID token para llamar a las API routes. */
   getToken: () => Promise<string>
 }
@@ -50,23 +71,32 @@ const AuthContext = createContext<AuthState | null>(null)
 
 /**
  * Sesión de Firebase Auth. Mientras se cierra la sesión (en esta pestaña o en otra, por `DEVICE_CHANNEL`) muestra
- * "Cerrando sesión…" en lugar de la app, así no queda nada en pantalla de la cuenta que sale. La pestaña que no
- * inició la salida suelta Firestore y recarga en `/login` cuando la sesión se cierra (o a los `FOLLOWER_RELOAD_MS`).
+ * "Cerrando sesión…" en lugar de la app, así no queda nada en pantalla de la cuenta que sale. Toda pestaña que no es
+ * la que sale, cuando la sesión que tenía se cierra (`leavesOnSignedOut`), suelta Firestore y recarga en `/login`; la
+ * que recibe el aviso del canal (`followsSignOut`) además cierra la confirmación abierta y oculta la app enseguida (y
+ * recarga igual a los `FOLLOWER_RELOAD_MS`).
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(isFirebaseConfigured)
-  const [closing, setClosing] = useState(false)
+  const [phase, setPhase] = useState<SignOutPhase>(null)
   const confirm = useConfirm()
+  const dismissConfirm = useDismissConfirm()
+  const current = useRef<User | null>(null)
   const leading = useRef(false)
+  const clearing = useRef(false)
   const following = useRef(false)
   const closed = useRef<(() => void) | null>(null)
+  const closing = phase === 'closing'
 
   useEffect(() => {
     if (!isFirebaseConfigured) return
     return onAuthStateChanged(firebaseAuth(), u => {
-      if (!u && following.current) {
-        window.location.replace('/login')
+      const hadUser = current.current != null
+      current.current = u
+      if (leavesOnSignedOut({ hadUser, hasUser: u != null, leading: clearing.current })) {
+        following.current = true
+        void releaseFirestore(true).finally(() => window.location.replace('/login'))
         return
       }
       setUser(u)
@@ -78,13 +108,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof BroadcastChannel === 'undefined') return
     const channel = new BroadcastChannel(DEVICE_CHANNEL)
     channel.onmessage = event => {
-      if (!isSignOutMessage(event.data) || leading.current || following.current) return
+      if (!followsSignOut(event.data, TAB_ID, current.current?.uid ?? null)) return
+      if (clearing.current || following.current) return
       following.current = true
-      setClosing(true)
+      dismissConfirm()
+      setPhase('closing')
       window.setTimeout(() => window.location.reload(), FOLLOWER_RELOAD_MS)
     }
     return () => channel.close()
-  }, [])
+  }, [dismissConfirm])
 
   useEffect(() => {
     if (!closing) return
@@ -110,21 +142,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function signOut({ skipConfirm = false, confirm: ask }: SignOutOptions = {}): Promise<SignOutResult> {
-    if (leading.current) return 'cancelled'
-    const uid = user?.uid
-    if (!skipConfirm) {
-      const warning = uid ? unsavedChangesWarning(readOutbox(uid).length) : null
-      const options: ConfirmOptions | undefined = warning ? { ...warning, tone: 'danger', icon: LogOut } : ask
-      if (options && !(await confirm(options))) return 'cancelled'
-    }
+    if (leading.current || following.current) return 'cancelled'
     leading.current = true
+    const uid = user?.uid
     try {
+      if (!skipConfirm) {
+        setPhase('syncing')
+        const writes = uid ? await settleWithin(Promise.resolve().then(waitForServerWrites), PENDING_WRITES_WAIT_MS) : 'done'
+        if (following.current) return 'cancelled'
+        const outbox = uid ? unsavedOutbox(readOutbox(uid), Date.now()) : { unsaved: 0, pending: 0 }
+        const warning = signOutWarning({
+          unsaved: outbox.unsaved,
+          outboxPending: outbox.pending,
+          writesPending: writes === 'timeout',
+        })
+        const options: ConfirmOptions | undefined = warning ? { ...warning, tone: 'danger', icon: LogOut } : ask
+        setPhase('confirming')
+        if (options && !(await confirm(options))) return 'cancelled'
+        if (following.current) return 'cancelled'
+      }
+      clearing.current = true
       await new Promise<void>(resolve => {
         closed.current = resolve
-        setClosing(true)
+        setPhase('closing')
       })
       const cleared = uid ? await clearDeviceData(uid) : true
       await fbSignOut(firebaseAuth())
+      current.current = null
       setUser(null)
       if (cleared) return 'signed-out'
       toast.warning('Cerraste sesión', {
@@ -134,7 +178,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return 'cache-kept'
     } finally {
       leading.current = false
-      setClosing(false)
+      clearing.current = false
+      if (!following.current) setPhase(null)
     }
   }
 
@@ -143,6 +188,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     signIn,
     signOut,
+    signingOut: phase,
     getToken: async () => {
       if (!user) throw new Error('No hay sesión')
       return user.getIdToken()

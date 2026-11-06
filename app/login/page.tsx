@@ -9,7 +9,7 @@ import { FormError } from '@/components/ui/form'
 import { Loading } from '@/components/common'
 import { NotConfigured } from '@/components/not-configured'
 import { useAuth } from '@/components/providers/auth-provider'
-import { isFirebaseConfigured } from '@/lib/firebase/client'
+import { clearSignedOutCache, isFirebaseConfigured } from '@/lib/firebase/client'
 import { safeNextPath } from '@/lib/utils'
 
 function GoogleIcon() {
@@ -33,6 +33,10 @@ function LoginInner() {
   useEffect(() => {
     if (user) router.replace(safeNextPath(next, window.location.origin))
   }, [user, next, router])
+
+  useEffect(() => {
+    if (!loading && !user) void clearSignedOutCache()
+  }, [loading, user])
 
   if (loading || user) return <Loading />
 

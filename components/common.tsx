@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, CarFront, Eye, MapPinOff } from 'lucide-react'
+import { ArrowLeft, CarFront, Eye, LoaderCircle, LogOut, MapPinOff } from 'lucide-react'
+import type { SignOutPhase } from '@/components/providers/auth-provider'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
@@ -204,6 +205,25 @@ export function Loading({ label }: { label?: string }) {
       <div aria-hidden className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-primary" />
       {label ? <p className="text-sm text-muted-foreground">{label}</p> : <span className="sr-only">Cargando…</span>}
     </div>
+  )
+}
+
+/**
+ * Texto del botón "Salir": mientras `signOut` espera las escrituras pendientes, un indicador y "Sincronizando…" (el
+ * botón va deshabilitado con `signingOut != null`). `icon`: con el ícono de salir.
+ */
+export function SignOutLabel({ phase, icon = false }: { phase: SignOutPhase; icon?: boolean }) {
+  if (phase === 'syncing') {
+    return (
+      <>
+        <LoaderCircle aria-hidden className="animate-spin" /> Sincronizando…
+      </>
+    )
+  }
+  return (
+    <>
+      {icon && <LogOut aria-hidden />} Salir
+    </>
   )
 }
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
 import { CircleHelp, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react'
 import {
   AlertDialog,
@@ -29,7 +29,7 @@ export interface ConfirmOptions {
 
 type Confirm = (options: ConfirmOptions) => Promise<boolean>
 
-const ConfirmContext = createContext<Confirm | null>(null)
+const ConfirmContext = createContext<{ confirm: Confirm; dismiss: () => void } | null>(null)
 
 /**
  * Un único diálogo de confirmación para toda la app: `if (!(await confirm({...}))) return`.
@@ -58,11 +58,19 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     setOpen(false)
   }
 
+  const dismiss = useCallback(() => {
+    resolver.current?.(false)
+    resolver.current = null
+    setOpen(false)
+  }, [])
+
+  const value = useMemo(() => ({ confirm, dismiss }), [confirm, dismiss])
+
   const danger = request?.tone === 'danger'
   const Icon = request?.icon ?? (danger ? Trash2 : CircleHelp)
 
   return (
-    <ConfirmContext value={confirm}>
+    <ConfirmContext value={value}>
       {children}
       <AlertDialog
         open={open}
@@ -126,7 +134,14 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 }
 
 export function useConfirm() {
-  const confirm = useContext(ConfirmContext)
-  if (!confirm) throw new Error('useConfirm fuera de ConfirmProvider')
-  return confirm
+  const ctx = useContext(ConfirmContext)
+  if (!ctx) throw new Error('useConfirm fuera de ConfirmProvider')
+  return ctx.confirm
+}
+
+/** Cierra la confirmación abierta como si se cancelara (su `confirm` resuelve false). Sin una abierta, no hace nada. */
+export function useDismissConfirm() {
+  const ctx = useContext(ConfirmContext)
+  if (!ctx) throw new Error('useDismissConfirm fuera de ConfirmProvider')
+  return ctx.dismiss
 }

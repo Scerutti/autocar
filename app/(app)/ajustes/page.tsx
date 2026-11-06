@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
 import { Checkbox } from '@/components/ui/form'
 import { initials } from '@/components/app-shell'
-import { PageBody, PageHeader } from '@/components/common'
+import { PageBody, PageHeader, SignOutLabel } from '@/components/common'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
 import { saveSettings } from '@/lib/db'
@@ -248,7 +248,7 @@ function NovedadesLink() {
 }
 
 export default function SettingsPage() {
-  const { user, signOut } = useAuth()
+  const { user, signOut, signingOut } = useAuth()
 
   async function handleSignOut() {
     const result = await signOut({
@@ -283,8 +283,8 @@ export default function SettingsPage() {
                 <p className="truncate text-sm text-muted-foreground">{user?.email}</p>
               </div>
             </div>
-            <Button variant="outline" onClick={() => void handleSignOut()} className="gap-2">
-              <LogOut /> Salir
+            <Button variant="outline" onClick={() => void handleSignOut()} disabled={signingOut != null} className="gap-2">
+              <SignOutLabel phase={signingOut} icon />
             </Button>
           </div>
         </Section>

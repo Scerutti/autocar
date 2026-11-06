@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { OutboxEntry } from './outbox'
 import {
   accountLocalKeys,
+  followsSignOut,
   isSignOutMessage,
+  leavesOnSignedOut,
   retryWithin,
   settleWithin,
   signOutMessage,
-  unsavedChangesWarning,
+  signOutWarning,
+  unsavedOutbox,
 } from './sign-out'
+
+const DAY = 86_400_000
+
+const entry = (id: string, state: OutboxEntry['state'], createdAt: number) =>
+  ({
+    id,
+    carId: 'c1',
+    carLabel: 'Ford Ka',
+    label: 'Km',
+    createdAt,
+    state,
+    kind: 'km',
+    payload: { recordId: id, data: { km: 1000, date: '2026-11-01' }, original: null },
+  }) as OutboxEntry
 
 describe('accountLocalKeys', () => {
   const keys = [
@@ -37,29 +55,84 @@ describe('accountLocalKeys', () => {
   })
 })
 
-describe('unsavedChangesWarning', () => {
-  it('sin cambios no pide confirmación', () => {
-    expect(unsavedChangesWarning(0)).toBeNull()
+describe('unsavedOutbox', () => {
+  it('cuenta las entradas sin las vencidas y aparte las pendientes', () => {
+    const now = 100 * DAY
+    const entries = [entry('a', 'pending', now - DAY), entry('b', 'failed', now - DAY), entry('c', 'pending', now - 31 * DAY)]
+    expect(unsavedOutbox(entries, now)).toEqual({ unsaved: 2, pending: 1 })
+    expect(unsavedOutbox([], now)).toEqual({ unsaved: 0, pending: 0 })
+  })
+})
+
+describe('signOutWarning', () => {
+  it('sin nada que se pierda no pide confirmación', () => {
+    expect(signOutWarning({ unsaved: 0, outboxPending: 0, writesPending: false })).toBeNull()
   })
 
-  it('dice cuántos cambios se pierden', () => {
-    expect(unsavedChangesWarning(1)?.description).toBe('Tenés 1 cambio sin guardar; si salís se pierde.')
-    expect(unsavedChangesWarning(3)?.description).toBe('Tenés 3 cambios sin guardar; si salís se pierden.')
-    expect(unsavedChangesWarning(3)?.confirmLabel).toBe('Salir igual')
+  it('dice cuántos cambios de la bandeja se pierden', () => {
+    expect(signOutWarning({ unsaved: 1, outboxPending: 0, writesPending: false })?.description).toBe(
+      'Tenés 1 cambio sin guardar; si salís se pierde.',
+    )
+    const many = signOutWarning({ unsaved: 3, outboxPending: 1, writesPending: true })
+    expect(many?.description).toBe('Tenés 3 cambios sin guardar; si salís se pierden.')
+    expect(many?.confirmLabel).toBe('Salir igual')
+  })
+
+  it('suma las escrituras pendientes que no son de la bandeja', () => {
+    expect(signOutWarning({ unsaved: 1, outboxPending: 0, writesPending: true })?.description).toBe(
+      'Tenés 1 cambio sin guardar y otros cambios sin sincronizar; si salís se pierden.',
+    )
+    expect(signOutWarning({ unsaved: 2, outboxPending: 0, writesPending: true })?.description).toBe(
+      'Tenés 2 cambios sin guardar y otros cambios sin sincronizar; si salís se pierden.',
+    )
+  })
+
+  it('pregunta aunque la bandeja esté vacía si quedan escrituras pendientes', () => {
+    expect(signOutWarning({ unsaved: 0, outboxPending: 0, writesPending: true })?.description).toBe(
+      'Tenés cambios sin sincronizar; si salís se pierden.',
+    )
   })
 })
 
 describe('isSignOutMessage', () => {
   it('reconoce el mensaje de salir', () => {
-    expect(isSignOutMessage(signOutMessage('u1'))).toBe(true)
+    expect(isSignOutMessage(signOutMessage('u1', 'tab-a'))).toBe(true)
   })
 
   it('descarta otros mensajes', () => {
     expect(isSignOutMessage(null)).toBe(false)
     expect(isSignOutMessage('signout')).toBe(false)
-    expect(isSignOutMessage({ type: 'signout' })).toBe(false)
-    expect(isSignOutMessage({ type: 'signout', uid: '' })).toBe(false)
-    expect(isSignOutMessage({ type: 'otro', uid: 'u1' })).toBe(false)
+    expect(isSignOutMessage({ type: 'signout', uid: 'u1' })).toBe(false)
+    expect(isSignOutMessage({ type: 'signout', uid: '', from: 'tab-a' })).toBe(false)
+    expect(isSignOutMessage({ type: 'otro', uid: 'u1', from: 'tab-a' })).toBe(false)
+  })
+})
+
+describe('followsSignOut', () => {
+  const message = signOutMessage('u1', 'tab-a')
+
+  it('sigue el aviso de otra pestaña de la misma cuenta', () => {
+    expect(followsSignOut(message, 'tab-b', 'u1')).toBe(true)
+  })
+
+  it('ignora el propio, el de otra cuenta y el que llega sin sesión', () => {
+    expect(followsSignOut(message, 'tab-a', 'u1')).toBe(false)
+    expect(followsSignOut(message, 'tab-b', 'u2')).toBe(false)
+    expect(followsSignOut(message, 'tab-b', null)).toBe(false)
+    expect(followsSignOut({ type: 'otro' }, 'tab-b', 'u1')).toBe(false)
+  })
+})
+
+describe('leavesOnSignedOut', () => {
+  it('se va cuando se cierra la sesión que tenía, salvo la pestaña que sale', () => {
+    expect(leavesOnSignedOut({ hadUser: true, hasUser: false, leading: false })).toBe(true)
+    expect(leavesOnSignedOut({ hadUser: true, hasUser: false, leading: true })).toBe(false)
+  })
+
+  it('no se va al cargar sin sesión ni al entrar', () => {
+    expect(leavesOnSignedOut({ hadUser: false, hasUser: false, leading: false })).toBe(false)
+    expect(leavesOnSignedOut({ hadUser: false, hasUser: true, leading: false })).toBe(false)
+    expect(leavesOnSignedOut({ hadUser: true, hasUser: true, leading: false })).toBe(false)
   })
 })
 
