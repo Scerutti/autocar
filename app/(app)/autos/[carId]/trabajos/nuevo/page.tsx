@@ -14,7 +14,7 @@ function NewJob() {
   const ruleId = useSearchParams().get('regla')
   const { uid } = useData()
   const { car } = useCar(carId)
-  const draft = useDraft('job')
+  const draft = useDraft('job', carId)
   if (!car) return <NotFound what="el auto" />
   return (
     <>

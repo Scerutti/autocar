@@ -17,7 +17,7 @@ function EditCar() {
   const { carId } = useParams<{ carId: string }>()
   const { uid } = useData()
   const { car } = useCar(carId)
-  const draft = useDraft('car')
+  const draft = useDraft('car', carId, carId)
   if (!car) return <NotFound what="el auto" />
   return (
     <>

@@ -15,7 +15,7 @@ function EditRule() {
   const { carId, ruleId } = useParams<{ carId: string; ruleId: string }>()
   const { car, allRules } = useCar(carId)
   const rule = allRules.find(r => r.id === ruleId)
-  const draft = useDraft('rule')
+  const draft = useDraft('rule', carId, ruleId)
   if (!car) return <NotFound what="el auto" />
   if (!rule) return <NotFound what="el mantenimiento" back={`/autos/${car.id}`} />
   return (

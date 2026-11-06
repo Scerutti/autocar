@@ -17,7 +17,7 @@ import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { checkCarRuleEscalations, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
-import { newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { canEditEntry } from '@/lib/sharing'
 import {
   FUEL_GRADE_LABELS,
@@ -78,8 +78,8 @@ export function FuelForm({ car, load, draft }: { car: Car; load?: FuelLoad; draf
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios"). Si
  * la cantidad y el total quedan iguales, se conserva el precio por unidad guardado: recalcularlo desde el total puede
  * diferir en un centavo y contaría como un cambio.
- * Con un borrador (`draft`), los campos arrancan con lo que se había cargado y, al editar, los cambios se miden contra
- * la carga como estaba cuando se cargó el borrador (`original` de la entrada). Lo guardado va a la bandeja
+ * Con un borrador (`draft`), los campos arrancan con lo que se había cargado (`draftSeed`): al editar, la carga como
+ * está ahora con los cambios del borrador encima, y se mide contra la carga de ahora. Lo guardado va a la bandeja
  * (`settle` con la entrada; la misma del borrador, si hay) con el id de la carga generado antes de escribir.
  */
 function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: OutboxEntryOf<'fuel'> | null }) {
@@ -90,7 +90,7 @@ function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: Ou
   const { fuel: carFuel, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
-  const seed: FuelInput | undefined = draft?.payload.data ?? load
+  const seed: FuelInput | undefined = draftSeed(load, draft)
   const types = seed && !car.fuelTypes.includes(seed.fuelType) ? [...car.fuelTypes, seed.fuelType] : car.fuelTypes
   const liquid = types.find(isLiquidFuel) ?? 'nafta'
   const lastOf = (t: FuelType, g?: FuelGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
@@ -107,7 +107,7 @@ function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: Ou
   const [price, setPrice] = useState(seed ? toNumberInput(seed.total) : initialLast?.unitPrice ? toNumberInput(initialLast.unitPrice) : '')
   const [fullTank, setFullTank] = useState(seed?.fullTank ?? true)
   const [station, setStation] = useState(seed?.station ?? initialLast?.station ?? '')
-  const [original] = useState(load && draft?.payload.original ? { ...load, ...draft.payload.original } : load)
+  const [original] = useState(load)
 
   const unit = FUEL_UNITS[fuelType]
   const liquidSelected = isLiquidFuel(fuelType)

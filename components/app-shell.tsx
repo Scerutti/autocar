@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { LayoutDashboard, Settings, Trophy, Wallet, Wrench } from 'lucide-react'
 import { BrandMark, BrandWordmark } from '@/components/brand'
-import { OutboxIndicator } from '@/components/outbox/outbox'
+import { OutboxIndicator, useOutboxStatus } from '@/components/outbox/outbox'
 import { useAuth } from '@/components/providers/auth-provider'
 import { cn } from '@/lib/utils'
 
@@ -29,10 +29,15 @@ export function initials(name: string | null | undefined) {
     .join('')
 }
 
-/** Marco de la app: navegación lateral (escritorio) o inferior (celular) y el indicador de lo que falta sincronizar. */
+/**
+ * Marco de la app: navegación lateral (escritorio) o inferior (celular) y el aviso de lo que falta sincronizar
+ * (`OutboxIndicator`). El aviso va dentro de la navegación, no flotando: en el celular, arriba de los íconos, y el
+ * contenido suma ese alto a su margen inferior; en el escritorio, arriba de la cuenta en la barra lateral.
+ */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { user } = useAuth()
+  const outbox = useOutboxStatus()
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -60,32 +65,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             ))}
           </nav>
-          {user && (
-            <Link href="/ajustes" className="mt-auto rounded-2xl border border-white/8 bg-white/[0.03] p-4 hover:bg-white/[0.05]">
-              <div className="flex items-center gap-3">
-                {user.photoURL ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={user.photoURL} alt="" referrerPolicy="no-referrer" className="size-9 rounded-full" />
-                ) : (
-                  <div className="flex size-9 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
-                    {initials(user.displayName)}
+          <div className="mt-auto space-y-3">
+            {outbox && <OutboxIndicator text={outbox} />}
+            {user && (
+              <Link href="/ajustes" className="block rounded-2xl border border-white/8 bg-white/[0.03] p-4 hover:bg-white/[0.05]">
+                <div className="flex items-center gap-3">
+                  {user.photoURL ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={user.photoURL} alt="" referrerPolicy="no-referrer" className="size-9 rounded-full" />
+                  ) : (
+                    <div className="flex size-9 items-center justify-center rounded-full bg-primary/15 text-sm font-semibold text-primary">
+                      {initials(user.displayName)}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{user.displayName ?? 'Mi cuenta'}</p>
+                    <p className="truncate text-xs text-muted-foreground">{user.email}</p>
                   </div>
-                )}
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{user.displayName ?? 'Mi cuenta'}</p>
-                  <p className="truncate text-xs text-muted-foreground">{user.email}</p>
                 </div>
-              </div>
-            </Link>
-          )}
+              </Link>
+            )}
+          </div>
         </aside>
 
-        <main className="w-full min-w-0 pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-10">{children}</main>
+        <main
+          className={cn(
+            'w-full min-w-0 lg:pb-10',
+            outbox ? 'pb-[calc(7.25rem+env(safe-area-inset-bottom))]' : 'pb-[calc(5rem+env(safe-area-inset-bottom))]',
+          )}
+        >
+          {children}
+        </main>
       </div>
 
-      <OutboxIndicator />
-
       <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-white/8 bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
+        {outbox && <OutboxIndicator text={outbox} className="mx-auto mb-1.5" />}
         <div className="mx-auto flex max-w-md items-center">
           {NAV.map(({ href, label, icon: Icon }) => (
             <Link

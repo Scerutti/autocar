@@ -7,7 +7,7 @@ import { useDraft } from '@/components/outbox/outbox'
 
 /** Auto nuevo o, con `?borrador=<id>`, uno de la bandeja que el servidor no guardó. */
 function NewCar() {
-  const draft = useDraft('car')
+  const draft = useDraft('car', null)
   return (
     <>
       <PageHeader back title="Nuevo auto" />

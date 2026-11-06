@@ -14,7 +14,7 @@ function EditFuel() {
   const { uid } = useData()
   const { car, fuel } = useCar(carId)
   const load = fuel.find(f => f.id === fuelId)
-  const draft = useDraft('fuel')
+  const draft = useDraft('fuel', carId, fuelId)
   if (!car) return <NotFound what="el auto" />
   if (!load) return <NotFound what="la carga" back={`/autos/${car.id}?tab=combustible`} />
   return (

@@ -13,7 +13,7 @@ function NewFuel() {
   const { carId } = useParams<{ carId: string }>()
   const { uid } = useData()
   const { car } = useCar(carId)
-  const draft = useDraft('fuel')
+  const draft = useDraft('fuel', carId)
   if (!car) return <NotFound what="el auto" />
   return (
     <>

@@ -17,7 +17,7 @@ import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseN
 import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
 import { checkCarRuleEscalations, notifyJobInBackground, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
-import { newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { approvesOwnJobs, authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type MaintenanceRule, type OdometerReading, type TimeInterval } from '@/lib/types'
@@ -241,9 +241,10 @@ export function JobForm({
  * obligatorio.
  * Al guardar, los cambios se miden contra el trabajo como estaba al abrir el formulario (`original`): lo que otro
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
- * Con un borrador (`draft`), los campos (y la vuelta al taller) arrancan con lo que se había cargado y, al editar, los
- * cambios se miden contra el trabajo como estaba cuando se cargó el borrador (`original` de la entrada). Lo guardado va
- * a la bandeja (`settle` con la entrada; la misma del borrador, si hay) con el id del trabajo generado antes de escribir.
+ * Con un borrador (`draft`), los campos (y la vuelta al taller) arrancan con lo que se había cargado (`draftSeed`): al
+ * editar, el trabajo como está ahora con los cambios del borrador encima, y se mide contra el trabajo de ahora. Lo
+ * guardado va a la bandeja (`settle` con la entrada; la misma del borrador, si hay) con el id del trabajo generado
+ * antes de escribir.
  */
 function JobEditor({
   car,
@@ -270,7 +271,7 @@ function JobEditor({
   const selectable = [...rules.map(r => r.rule), ...completedHere]
 
   const preRule = rules.find(r => r.rule.id === preselectedRuleId)?.rule
-  const seed: JobInput | undefined = draft?.payload.data ?? job
+  const seed: JobInput | undefined = draftSeed(job, draft)
   const [date, setDate] = useState(seed?.date ?? toISODate(new Date()))
   const [km, setKm] = useState(seed?.km != null ? String(seed.km) : '')
   const [title, setTitle] = useState(seed?.title ?? preRule?.name ?? '')
@@ -283,7 +284,7 @@ function JobEditor({
   const [ruleIds, setRuleIds] = useState<string[]>(seed?.ruleIds ?? (preRule ? [preRule.id] : []))
   const [comeBack, setComeBack] = useState(Boolean(draft?.payload.followUp))
   const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>(draft?.payload.followUp?.intervalTime ?? { amount: 1, unit: 'month' })
-  const [original] = useState(job && draft?.payload.original ? { ...job, ...draft.payload.original } : job)
+  const [original] = useState(job)
 
   const kmNum = parseNumberInput(km)
   const kmRules = kmRulesOf(selectable, ruleIds)

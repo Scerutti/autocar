@@ -28,7 +28,7 @@ import {
   type CarInput,
 } from '@/lib/db'
 import { formatDate, formatKm, parseNumberInput } from '@/lib/format'
-import { newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import {
   INVITE_DAYS,
   MAX_MEMBERS,
@@ -43,7 +43,7 @@ import {
 import type { Car, FuelType, Invite, MemberRole } from '@/lib/types'
 import { errorMessage, toast } from '@/lib/toast'
 import { settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
-import { changedFields } from '@/lib/utils'
+import { changedFields, isUnchanged } from '@/lib/utils'
 
 /** Un auto anda a nafta, a nafta + GNC o a gasoil (no existen los que andan sólo a GNC). */
 type FuelChoice = 'nafta' | 'dual' | 'gasoil'
@@ -67,7 +67,8 @@ const toChoice = (f: FuelType[]): FuelChoice => (f.includes('gasoil') ? 'gasoil'
  * el servidor rechaza el guardado, la foto nueva se borra de Cloudinary, así que el borrador no la puede usar. `draft`:
  * un auto de la bandeja que el servidor no guardó (`?borrador=`): los datos (y los km, en un alta) arrancan con los de
  * entonces y se guardan con la misma entrada; la foto se vuelve a elegir. Al editar, el borrador sólo pisa los campos
- * que había cambiado (`original` de la entrada).
+ * que había cambiado (`draftSeed`). Un cambio sólo de la foto no va a la bandeja (no hay datos que guardar en la
+ * entrada): si el servidor lo rechaza, queda el toast de siempre.
  */
 export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'> | null }) {
   const router = useRouter()
@@ -77,7 +78,7 @@ export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'
   const { saving, error, setError, run } = useSaver()
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const seed: CarInput | undefined = car && draft?.payload.original ? { ...car, ...changedFields(draft.payload.original, draft.payload.data) } : (draft?.payload.data ?? car)
+  const seed: CarInput | undefined = draftSeed(car, draft)
   const [brand, setBrand] = useState(seed?.brand ?? '')
   const [model, setModel] = useState(seed?.model ?? '')
   const [version, setVersion] = useState(seed?.version ?? '')
@@ -173,6 +174,7 @@ export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'
         payload: { recordId: carId, data: { ...data }, original: car ? originalFields(car, data) : null, initialKm: car ? null : kmNum },
       },
     })
+    const photoOnly = car != null && !draft && isUnchanged(changedFields(originalFields(car, data), data))
     const ok = await run(async () => {
       const oldPublicId = car?.photoPublicId ?? null
       const dropImage = (publicId: string) => getToken().then(t => deleteImage(publicId, t)).catch(() => {})
@@ -192,7 +194,7 @@ export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'
       const write: Promise<unknown> = car ? updateCar(actor, car.id, data) : createCar(actor, data, kmNum!, carId)
       const newPublicId = uploadedId
       if (newPublicId) write.catch(() => dropImage(newPublicId))
-      const saved: SaveStatus = await settle(write, { uid, entry })
+      const saved: SaveStatus = await settle(write, photoOnly ? 'No se pudo guardar' : { uid, entry })
       if (oldPublicId && (photo || removePhoto)) write.then(() => dropImage(oldPublicId), () => {})
       if (car) toastSaved('Cambios guardados', saved)
       else toastSaved('Auto agregado', saved, 'Ahora sumale los mantenimientos: service, VTV, seguro…')

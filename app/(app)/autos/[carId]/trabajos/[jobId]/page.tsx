@@ -14,7 +14,7 @@ function EditJob() {
   const { uid } = useData()
   const { car, jobs } = useCar(carId)
   const job = jobs.find(j => j.id === jobId)
-  const draft = useDraft('job')
+  const draft = useDraft('job', carId, jobId)
   if (!car) return <NotFound what="el auto" />
   if (!job) return <NotFound what="el trabajo" back={`/autos/${car.id}?tab=trabajos`} />
   return (

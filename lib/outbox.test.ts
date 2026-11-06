@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { FuelInput } from './db'
 import {
+  NOT_SAVED,
+  NO_ACCESS,
   OUTBOX_DAYS,
+  checkServer,
+  deniedReason,
+  draftMatches,
+  draftSeed,
   expectedFields,
   isEdit,
   originalFields,
@@ -12,7 +18,6 @@ import {
   outboxSummary,
   parseOutbox,
   serializeOutbox,
-  serverHasWrite,
   visiblePending,
   withEntry,
   withFailure,
@@ -92,6 +97,13 @@ describe('alta, confirmación y falla', () => {
     expect(e.error).toBe('Sin permiso')
   })
 
+  it('una falla por un cambio en otro dispositivo queda marcada, y un reintento la desmarca', () => {
+    const [e] = withFailure([fuelEntry('a')], 'a', 'Cambió', true)
+    expect(e.conflict).toBe(true)
+    expect(withFailure([e], 'a', 'Sin permiso')[0].conflict).toBeUndefined()
+    expect(withEntry([e], fuelEntry('a'))[0].conflict).toBeUndefined()
+  })
+
   it('una falla de una entrada descartada no la vuelve a agregar', () => {
     expect(withFailure([fuelEntry('b')], 'a', 'Sin permiso').map(e => e.id)).toEqual(['b'])
   })
@@ -123,20 +135,80 @@ describe('parseOutbox y serializeOutbox', () => {
   })
 })
 
-describe('serverHasWrite', () => {
+describe('checkServer', () => {
   it('un alta está si el documento existe', () => {
     const e = fuelEntry('a')
-    expect(serverHasWrite(e, { ...fuel })).toBe(true)
-    expect(serverHasWrite(e, null)).toBe(false)
+    expect(checkServer(e, { ...fuel })).toBe('saved')
+    expect(checkServer(e, null)).toBe('not-saved')
   })
 
   it('una edición está si el servidor tiene los campos que cambió', () => {
     const original = { ...fuel, quantity: 30, total: 37500 }
     const e = fuelEntry('a', {}, original)
     expect(expectedFields(e)).toEqual({ quantity: 40, total: 50000 })
-    expect(serverHasWrite(e, { ...fuel, station: 'Shell', createdBy: 'u1' })).toBe(true)
-    expect(serverHasWrite(e, { ...original })).toBe(false)
-    expect(serverHasWrite(e, null)).toBe(false)
+    expect(checkServer(e, { ...fuel, station: 'Shell', createdBy: 'u1' })).toBe('saved')
+    expect(checkServer(e, null)).toBe('not-saved')
+  })
+
+  it('una edición que el servidor tiene como antes no se guardó: se puede reintentar', () => {
+    const original = { ...fuel, quantity: 30, total: 37500 }
+    const e = fuelEntry('a', {}, original)
+    expect(checkServer(e, { ...original })).toBe('not-saved')
+    expect(checkServer(e, { ...original, station: 'Shell' })).toBe('not-saved')
+  })
+
+  it('una edición con otro valor en un campo que cambió es de otro dispositivo', () => {
+    const original = { ...fuel, quantity: 30, total: 37500 }
+    const e = fuelEntry('a', {}, original)
+    expect(checkServer(e, { ...fuel, total: 60000 })).toBe('changed')
+    expect(checkServer(e, { ...original, quantity: 35 })).toBe('changed')
+  })
+})
+
+describe('deniedReason', () => {
+  it('un alta que no se puede leer no existe, si el auto sigue visible', () => {
+    expect(deniedReason(fuelEntry('a'), true)).toBe(NOT_SAVED)
+    expect(deniedReason(fuelEntry('a'), false)).toBe(NO_ACCESS)
+  })
+
+  it('un auto nuevo nunca está visible: no es falta de acceso', () => {
+    const car = outboxEntry({
+      id: 'c',
+      carId: 'c9',
+      carLabel: 'Ford Ka',
+      write: { kind: 'car', payload: { recordId: 'c9', data: { brand: 'Ford', model: 'Ka', fuelTypes: ['nafta'] }, original: null, initialKm: 1000 } },
+    })
+    expect(deniedReason(car, false)).toBe(NOT_SAVED)
+  })
+
+  it('una edición denegada es falta de acceso', () => {
+    expect(deniedReason(fuelEntry('a', {}, { ...fuel, total: 1 }), true)).toBe(NO_ACCESS)
+  })
+})
+
+describe('draftSeed y draftMatches', () => {
+  it('al editar, lo de ahora con lo que cambió el borrador encima', () => {
+    const original = { ...fuel, quantity: 30, total: 37500 }
+    const e = fuelEntry('a', {}, original)
+    if (e.kind !== 'fuel') throw new Error()
+    const now = { ...original, total: 60000, station: 'Shell' }
+    expect(draftSeed(now, e)).toEqual({ ...now, quantity: 40, total: 50000 })
+  })
+
+  it('en un alta o si el registro ya no está, los datos del borrador; sin borrador, el registro', () => {
+    const e = fuelEntry('a', {}, { ...fuel, total: 1 })
+    if (e.kind !== 'fuel') throw new Error()
+    expect(draftSeed(undefined, e)).toEqual(fuel)
+    expect(draftSeed({ ...fuel, total: 2 }, null)).toEqual({ ...fuel, total: 2 })
+  })
+
+  it('el borrador tiene que ser del auto y del registro de la pantalla', () => {
+    const e = fuelEntry('a')
+    expect(draftMatches(e, 'c1', null)).toBe(true)
+    expect(draftMatches(e, 'c1', 'f-a')).toBe(true)
+    expect(draftMatches(e, 'c2', null)).toBe(false)
+    expect(draftMatches(e, 'c1', 'f-b')).toBe(false)
+    expect(draftMatches(e, null, null)).toBe(true)
   })
 })
 

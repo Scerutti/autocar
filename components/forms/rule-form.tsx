@@ -23,7 +23,7 @@ import {
   projectRule,
   type RuleProjection,
 } from '@/lib/maintenance'
-import { newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { isCarOwner } from '@/lib/sharing'
 import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type Job, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
@@ -147,8 +147,8 @@ export function RuleForm({ car, rule, draft }: { car: Car; rule?: MaintenanceRul
  * fecha es obligatoria y, si es por km, también el km.
  * Al guardar, los cambios se miden contra el mantenimiento como estaba al abrir el formulario (`original`): lo que otro
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
- * Con un borrador (`draft`), los campos arrancan con lo que se había cargado y, al editar, los cambios se miden contra
- * el mantenimiento como estaba cuando se cargó el borrador (`original` de la entrada). Lo guardado va a la bandeja
+ * Con un borrador (`draft`), los campos arrancan con lo que se había cargado (`draftSeed`): al editar, el mantenimiento
+ * como está ahora con los cambios del borrador encima, y se mide contra el de ahora. Lo guardado va a la bandeja
  * (`settle` con la entrada; la misma del borrador, si hay) con el id del mantenimiento generado antes de escribir.
  */
 function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: MaintenanceRule; draft: OutboxEntryOf<'rule'> | null }) {
@@ -160,7 +160,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
 
   const presets = RULE_PRESETS.filter(p => !p.requires || car.fuelTypes.includes(p.requires))
 
-  const seed: RuleInput | undefined = outboxDraft?.payload.data ?? rule
+  const seed: RuleInput | undefined = draftSeed(rule, outboxDraft)
   const [name, setName] = useState(seed?.name ?? '')
   const [repeat, setRepeat] = useState(seed?.repeat ?? true)
   const [intervalKm, setIntervalKm] = useState(numOrEmpty(seed?.intervalKm))
@@ -170,7 +170,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
   const [warnKm, setWarnKm] = useState(seed ? String(seed.warnKm) : '')
   const [warnDays, setWarnDays] = useState(seed ? String(seed.warnDays) : '')
   const [pickerKey, setPickerKey] = useState(0)
-  const [original] = useState(rule && outboxDraft?.payload.original ? { ...rule, ...outboxDraft.payload.original } : rule)
+  const [original] = useState(rule)
 
   const kmInterval = parseNumberInput(intervalKm) || null
   const auto = defaultWarnings(kmInterval, intervalTime)

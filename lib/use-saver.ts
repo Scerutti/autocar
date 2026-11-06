@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react'
 import { errorMessage, toast } from './toast'
-import { addOutboxEntry, failOutboxEntry, readOutbox, removeOutboxEntry, setWaiting, type OutboxEntry } from './outbox'
+import { addOutboxEntry, deniedReason, failOutboxEntry, readOutbox, removeOutboxEntry, setWaiting, type OutboxEntry } from './outbox'
 
 /** Cuánto se espera la confirmación del servidor antes de seguir como "sin conexión". */
 export const OFFLINE_GRACE_MS = 2500
@@ -17,6 +17,20 @@ export interface OutboxTrack {
   entry: OutboxEntry
 }
 
+const codeOf = (e: unknown) => (e as { code?: string } | null)?.code
+
+/**
+ * El motivo con que una escritura rechazada queda en la bandeja (y en su toast): el de `errorMessage`, salvo un
+ * `permission-denied`, que dice `deniedReason` en vez de "Probá cerrar sesión…" (en la bandeja casi siempre es que
+ * sacaron al miembro del auto).
+ */
+export function outboxFailure(entry: OutboxEntry, e: unknown) {
+  return codeOf(e) === 'permission-denied' ? deniedReason(entry, false) : errorMessage(e)
+}
+
+/** Los errores de un `not-found` temprano cuya entrada quedó en la bandeja (`settle`), para que `useSaver` lo diga. */
+const keptInOutbox = new WeakSet<object>()
+
 /**
  * Firestore guarda primero en la caché local y la promesa recién resuelve cuando el servidor confirma.
  * Sin señal (p. ej. en la estación de servicio) eso puede tardar: después de un momento seguimos
@@ -27,7 +41,10 @@ export interface OutboxTrack {
  * - Si el servidor confirma, la entrada se borra.
  * - Si rechaza después del momento de espera, la entrada pasa a `failed` con el motivo y el toast dice que quedó en
  *   Pendientes. Si rechaza antes, el error lo muestra el formulario, que sigue abierto con los datos: la entrada se
- *   borra, salvo que ya estuviera en la bandeja (un reintento o un borrador), que queda `failed`.
+ *   borra, salvo que ya estuviera en la bandeja (un reintento o un borrador) o que el registro se haya borrado en otro
+ *   dispositivo (`not-found`: la pantalla pasa a "no existe" y los datos se perderían), que queda `failed` para que
+ *   Editar lo vuelva a cargar como alta.
+ * - El motivo es el de `outboxFailure`.
  * - Si la app se cierra antes de saberlo, la entrada queda `pending` y la resuelve `OutboxSync` al volver a abrirla.
  */
 export async function settle(p: Promise<unknown>, track: string | OutboxTrack = 'No se pudo guardar'): Promise<SaveStatus> {
@@ -41,7 +58,10 @@ export async function settle(p: Promise<unknown>, track: string | OutboxTrack = 
     setWaiting(entry.id, true)
     p.then(
       () => removeOutboxEntry(uid, entry.id),
-      e => (late || known ? failOutboxEntry(uid, entry.id, errorMessage(e)) : removeOutboxEntry(uid, entry.id)),
+      e =>
+        late || known || codeOf(e) === 'not-found'
+          ? failOutboxEntry(uid, entry.id, outboxFailure(entry, e))
+          : removeOutboxEntry(uid, entry.id),
     ).finally(() => setWaiting(entry.id, false))
   }
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -53,12 +73,15 @@ export async function settle(p: Promise<unknown>, track: string | OutboxTrack = 
         resolve('offline')
       }, OFFLINE_GRACE_MS)
     }),
-  ])
+  ]).catch((e: unknown) => {
+    if (outbox && codeOf(e) === 'not-found' && typeof e === 'object' && e) keptInOutbox.add(e)
+    throw e
+  })
   clearTimeout(timer)
   if (status === 'offline') {
     p.catch(e =>
       toast.error(errorTitle, {
-        description: outbox ? `${errorMessage(e)} Quedó en Pendientes (la campanita) para que lo reintentes.` : errorMessage(e),
+        description: outbox ? `${outboxFailure(outbox.entry, e)} Quedó en Pendientes (la campanita) para que lo reintentes.` : errorMessage(e),
       }),
     )
   }
@@ -104,7 +127,8 @@ export function runInBackground(p: Promise<unknown>, errorTitle: string) {
 /**
  * Estado de un formulario que guarda: "guardando…" y error para mostrar junto al botón. Si el registro se borró en
  * otro dispositivo (`not-found`), avisa con un toast en vez del error: la pantalla del registro pasa a "no existe"
- * cuando llega el borrado, y el error junto al botón no se vería.
+ * cuando llega el borrado, y el error junto al botón no se vería. Si lo guardado quedó en la bandeja (`settle` con la
+ * entrada), el toast dice que está en Pendientes, para cargarlo de nuevo con Editar.
  */
 export function useSaver() {
   const [saving, setSaving] = useState(false)
@@ -117,8 +141,14 @@ export function useSaver() {
       await fn()
       return true
     } catch (e) {
-      if ((e as { code?: string })?.code === 'not-found') toast.error('No se pudo guardar', { description: errorMessage(e) })
-      else setError(errorMessage(e))
+      if (codeOf(e) !== 'not-found') {
+        setError(errorMessage(e))
+        return false
+      }
+      const kept = typeof e === 'object' && e != null && keptInOutbox.has(e)
+      toast.error('No se pudo guardar', {
+        description: kept ? `${errorMessage(e)} Quedó en Pendientes (la campanita): tocá Editar para cargarlo de nuevo.` : errorMessage(e),
+      })
       return false
     } finally {
       setSaving(false)

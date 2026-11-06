@@ -14,7 +14,7 @@ function NewRule() {
   const { carId } = useParams<{ carId: string }>()
   const { uid } = useData()
   const { car } = useCar(carId)
-  const draft = useDraft('rule')
+  const draft = useDraft('rule', carId)
   if (!car) return <NotFound what="el auto" />
   return (
     <>

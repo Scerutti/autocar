@@ -35,7 +35,8 @@ export type OutboxWrite =
 /**
  * Una escritura que el usuario hizo y el servidor todavía no confirmó (`pending`) o rechazó (`failed`, con el motivo en
  * `error`). `carLabel` es el nombre del auto, para mostrarla aunque ya no se tenga acceso al auto. `createdAt` en
- * milisegundos.
+ * milisegundos. `conflict`: una edición que, al reconciliar, el servidor tiene con otros valores (`CHANGED_ELSEWHERE`):
+ * no se reintenta, sólo se edita sobre lo de ahora o se descarta.
  */
 export type OutboxEntry = {
   id: string
@@ -45,6 +46,7 @@ export type OutboxEntry = {
   createdAt: number
   state: OutboxState
   error?: string
+  conflict?: boolean
 } & OutboxWrite
 
 /** Una entrada de un tipo: la que recibe el formulario de ese tipo como borrador. */
@@ -55,6 +57,12 @@ export const OUTBOX_DAYS = 30
 
 /** Lo que dice una escritura que, al recargar la app, el servidor no tiene. */
 export const NOT_SAVED = 'El servidor no la tiene: puede que la haya rechazado.'
+
+/** Lo que dice una edición que, al recargar la app, el servidor tiene con otros valores en los campos que cambió. */
+export const CHANGED_ELSEWHERE = 'Cambió en otro dispositivo. Tocá Editar para ver cómo está ahora, con tus cambios encima.'
+
+/** Lo que dice una escritura de un auto al que ya no se tiene acceso (p. ej. el dueño sacó al miembro). */
+export const NO_ACCESS = 'Ya no tenés acceso a este auto.'
 
 const KINDS: readonly OutboxKind[] = ['fuel', 'job', 'km', 'rule', 'car']
 
@@ -196,15 +204,25 @@ export const serializeOutbox = (entries: OutboxEntry[]) => (entries.length ? JSO
 export function withEntry(entries: OutboxEntry[], entry: OutboxEntry): OutboxEntry[] {
   const fresh: OutboxEntry = { ...entry, state: 'pending' }
   delete fresh.error
+  delete fresh.conflict
   return entries.some(e => e.id === entry.id) ? entries.map(e => (e.id === entry.id ? fresh : e)) : [...entries, fresh]
 }
 
 /** Sin la entrada: el servidor la confirmó o el usuario la descartó. */
 export const withoutEntry = (entries: OutboxEntry[], id: string) => entries.filter(e => e.id !== id)
 
-/** La entrada pasa a `failed` con el motivo. Si ya no está (se descartó), no la vuelve a agregar. */
-export function withFailure(entries: OutboxEntry[], id: string, error: string): OutboxEntry[] {
-  return entries.map((e): OutboxEntry => (e.id === id ? { ...e, state: 'failed', error } : e))
+/**
+ * La entrada pasa a `failed` con el motivo y, si `conflict`, marcada como cambiada en otro dispositivo. Si ya no está
+ * (se descartó), no la vuelve a agregar.
+ */
+export function withFailure(entries: OutboxEntry[], id: string, error: string, conflict = false): OutboxEntry[] {
+  return entries.map((e): OutboxEntry => {
+    if (e.id !== id) return e
+    const failed: OutboxEntry = { ...e, state: 'failed', error }
+    if (conflict) failed.conflict = true
+    else delete failed.conflict
+    return failed
+  })
 }
 
 /** Sin las entradas de hace más de `OUTBOX_DAYS` días. */
@@ -258,15 +276,64 @@ export function expectedFields(entry: OutboxEntry): Record<string, unknown> | nu
 }
 
 /**
- * Si el servidor tiene la escritura de la entrada, con el documento como lo devolvió el servidor (null = no existe). Un
- * alta está si el documento existe (su id se generó antes de escribir). Una edición está si el documento tiene los
- * valores que la edición cambió (`expectedFields`): si otro dispositivo cambió después esos mismos campos, cuenta como
- * que no está y la entrada queda para que el usuario decida (mejor un aviso de más que perder lo que cargó).
+ * Qué tiene el servidor de la escritura de una entrada: `saved` (la tiene), `not-saved` (no la tiene: se reintenta o
+ * se edita, `NOT_SAVED`) o `changed` (otro dispositivo cambió esos campos: sólo se edita, `CHANGED_ELSEWHERE`).
  */
-export function serverHasWrite(entry: OutboxEntry, serverData: Record<string, unknown> | null): boolean {
-  if (!serverData) return false
+export type ServerCheck = 'saved' | 'not-saved' | 'changed'
+
+/**
+ * Qué tiene el servidor de la escritura de la entrada, con el documento como lo devolvió el servidor (null = no
+ * existe). Un alta está si el documento existe (su id se generó antes de escribir). Una edición:
+ * - `saved` si el documento tiene los valores que la edición cambió (`expectedFields`).
+ * - `not-saved` si no existe, o si en los campos que difieren sigue el valor de antes (`original`): reintentar no pisa
+ *   nada de otro dispositivo.
+ * - `changed` si en alguno de esos campos hay otro valor: otro dispositivo lo cambió después (o se guardó y después lo
+ *   cambiaron). Reintentar lo pisaría, así que la entrada queda para que el usuario la edite sobre lo de ahora.
+ */
+export function checkServer(entry: OutboxEntry, serverData: Record<string, unknown> | null): ServerCheck {
+  if (!serverData) return 'not-saved'
   const expected = expectedFields(entry)
-  return !expected || isUnchanged(changedFields(serverData, expected))
+  if (!expected) return 'saved'
+  const differing = Object.keys(changedFields(serverData, expected))
+  if (!differing.length) return 'saved'
+  const original = entry.payload.original as unknown as Record<string, unknown>
+  const before = Object.fromEntries(differing.map(key => [key, original[key]]))
+  return isUnchanged(changedFields(serverData, before)) ? 'not-saved' : 'changed'
+}
+
+/**
+ * Motivo de una entrada cuya escritura o lectura el servidor denegó (`permission-denied`), en vez del texto genérico de
+ * `errorMessage` ("Probá cerrar sesión…"). Un alta que no se puede leer no existe (la regla de lectura mira el
+ * documento): `NOT_SAVED`, salvo que su auto ya no esté en la app (`carVisible` false; no cuenta para un auto nuevo,
+ * que nunca está). Una edición, o un registro de un auto que ya no está: `NO_ACCESS`.
+ */
+export function deniedReason(entry: OutboxEntry, carVisible: boolean): string {
+  return !isEdit(entry) && (entry.kind === 'car' || carVisible) ? NOT_SAVED : NO_ACCESS
+}
+
+/**
+ * Los datos con que arranca el formulario de un borrador. Al editar un registro que existe (`record`), el registro
+ * como está ahora con lo que la entrada cambió encima (`changedFields(original, data)`): lo que otro dispositivo cambió
+ * en otros campos se ve y no se pisa. En un alta, o si el registro ya no existe, los datos de la entrada. Sin
+ * borrador, el registro.
+ */
+export function draftSeed<T extends object>(
+  record: NoInfer<T> | undefined,
+  draft: { payload: { data: T; original: T | null } } | null | undefined,
+): T | undefined {
+  if (!draft) return record
+  if (record && draft.payload.original) return { ...(record as T), ...changedFields(draft.payload.original, draft.payload.data) }
+  return draft.payload.data
+}
+
+/**
+ * Si el borrador es para esta pantalla: del mismo auto (`carId`; null en el alta de un auto) y, al editar un registro
+ * (`recordId`), de ese registro. Así un `?borrador=` armado a mano no aplica sobre un registro los cambios medidos
+ * contra otro.
+ */
+export function draftMatches(entry: OutboxEntry, carId: string | null, recordId: string | null): boolean {
+  if (carId != null && entry.carId !== carId) return false
+  return recordId == null || entry.payload.recordId === recordId
 }
 
 /**
@@ -309,7 +376,12 @@ export function readOutbox(uid: string): OutboxEntry[] {
   return parseOutbox(readLocal(outboxKey(uid)))
 }
 
-/** Aplica un cambio a la bandeja y la guarda si cambió (las otras pestañas se enteran por el evento `storage`). */
+/**
+ * Aplica un cambio a la bandeja y la guarda si cambió (las otras pestañas se enteran por el evento `storage`). Leer,
+ * cambiar y escribir no es atómico entre pestañas: si dos escriben casi a la vez, gana la última y se pierde el cambio
+ * de la otra (puede desaparecer una entrada `failed` o volver una ya confirmada como `pending`, que la reconciliación
+ * resuelve al abrir). Se acepta: la ventana es de milisegundos y hace falta guardar en dos pestañas a la vez.
+ */
 function updateOutbox(uid: string, change: (entries: OutboxEntry[]) => OutboxEntry[]) {
   const before = readOutbox(uid)
   const next = serializeOutbox(change(before))
@@ -322,8 +394,9 @@ export const addOutboxEntry = (uid: string, entry: OutboxEntry) => updateOutbox(
 /** Borra una entrada. */
 export const removeOutboxEntry = (uid: string, id: string) => updateOutbox(uid, es => withoutEntry(es, id))
 
-/** Pasa una entrada a `failed` con el motivo. */
-export const failOutboxEntry = (uid: string, id: string, error: string) => updateOutbox(uid, es => withFailure(es, id, error))
+/** Pasa una entrada a `failed` con el motivo (y `conflict`, si cambió en otro dispositivo). */
+export const failOutboxEntry = (uid: string, id: string, error: string, conflict = false) =>
+  updateOutbox(uid, es => withFailure(es, id, error, conflict))
 
 /** Borra las entradas vencidas (`OUTBOX_DAYS`). */
 export const pruneOutbox = (uid: string, now = Date.now()) => updateOutbox(uid, es => withoutExpired(es, now))

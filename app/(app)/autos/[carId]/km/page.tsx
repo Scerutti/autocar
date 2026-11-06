@@ -17,7 +17,7 @@ function Km() {
   const router = useRouter()
   const { uid } = useData()
   const { car } = useCar(carId)
-  const draft = useDraft('km')
+  const draft = useDraft('km', carId)
   if (!car) return <NotFound what="el auto" />
   return (
     <>
