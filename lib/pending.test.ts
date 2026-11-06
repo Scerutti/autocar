@@ -23,7 +23,8 @@ const car: Car = {
   createdAt: new Date(0),
   ownerUid: OWNER,
   ownerName: 'Ana',
-  members: ['beto@gmail.com'],
+  memberUids: [MEMBER],
+  memberProfiles: { [MEMBER]: { email: 'beto@gmail.com', name: 'Beto' } },
 }
 
 const rule: MaintenanceRule = {
@@ -219,7 +220,14 @@ describe('pendingItems', () => {
   })
 
   it('ordena vencidos, para revisar, km, rechazados, invitaciones y por vencer, y todos suman salvo los por vencer', () => {
-    const shared: Car = { ...car, id: 'c2', ownerUid: 'u3', ownerName: 'Caro', members: ['ana@gmail.com'] }
+    const shared: Car = {
+      ...car,
+      id: 'c2',
+      ownerUid: 'u3',
+      ownerName: 'Caro',
+      memberUids: [OWNER],
+      memberProfiles: { [OWNER]: { email: 'ana@gmail.com', name: 'Ana' } },
+    }
     const jobs = [
       job({ id: 'p', status: 'pending', createdBy: MEMBER }),
       job({ id: 'x', carId: 'c2', status: 'rejected', createdBy: OWNER }),
