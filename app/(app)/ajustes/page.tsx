@@ -249,18 +249,18 @@ function NovedadesLink() {
 
 export default function SettingsPage() {
   const { user, signOut } = useAuth()
-  const confirm = useConfirm()
 
   async function handleSignOut() {
-    const confirmed = await confirm({
-      title: '¿Cerrar sesión?',
-      description: 'Tus datos quedan guardados. Para volver a entrar vas a necesitar tu cuenta de Google.',
-      confirmLabel: 'Sí, cerrar sesión',
-      icon: LogOut,
+    const result = await signOut({
+      confirm: {
+        title: '¿Cerrar sesión?',
+        description:
+          'Tus datos quedan guardados en tu cuenta y se borran de este dispositivo. Para volver a entrar vas a necesitar tu cuenta de Google.',
+        confirmLabel: 'Sí, cerrar sesión',
+        icon: LogOut,
+      },
     })
-    if (!confirmed) return
-    await signOut()
-    toast.info('Cerraste sesión')
+    if (result === 'signed-out') toast.info('Cerraste sesión')
   }
 
   return (

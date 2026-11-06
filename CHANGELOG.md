@@ -2,6 +2,16 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Seguridad
+
+- **Salir borra tus datos de este dispositivo** (#62): al cerrar sesión se borran la copia local de tus autos (la caché de Firestore), lo que quedó sin sincronizar y la suscripción a los avisos de este dispositivo, así la próxima persona que use el navegador no ve tus datos ni recibe tus avisos. Si hay cambios sin guardar, antes pregunta ("Tenés 2 cambios sin guardar; si salís se pierden"). Si AutoCar está abierto en otras pestañas, también se cierran; si alguna no suelta los datos, avisa "Cerrá las otras pestañas de AutoCar".
+
+### Mantenimiento
+
+- **Salir** (#62): `signOut(options?)` de `useAuth()` confirma con la bandeja (`unsavedChangesWarning`), muestra "Cerrando sesión…" y llama a `clearDeviceData(uid)` (`lib/sign-out-client.ts`): borra `pushSubscriptions/{sha256(endpoint)}` y desuscribe el navegador, avisa por `BroadcastChannel('autocar')`, `resetFirestore` (`terminate` → `clearIndexedDbPersistence`, con reintentos) y borra las claves `autocar:*:{uid}` (`accountLocalKeys`). Las otras pestañas sueltan Firestore (`releaseFirestore`) y recargan en `/login`. `ConfirmProvider` pasa a envolver a `AuthProvider`. Lógica pura en `lib/sign-out.ts`, con pruebas. Para borrar la cuenta (#67): `signOut({ skipConfirm: true })`.
+
 ## 1.6.0
 
 Cierra las epics de colaboración segura y de resiliencia y operación. Compartir un auto pasa a ser una invitación que la otra persona acepta, y los miembros pasan a ser por su cuenta (uid) y no por el mail. Los miembros reciben avisos, los trabajos para revisar avisan al momento, borrar un auto termina siempre y lo que se carga sin señal no se pierde. Antes de publicar hay que subir las reglas de Firestore y correr dos migraciones de datos (ver "Pasos manuales").
