@@ -7,21 +7,24 @@
  * Uso: node --env-file=.env.local scripts/remove-member-emails.mjs [--apply]
  *
  * Sin --apply es un simulacro: lee, decide e informa, pero no escribe nada. Se puede volver a correr: un auto sin
- * `members` no se toca. Cada auto se escribe con la condición de que no haya cambiado desde que se leyó (si cambió, se
- * informa y se saltea: volver a correr). Usa el Admin SDK (no pasa por las reglas) con las mismas variables
- * FIREBASE_ADMIN_* que `adminApp()` en lib/firebase/admin.ts. No imprime variables de entorno ni datos de la service
- * account.
+ * `members` no se toca. Cada auto se escribe con la condición de que no haya cambiado desde que se leyó: si cambió
+ * (`FAILED_PRECONDITION`, código 9) se informa como conflicto y se saltea; cualquier otro error se informa como error.
+ * Termina con código 1 si queda algún auto sin tocar, en conflicto o con error. Usa el Admin SDK (no pasa por las
+ * reglas) con las mismas variables FIREBASE_ADMIN_* que `adminApp()` en lib/firebase/admin.ts. No imprime variables
+ * de entorno ni datos de la service account.
  *
  * Orden de los pasos manuales (después de `members-to-uids.mjs` y al menos una release después de las invitaciones,
  * para que la PWA ya esté actualizada):
  * 1. Simulacro: `node --env-file=.env.local scripts/remove-member-emails.mjs`.
- * 2. Si informa autos con mails sin uid: resolverlos antes de seguir (que esa persona acepte una invitación, o sacar el
- *    mail con la app de antes de este cambio, Compartir → Sacar, o desde la consola de Firebase) y volver al paso 1.
- * 3. `node --env-file=.env.local scripts/remove-member-emails.mjs --apply`. Una segunda corrida tiene que dar 0 cambios.
- * 4. Publicar las reglas de Firestore nuevas (sin `members`).
+ * 2. Si informa autos con mails sin uid: resolverlos (que esa persona acepte una invitación, o sacar el mail con la
+ *    app de antes de este cambio, Compartir → Sacar, o desde la consola de Firebase) y volver al paso 1.
+ * 3. `node --env-file=.env.local scripts/remove-member-emails.mjs --apply`.
+ * 4. Publicar las reglas de Firestore nuevas.
  * 5. Deploy de la app.
- * Con las reglas nuevas, un auto que todavía tenga mails en `members` no se puede editar: no publicarlas mientras el
- * simulacro informe autos que no se tocan.
+ * 6. `--apply` otra vez: la PWA anterior que siga abierta puede volver a escribir `members: []` (al crear un auto, sacar
+ *    un miembro, salir o pasar el auto). Una tercera corrida tiene que dar "Sin cambios".
+ * Las reglas nuevas no le dan acceso a nadie por `members` y aceptan un auto al que todavía le quedan mails (no los
+ * dejan crecer), así que publicarlas antes no traba ningún auto; igual, para cerrar #66 no tiene que quedar ninguno.
  */
 
 import { cert, initializeApp } from 'firebase-admin/app'
@@ -59,7 +62,7 @@ async function main() {
   console.log(apply ? 'Borrado (--apply): escribe en cars/*.' : 'Simulacro: no escribe nada. Usá --apply para escribir.')
 
   const snaps = (await db.collection('cars').get()).docs
-  const totals = { remove: 0, keep: 0, written: 0, conflicts: 0 }
+  const totals = { remove: 0, keep: 0, written: 0, conflicts: 0, errors: 0 }
   for (const snap of snaps) {
     const car = { id: snap.id, data: snap.data() }
     let plan = planRemoveMembers({ car, ownerEmail: null })
@@ -84,15 +87,30 @@ async function main() {
       totals.written++
       console.log('  Escrito')
     } catch (e) {
-      totals.conflicts++
-      console.log(`  No se escribió: el auto cambió desde que se leyó (${e?.code ?? e?.message ?? 'error'}). Volver a correr.`)
+      if (isConflict(e)) {
+        totals.conflicts++
+        console.log('  No se escribió: el auto cambió desde que se leyó. Volver a correr.')
+      } else {
+        totals.errors++
+        console.log(`  Error, no se escribió: ${e?.code ?? ''} ${e?.message ?? 'error'}`.trimEnd())
+      }
     }
   }
 
   console.log(`\nTotal: ${totals.remove} autos para borrar members, ${totals.keep} que no se tocan (mails sin uid).`)
-  if (apply) console.log(`Autos escritos: ${totals.written}. Sin escribir porque cambiaron: ${totals.conflicts}.`)
+  if (apply) {
+    console.log(`Autos escritos: ${totals.written}. En conflicto (cambiaron): ${totals.conflicts}. Con error: ${totals.errors}.`)
+  }
   if (!totals.remove && !totals.keep) console.log('Sin cambios: ningún auto tiene members.')
-  if (totals.keep) console.log('No publicar las reglas nuevas hasta que ningún auto quede sin tocar.')
+  if (totals.keep || totals.conflicts || totals.errors) {
+    console.log('No publicar las reglas nuevas hasta que ningún auto quede con mails en members: resolverlos y volver a correr.')
+    process.exitCode = 1
+  }
+}
+
+/** Si la escritura falló porque el auto cambió desde que se leyó (precondición `lastUpdateTime`). */
+function isConflict(e) {
+  return e?.code === 9 || e?.code === 'failed-precondition' || e?.code === 'FAILED_PRECONDITION'
 }
 
 main().catch(e => {
