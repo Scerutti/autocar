@@ -2,23 +2,27 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Bell, BellOff, CalendarDays, ChevronRight, LogOut, Send, Share, Smartphone, Sparkles } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Bell, BellOff, CalendarDays, ChevronRight, Download, LogOut, Send, Share, Smartphone, Sparkles, Trash2, UserX } from 'lucide-react'
 import { useConfirm } from '@/components/confirm-provider'
 import { DismissibleHint } from '@/components/dismissible-hint'
 import { useNovedades } from '@/components/novedades/use-novedades'
 import { PendingBell } from '@/components/pending/pending-bell'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { ChoiceChips, FieldGroup } from '@/components/ui/choice'
-import { Checkbox } from '@/components/ui/form'
+import { Checkbox, Field, Input } from '@/components/ui/form'
 import { initials } from '@/components/app-shell'
 import { PageBody, PageHeader } from '@/components/common'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useData } from '@/components/providers/data-provider'
-import { saveSettings } from '@/lib/db'
+import { accountDeleteOutcome, DELETE_ACCOUNT_WORD, isDeleteConfirmed, type AccountDeleteOutcome, type BlockingCar } from '@/lib/account'
+import { saveSettings, setAccountClosing } from '@/lib/db'
+import { buildExportZip, exportFileName } from '@/lib/export'
 import { everyWeekday, WEEKDAYS } from '@/lib/format'
 import { currentSubscription, disablePush, enablePush, pushSupport, type PushSupport } from '@/lib/push-client'
 import { errorMessage, toast } from '@/lib/toast'
 import type { UserSettings } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 /** Lunes primero, como en el calendario argentino. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
@@ -227,6 +231,166 @@ function Notifications() {
   )
 }
 
+/**
+ * "Descargar mis datos": arma en el navegador un zip con todo lo que la app tiene en memoria (`buildExportZip`: un JSON
+ * completo y una planilla por colección) y ofrece el link para bajarlo. El link (y no una descarga automática) porque
+ * en iOS una descarga que no sale de un toque puede no arrancar.
+ */
+function DataExport() {
+  const data = useData()
+  const confirm = useConfirm()
+  const [file, setFile] = useState<{ name: string; url: string } | null>(null)
+
+  const readyUrl = file?.url ?? null
+  useEffect(() => () => {
+    if (readyUrl) URL.revokeObjectURL(readyUrl)
+  }, [readyUrl])
+
+  async function prepare() {
+    const confirmed = await confirm({
+      title: '¿Preparar tus datos para descargar?',
+      description:
+        'Vas a bajar un archivo .zip con tus autos, mantenimientos, trabajos, cargas, km, logros e invitaciones: un archivo JSON con todo y una planilla (CSV) por cada cosa, que se abre con Excel o Google Sheets.',
+      confirmLabel: 'Sí, preparar',
+      icon: Download,
+    })
+    if (!confirmed) return
+    try {
+      const now = new Date()
+      const zip = buildExportZip(
+        {
+          uid: data.uid,
+          email: data.email,
+          settings: data.settings,
+          cars: data.cars,
+          rules: data.rules,
+          jobs: data.jobs,
+          fuel: data.fuel,
+          odometer: data.odometer,
+          achievements: data.achievements,
+          invites: data.invites,
+          myInvites: data.myInvites,
+        },
+        now,
+      )
+      setFile({ name: exportFileName(data.today), url: URL.createObjectURL(new Blob([zip], { type: 'application/zip' })) })
+    } catch (e) {
+      console.error('Export de datos', e)
+      toast.error('No se pudieron preparar tus datos', { description: errorMessage(e) })
+    }
+  }
+
+  return (
+    <Section title="Tus datos" description="Bajate una copia de todo lo que cargaste en la app.">
+      {file ? (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <a href={file.url} download={file.name} className={cn(buttonVariants({ size: 'lg' }), 'h-11 gap-2')}>
+            <Download /> Descargar {file.name}
+          </a>
+          <Button variant="ghost" size="lg" className="h-11" onClick={() => setFile(null)}>
+            Listo
+          </Button>
+        </div>
+      ) : (
+        <Button variant="outline" size="lg" className="gap-2" onClick={() => void prepare()}>
+          <Download /> Descargar mis datos
+        </Button>
+      )}
+    </Section>
+  )
+}
+
+/**
+ * "Borrar mi cuenta": hay que escribir "BORRAR" (`isDeleteConfirmed`) y después confirmar. Llama a `DELETE /api/account`
+ * con `setAccountClosing` prendido (así esta pestaña no vuelve a crear lo que el servidor borra). Si tiene autos
+ * compartidos (409), muestra cuáles y cómo resolverlos, sin borrar nada. Si sale bien, cierra la sesión y vuelve al
+ * login con un aviso.
+ */
+function DeleteAccount() {
+  const { getToken, signOut } = useAuth()
+  const confirm = useConfirm()
+  const router = useRouter()
+  const [word, setWord] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [blocked, setBlocked] = useState<BlockingCar[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function remove() {
+    if (!isDeleteConfirmed(word)) return
+    const confirmed = await confirm({
+      title: '¿Borrar tu cuenta para siempre?',
+      description:
+        'Se borran tus autos con todo su historial, tus fotos, tus logros, tus ajustes y tus invitaciones. Lo que cargaste en autos de otras personas queda en su historial, sin tu nombre. No se puede deshacer.',
+      warning: 'Si querés guardar una copia, primero tocá "Descargar mis datos".',
+      confirmLabel: 'Sí, borrar mi cuenta',
+      tone: 'danger',
+      icon: UserX,
+    })
+    if (!confirmed) return
+
+    setBusy(true)
+    setError(null)
+    setBlocked(null)
+    setAccountClosing(true)
+    let outcome: AccountDeleteOutcome
+    try {
+      const res = await fetch('/api/account', { method: 'DELETE', headers: { Authorization: `Bearer ${await getToken()}` } })
+      outcome = accountDeleteOutcome(res.status, await res.json().catch(() => ({})))
+    } catch (e) {
+      outcome = { kind: 'error', message: errorMessage(e) }
+    }
+
+    if (outcome.kind === 'deleted') {
+      await signOut().catch(() => undefined)
+      router.replace('/login')
+      toast.success('Tu cuenta se borró', { description: 'Borramos tus datos y tus fotos. Gracias por usar AutoCar.' })
+      return
+    }
+    setAccountClosing(false)
+    setBusy(false)
+    if (outcome.kind === 'blocked') {
+      setBlocked(outcome.cars)
+      return
+    }
+    setError(outcome.message)
+    toast.error('No se pudo borrar la cuenta', { description: outcome.message })
+  }
+
+  return (
+    <Section
+      title="Borrar mi cuenta"
+      description="Borra tus autos con todo su historial, tus fotos, tus logros y tus ajustes. Lo que cargaste en autos de otras personas queda, sin tu nombre. No se puede deshacer."
+    >
+      <div className="space-y-4">
+        {blocked && (
+          <div role="alert" className="rounded-xl border border-warning/30 bg-warning/5 p-4 text-sm">
+            <p className="font-medium">Primero resolvé tus autos compartidos</p>
+            <p className="mt-1 text-muted-foreground">
+              Estos autos son tuyos y los compartís con otras personas. Borrar la cuenta se llevaría lo que cargaron ellas. En cada uno, entrá a{' '}
+              <b>Editar → Compartir</b> y pasáselo a un miembro (<b>Pasarle el auto</b>), sacá a los miembros o borrá el auto.
+            </p>
+            <ul className="mt-3 space-y-1">
+              {blocked.map(car => (
+                <li key={car.id}>
+                  <Link href={`/autos/${encodeURIComponent(car.id)}/editar`} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">
+                    {car.label} <ChevronRight className="size-4" />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <Field label={`Para confirmar, escribí ${DELETE_ACCOUNT_WORD}`} error={error}>
+          <Input value={word} onChange={e => setWord(e.target.value)} autoComplete="off" autoCapitalize="characters" spellCheck={false} disabled={busy} />
+        </Field>
+        <Button variant="destructive" size="lg" className="gap-2" disabled={busy || !isDeleteConfirmed(word)} onClick={() => void remove()}>
+          <Trash2 /> {busy ? 'Borrando tu cuenta…' : 'Borrar mi cuenta'}
+        </Button>
+      </div>
+    </Section>
+  )
+}
+
 /** Entrada a la sección de novedades, con un punto si hay alguna sin ver. */
 function NovedadesLink() {
   const { unseen } = useNovedades()
@@ -290,6 +454,8 @@ export default function SettingsPage() {
         </Section>
         <Notifications />
         <NovedadesLink />
+        <DataExport />
+        <DeleteAccount />
         <footer className="pt-2 text-center text-xs text-muted-foreground">
           AutoCar v{process.env.APP_VERSION}
           {process.env.APP_COMMIT && <span className="font-mono"> · {process.env.APP_COMMIT}</span>}

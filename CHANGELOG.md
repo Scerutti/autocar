@@ -2,6 +2,20 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Novedades
+
+- **Descargar mis datos** (#67, Ajustes → Tus datos): arma un `.zip` con un JSON con todo (ajustes, autos, mantenimientos, trabajos, cargas, km, logros e invitaciones) y una planilla CSV por cada cosa, que se abre con Excel o Google Sheets (encabezados en castellano, `;` como separador y coma decimal como espera Excel en Argentina, fechas ISO).
+- **Borrar mi cuenta** (#67, Ajustes → Borrar mi cuenta, escribiendo "BORRAR" y con confirmación): borra tus autos con todo su historial, tus fotos, tus logros, tus ajustes, tus invitaciones y tu cuenta. Lo que cargaste en autos de otras personas queda en su historial, como "otra persona". Si tenés autos compartidos, te dice cuáles y que primero se los pases a un miembro, saques a los miembros o los borres.
+
+### Mantenimiento
+
+- `DELETE /api/account` (`lib/account-server.ts`, lógica pura en `lib/account.ts`): 409 con los autos propios con miembros, sin borrar nada; si no, `purgeCar` de cada auto propio → `createdByName: null` en sus trabajos, cargas y lecturas de autos ajenos (consulta de grupo por `createdBy`) → sale de `memberUids`/`memberProfiles` → invitaciones mandadas y recibidas → `usage/{uid}` → fotos en Cloudinary por carpeta (Admin API, `deleteImagesByPrefix`) → `allowlist/{mail}` → `users/{uid}` con `recursiveDelete` → `deleteUser`. Cada paso tolera que ya esté hecho; si Cloudinary falla responde 502 antes de borrar la cuenta.
+- Export en el cliente: `lib/export.ts` (CSV y JSON) y `lib/zip.ts` (zip sin comprimir, sin dependencias), con pruebas.
+- `/api/access` verifica que la cuenta exista (`verifyIdToken` con `checkRevoked`): un dispositivo abierto con una cuenta borrada no la vuelve a registrar. `setAccountClosing` (`lib/db.ts`): mientras se borra la cuenta, la pestaña no recrea `users/{uid}` ni intenta registrarse.
+- Nuevo `firestore.indexes.json` (en `firebase.json`) con índices de grupo para `createdBy` en `jobs`, `fuel` y `odometer`. **Paso manual antes del deploy:** `npx firebase-tools deploy --only firestore:indexes` y esperar a que terminen de construirse.
+
 ## 1.6.0
 
 Cierra las epics de colaboración segura y de resiliencia y operación. Compartir un auto pasa a ser una invitación que la otra persona acepta, y los miembros pasan a ser por su cuenta (uid) y no por el mail. Los miembros reciben avisos, los trabajos para revisar avisan al momento, borrar un auto termina siempre y lo que se carga sin señal no se pierde. Antes de publicar hay que subir las reglas de Firestore y correr dos migraciones de datos (ver "Pasos manuales").

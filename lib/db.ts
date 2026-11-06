@@ -316,9 +316,25 @@ interface CarQuery {
 }
 
 /**
+ * true mientras esta pestaña espera `DELETE /api/account` (`setAccountClosing`): `subscribeUserData` no vuelve a crear
+ * `users/{uid}` cuando el servidor lo borra, y el layout no intenta registrar de nuevo la cuenta (`Join`) si Firestore
+ * empieza a rechazar la carga porque ya no está en `allowlist`.
+ */
+let accountClosing = false
+
+/** Marca (o desmarca, si el borrado no se hizo) que esta pestaña está borrando la cuenta. */
+export function setAccountClosing(closing: boolean) {
+  accountClosing = closing
+}
+
+/** Si esta pestaña está borrando la cuenta (`setAccountClosing`). */
+export const isAccountClosing = () => accountClosing
+
+/**
  * Escucha en tiempo real los ajustes y todas las colecciones del usuario. En `onChange`, `fromCache`
  * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
- * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
+ * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron), salvo mientras se
+ * borra la cuenta (`isAccountClosing`).
  *
  * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
  * compartieron por invitación (`memberUids` contiene mi uid). La lista de autos es la unión por id sin los marcados
@@ -350,7 +366,7 @@ export function subscribeUserData(
       userDoc(uid),
       snap => {
         const x = snap.data()
-        if (!snap.exists() && !snap.metadata.fromCache) {
+        if (!snap.exists() && !snap.metadata.fromCache && !accountClosing) {
           setDoc(userDoc(uid), { ...DEFAULT_SETTINGS, createdAt: Timestamp.now() }, { merge: true }).catch(onError)
         }
         onChange(
