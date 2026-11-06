@@ -1,15 +1,18 @@
 import { addDays, toISODate, weekdayOf } from './dates'
 import { WEEKDAYS } from './format'
 import { isCompleted, type RuleState, type RuleWithState } from './maintenance'
+import type { OutboxEntry } from './outbox'
 import { authorOf, canWrite, isCarOwner, isInviteOpen } from './sharing'
 import type { Car, ISODate, Invite, Job, MaintenanceRule, UserSettings } from './types'
 
 /**
  * Algo que el usuario tiene que hacer: cargar los km de un auto, atender un mantenimiento, revisar el trabajo
- * que cargó un miembro en su auto (`review`), corregir un trabajo suyo que el dueño rechazó (`rejected`) o
- * responder una invitación a compartir un auto (`invite`).
+ * que cargó un miembro en su auto (`review`), corregir un trabajo suyo que el dueño rechazó (`rejected`),
+ * responder una invitación a compartir un auto (`invite`) o decidir qué hacer con algo que cargó y el servidor no
+ * guardó (`failed-write`, de la bandeja de `lib/outbox.ts`; `car` es null si el auto ya no está o es un auto nuevo).
  */
 export type PendingItem =
+  | { kind: 'failed-write'; entry: OutboxEntry; car: Car | null }
   | { kind: 'km'; car: Car; since: ISODate }
   | { kind: 'rule'; car: Car; rule: MaintenanceRule; state: RuleState }
   | { kind: 'review'; car: Car; job: Job }
@@ -35,7 +38,8 @@ export function kmDueDay(since: ISODate, today: ISODate) {
 }
 
 /**
- * Lo pendiente de todos los autos, lo más urgente primero: mantenimientos vencidos, trabajos para revisar (de
+ * Lo pendiente de todos los autos, lo más urgente primero: lo que no se pudo guardar (`outbox`: las entradas
+ * `failed`, de la más nueva a la más vieja), mantenimientos vencidos, trabajos para revisar (de
  * los miembros, en mis autos), km que faltan cargar, mis trabajos rechazados (en autos de otros), las invitaciones
  * que me mandaron (`invites`: sólo las pendientes que no vencieron a `now`) y mantenimientos por vencer. Los
  * recordatorios cumplidos no cuentan (`rulesByCar` ya viene sin ellos; se filtran igual). A un miembro `viewer` no se
@@ -48,10 +52,11 @@ export function pendingItems(input: {
   jobs: Job[]
   uid: string
   invites: Invite[]
+  outbox?: OutboxEntry[]
   now: Date
   today: ISODate
 }): PendingItem[] {
-  const { settings, cars, rulesByCar, jobs, uid, invites, now, today } = input
+  const { settings, cars, rulesByCar, jobs, uid, invites, outbox = [], now, today } = input
   const carById = new Map(cars.map(c => [c.id, c]))
   const rules = cars.flatMap(car =>
     (rulesByCar.get(car.id) ?? []).filter(r => !isCompleted(r.rule)).map(r => ({ kind: 'rule' as const, car, ...r })),
@@ -72,7 +77,12 @@ export function pendingItems(input: {
     }
   }
   const invited = invites.filter(invite => isInviteOpen(invite, now)).map(invite => ({ kind: 'invite' as const, invite }))
+  const failed = outbox
+    .filter(entry => entry.state === 'failed')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(entry => ({ kind: 'failed-write' as const, entry, car: carById.get(entry.carId) ?? null }))
   return [
+    ...failed,
     ...rules.filter(r => r.state.status === 'overdue'),
     ...review,
     ...km,

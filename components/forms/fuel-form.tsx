@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Fuel, Trash2 } from 'lucide-react'
 import { CreatedBy, ReadOnlyDetails } from '@/components/activity'
+import { carName } from '@/components/common'
 import { useConfirm } from '@/components/confirm-provider'
 import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
@@ -11,11 +12,12 @@ import { Checkbox, Field, FormError, Input } from '@/components/ui/form'
 import { useAuth } from '@/components/providers/auth-provider'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { toISODate } from '@/lib/dates'
-import { deleteFuel, restoreFuel, saveFuel } from '@/lib/db'
+import { deleteFuel, newChildId, restoreFuel, saveFuel, type FuelInput } from '@/lib/db'
 import { fuelLabel, resolveFuelAmounts } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, parseNumberInput, toNumberInput } from '@/lib/format'
 import { checkCarRuleEscalations, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { canEditEntry } from '@/lib/sharing'
 import {
   FUEL_GRADE_LABELS,
@@ -58,11 +60,14 @@ function FuelDetails({ car, load }: { car: Car; load: FuelLoad }) {
   )
 }
 
-/** Alta y edición de una carga de combustible. Si la carga no se puede editar (`canEditEntry`), se muestra en modo solo lectura. */
-export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
+/**
+ * Alta y edición de una carga de combustible. Si la carga no se puede editar (`canEditEntry`), se muestra en modo solo
+ * lectura. `draft`: una carga de la bandeja que el servidor no guardó (`?borrador=`), para corregirla y volver a guardarla.
+ */
+export function FuelForm({ car, load, draft }: { car: Car; load?: FuelLoad; draft?: OutboxEntryOf<'fuel'> | null }) {
   const { uid } = useData()
   if (load && !canEditEntry(car, uid, load)) return <FuelDetails car={car} load={load} />
-  return <FuelEditor car={car} load={load} />
+  return <FuelEditor car={car} load={load} draft={draft ?? null} />
 }
 
 /**
@@ -73,31 +78,35 @@ export function FuelForm({ car, load }: { car: Car; load?: FuelLoad }) {
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios"). Si
  * la cantidad y el total quedan iguales, se conserva el precio por unidad guardado: recalcularlo desde el total puede
  * diferir en un centavo y contaría como un cambio.
+ * Con un borrador (`draft`), los campos arrancan con lo que se había cargado (`draftSeed`): al editar, la carga como
+ * está ahora con los cambios del borrador encima, y se mide contra la carga de ahora. Lo guardado va a la bandeja
+ * (`settle` con la entrada; la misma del borrador, si hay) con el id de la carga generado antes de escribir.
  */
-function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
+function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: OutboxEntryOf<'fuel'> | null }) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
-  const { actor, today, odometer, rules: allRules, jobs } = useData()
+  const { actor, uid, today, odometer, rules: allRules, jobs } = useData()
   const { fuel: carFuel, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
-  const types = load && !car.fuelTypes.includes(load.fuelType) ? [...car.fuelTypes, load.fuelType] : car.fuelTypes
+  const seed: FuelInput | undefined = draftSeed(load, draft)
+  const types = seed && !car.fuelTypes.includes(seed.fuelType) ? [...car.fuelTypes, seed.fuelType] : car.fuelTypes
   const liquid = types.find(isLiquidFuel) ?? 'nafta'
   const lastOf = (t: FuelType, g?: FuelGrade | null) => carFuel.find(f => f.fuelType === t && (g == null || f.grade === g))
-  const initialType: FuelType = load?.fuelType ?? carFuel.find(f => types.includes(f.fuelType))?.fuelType ?? types[0]
-  const initialGrade: FuelGrade = load?.grade ?? lastOf(isLiquidFuel(initialType) ? initialType : liquid)?.grade ?? 'super'
+  const initialType: FuelType = seed?.fuelType ?? carFuel.find(f => types.includes(f.fuelType))?.fuelType ?? types[0]
+  const initialGrade: FuelGrade = seed?.grade ?? lastOf(isLiquidFuel(initialType) ? initialType : liquid)?.grade ?? 'super'
   const initialLast = lastOf(initialType, isLiquidFuel(initialType) ? initialGrade : null)
 
   const [fuelType, setFuelType] = useState<FuelType>(initialType)
   const [grade, setGrade] = useState<FuelGrade>(initialGrade)
-  const [date, setDate] = useState(load?.date ?? toISODate(new Date()))
-  const [km, setKm] = useState(load ? (load.km != null ? String(load.km) : '') : String(car.currentKm))
-  const [quantity, setQuantity] = useState(load ? toNumberInput(load.quantity) : '')
-  const [mode, setMode] = useState<PriceMode>(load ? 'total' : 'unit')
-  const [price, setPrice] = useState(load ? toNumberInput(load.total) : initialLast?.unitPrice ? toNumberInput(initialLast.unitPrice) : '')
-  const [fullTank, setFullTank] = useState(load?.fullTank ?? true)
-  const [station, setStation] = useState(load?.station ?? initialLast?.station ?? '')
+  const [date, setDate] = useState(seed?.date ?? toISODate(new Date()))
+  const [km, setKm] = useState(seed ? (seed.km != null ? String(seed.km) : '') : String(car.currentKm))
+  const [quantity, setQuantity] = useState(seed ? toNumberInput(seed.quantity) : '')
+  const [mode, setMode] = useState<PriceMode>(seed ? 'total' : 'unit')
+  const [price, setPrice] = useState(seed ? toNumberInput(seed.total) : initialLast?.unitPrice ? toNumberInput(initialLast.unitPrice) : '')
+  const [fullTank, setFullTank] = useState(seed?.fullTank ?? true)
+  const [station, setStation] = useState(seed?.station ?? initialLast?.station ?? '')
   const [original] = useState(load)
 
   const unit = FUEL_UNITS[fuelType]
@@ -139,7 +148,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
     if (date > today) return setError('La fecha no puede ser futura.')
 
     const sameAmounts = original && amounts.quantity === original.quantity && amounts.total === original.total
-    const data = {
+    const data: FuelInput = {
       carId: car.id,
       date,
       km: kmNum,
@@ -169,9 +178,16 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
     })
     if (!confirmed) return
 
+    const fuelId = original?.id ?? draft?.payload.recordId ?? newChildId(car.id, 'fuel')
+    const entry = outboxEntry({
+      id: draft?.id ?? newOutboxId(),
+      carId: car.id,
+      carLabel: carName(car),
+      write: { kind: 'fuel', payload: { recordId: fuelId, data, original: original ? originalFields(original, data) : null } },
+    })
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveFuel(actor, { car, readings: odometer }, data, original))
+      status = await settle(saveFuel(actor, { car, readings: odometer }, data, original, fuelId), { uid, entry })
     })
     if (!ok) return
     toastSaved(
@@ -180,7 +196,7 @@ function FuelEditor({ car, load }: { car: Car; load?: FuelLoad }) {
       `${fuelLabel(data)} · ${formatNumber(amounts.quantity)} ${unit} · ${formatMoney(amounts.total)}`,
     )
     if (status === 'saved') {
-      const readingsAfter = readingsWithLinked(odometer, car.id, 'fuel', load?.id ?? 'new', { date, km: kmNum })
+      const readingsAfter = readingsWithLinked(odometer, car.id, 'fuel', fuelId, { date, km: kmNum })
       checkCarRuleEscalations({
         car,
         rawRules: allRules,

@@ -52,6 +52,10 @@ export const NOVEDADES: Novedad[] = [
         title: 'Borrar un auto, de una',
         text: 'Cuando borrás un auto desaparece en el acto, aunque no tengas señal, y terminamos de borrar su historial y su foto por vos aunque cierres la app.',
       },
+      {
+        title: 'Lo que cargás sin señal no se pierde',
+        text: 'Si guardás algo sin señal, abajo te avisamos "1 carga sin sincronizar" hasta que llegue al servidor, aunque cierres la app. Y si no se pudo guardar (por ejemplo, porque te sacaron del auto), queda en la campanita con sus datos para reintentarlo, corregirlo o descartarlo.',
+      },
     ],
   },
   {

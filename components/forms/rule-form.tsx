@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { FieldGroup, Segmented } from '@/components/ui/choice'
 import { Field, FormError, Input } from '@/components/ui/form'
 import { useCar, useData } from '@/components/providers/data-provider'
-import { deleteRule, restoreRule, saveRule } from '@/lib/db'
+import { deleteRule, newChildId, restoreRule, saveRule, type RuleInput } from '@/lib/db'
 import { formatDate, formatDayMonth, formatKm, formatNumber, parseNumberInput } from '@/lib/format'
 import {
   defaultWarnings,
@@ -23,11 +23,12 @@ import {
   projectRule,
   type RuleProjection,
 } from '@/lib/maintenance'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { isCarOwner } from '@/lib/sharing'
 import { INTERVAL_PRESETS, RULE_PRESETS, type Car, type Job, type MaintenanceRule, type RulePreset, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
 import { cn } from '@/lib/utils'
-import { LinkButton, RuleProgress, StatusBadge } from '../common'
+import { LinkButton, RuleProgress, StatusBadge, carName } from '../common'
 
 const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n))
 
@@ -125,11 +126,14 @@ function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
   )
 }
 
-/** Alta y edición de un mantenimiento. A quien no es el dueño se le muestra sólo su estado (`RuleDetails`). */
-export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
+/**
+ * Alta y edición de un mantenimiento. A quien no es el dueño se le muestra sólo su estado (`RuleDetails`). `draft`: un
+ * mantenimiento de la bandeja que el servidor no guardó (`?borrador=`), para corregirlo y volver a guardarlo.
+ */
+export function RuleForm({ car, rule, draft }: { car: Car; rule?: MaintenanceRule; draft?: OutboxEntryOf<'rule'> | null }) {
   const { uid } = useData()
   if (!isCarOwner(car, uid)) return rule ? <RuleDetails car={car} rule={rule} /> : null
-  return <RuleEditor car={car} rule={rule} />
+  return <RuleEditor car={car} rule={rule} draft={draft ?? null} />
 }
 
 /**
@@ -143,31 +147,35 @@ export function RuleForm({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
  * fecha es obligatoria y, si es por km, también el km.
  * Al guardar, los cambios se miden contra el mantenimiento como estaba al abrir el formulario (`original`): lo que otro
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
+ * Con un borrador (`draft`), los campos arrancan con lo que se había cargado (`draftSeed`): al editar, el mantenimiento
+ * como está ahora con los cambios del borrador encima, y se mide contra el de ahora. Lo guardado va a la bandeja
+ * (`settle` con la entrada; la misma del borrador, si hay) con el id del mantenimiento generado antes de escribir.
  */
-function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
+function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: MaintenanceRule; draft: OutboxEntryOf<'rule'> | null }) {
   const router = useRouter()
   const confirm = useConfirm()
-  const { actor, today } = useData()
+  const { actor, uid, today } = useData()
   const { jobs, readings } = useCar(car.id)
   const { saving, error, setError, run } = useSaver()
 
   const presets = RULE_PRESETS.filter(p => !p.requires || car.fuelTypes.includes(p.requires))
 
-  const [name, setName] = useState(rule?.name ?? '')
-  const [repeat, setRepeat] = useState(rule?.repeat ?? true)
-  const [intervalKm, setIntervalKm] = useState(numOrEmpty(rule?.intervalKm))
-  const [intervalTime, setIntervalTime] = useState<TimeInterval | null>(rule?.intervalTime ?? null)
-  const [lastKm, setLastKm] = useState(numOrEmpty(rule ? rule.baseKm : car.currentKm))
-  const [lastDate, setLastDate] = useState(rule ? (rule.baseDate ?? '') : today)
-  const [warnKm, setWarnKm] = useState(rule ? String(rule.warnKm) : '')
-  const [warnDays, setWarnDays] = useState(rule ? String(rule.warnDays) : '')
+  const seed: RuleInput | undefined = draftSeed(rule, outboxDraft)
+  const [name, setName] = useState(seed?.name ?? '')
+  const [repeat, setRepeat] = useState(seed?.repeat ?? true)
+  const [intervalKm, setIntervalKm] = useState(numOrEmpty(seed?.intervalKm))
+  const [intervalTime, setIntervalTime] = useState<TimeInterval | null>(seed?.intervalTime ?? null)
+  const [lastKm, setLastKm] = useState(numOrEmpty(seed ? seed.baseKm : car.currentKm))
+  const [lastDate, setLastDate] = useState(seed ? (seed.baseDate ?? '') : today)
+  const [warnKm, setWarnKm] = useState(seed ? String(seed.warnKm) : '')
+  const [warnDays, setWarnDays] = useState(seed ? String(seed.warnDays) : '')
   const [pickerKey, setPickerKey] = useState(0)
   const [original] = useState(rule)
 
   const kmInterval = parseNumberInput(intervalKm) || null
   const auto = defaultWarnings(kmInterval, intervalTime)
   const baseKm = kmInterval ? (repeat ? parseNumberInput(lastKm) : (rule?.baseKm ?? car.currentKm)) : null
-  const draft = {
+  const form = {
     carId: car.id,
     intervalKm: kmInterval,
     intervalTime,
@@ -177,9 +185,9 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
     warnKm: parseNumberInput(warnKm) ?? auto.warnKm,
     warnDays: parseNumberInput(warnDays) ?? auto.warnDays,
   }
-  const projection = projectRule({ ...draft, id: rule?.id ?? '' }, jobs, readings)
+  const projection = projectRule({ ...form, id: rule?.id ?? '' }, jobs, readings)
   const ruled = projection.lastDoneJobId != null || projection.completedByJobId != null
-  const preview = getRuleState({ ...draft, ...projection }, car, today)
+  const preview = getRuleState({ ...form, ...projection }, car, today)
   const remaining = describeRemaining(preview)
   const nextText = [
     preview.nextKm != null ? `a los ${formatKm(preview.nextKm)}` : null,
@@ -209,12 +217,12 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (!name.trim()) return setError('Poné un nombre (por ejemplo "Service").')
-    if (!draft.intervalKm && !draft.intervalTime) {
+    if (!form.intervalKm && !form.intervalTime) {
       return setError(repeat ? 'Elegí cada cuánto tiempo y/o cada cuántos km.' : 'Elegí dentro de cuánto tiempo y/o cuántos km.')
     }
-    if (!ruled && draft.intervalKm && draft.baseKm == null) return setError('Indicá a qué km se hizo la última vez.')
-    if (!ruled && !draft.baseDate) return setError(repeat ? 'Indicá la fecha de la última vez.' : 'Indicá desde qué fecha se cuenta.')
-    if (draft.baseDate && draft.baseDate > today) return setError('La fecha no puede ser futura.')
+    if (!ruled && form.intervalKm && form.baseKm == null) return setError('Indicá a qué km se hizo la última vez.')
+    if (!ruled && !form.baseDate) return setError(repeat ? 'Indicá la fecha de la última vez.' : 'Indicá desde qué fecha se cuenta.')
+    if (form.baseDate && form.baseDate > today) return setError('La fecha no puede ser futura.')
     const rulingJob = ruled ? jobs.find(j => j.id === (projection.completedByJobId ?? projection.lastDoneJobId)) : null
 
     const confirmed = await confirm({
@@ -222,7 +230,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
       description: 'Revisá que los datos estén bien.',
       details: [
         { label: 'Se repite', value: repeat ? 'Sí' : 'No, una sola vez' },
-        { label: repeat ? 'Cada' : 'Dentro de', value: describeRuleInterval(draft).replace(/^(Cada|Una sola vez, dentro de) /, '') },
+        { label: repeat ? 'Cada' : 'Dentro de', value: describeRuleInterval(form).replace(/^(Cada|Una sola vez, dentro de) /, '') },
         ...(rulingJob
           ? [
               {
@@ -239,7 +247,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
                 value:
                   [
                     projection.lastDoneDate ? formatDate(projection.lastDoneDate) : null,
-                    repeat && draft.intervalKm ? formatLastDoneKm(projection) : null,
+                    repeat && form.intervalKm ? formatLastDoneKm(projection) : null,
                   ]
                     .filter(Boolean)
                     .join(' · ') || '—',
@@ -248,7 +256,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
         ...(nextText ? [{ label: 'Te toca', value: nextText }] : []),
         {
           label: 'Te avisamos',
-          value: [draft.intervalKm ? `${formatNumber(draft.warnKm)} km` : null, draft.intervalTime ? `${draft.warnDays} días` : null]
+          value: [form.intervalKm ? `${formatNumber(form.warnKm)} km` : null, form.intervalTime ? `${form.warnDays} días` : null]
             .filter(Boolean)
             .join(' o ')
             .concat(' antes'),
@@ -259,9 +267,17 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
     })
     if (!confirmed) return
 
+    const data: RuleInput = { ...form, name: name.trim() }
+    const ruleId = rule?.id ?? outboxDraft?.payload.recordId ?? newChildId(car.id, 'rules')
+    const entry = outboxEntry({
+      id: outboxDraft?.id ?? newOutboxId(),
+      carId: car.id,
+      carLabel: carName(car),
+      write: { kind: 'rule', payload: { recordId: ruleId, data, original: original ? originalFields(original, data) : null } },
+    })
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
-      status = await settle(saveRule(actor, { jobs, readings }, { ...draft, name: name.trim() }, original))
+      status = await settle(saveRule(actor, { jobs, readings }, data, original, ruleId), { uid, entry })
     })
     if (!ok) return
     toastSaved(rule ? 'Mantenimiento guardado' : 'Mantenimiento agregado', status, nextText ? `${name.trim()}: te toca ${nextText}` : undefined)
@@ -350,7 +366,7 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
       </Field>
 
       <div className="space-y-3">
-        <RulingJobNotice car={car} projection={{ ...projection, intervalKm: draft.intervalKm }} jobs={jobs} />
+        <RulingJobNotice car={car} projection={{ ...projection, intervalKm: form.intervalKm }} jobs={jobs} />
         <div>
           <p className="text-sm font-medium">{repeat ? 'Última vez (si no hay trabajos)' : 'Desde cuándo se cuenta'}</p>
           <p className="mb-2 text-xs text-muted-foreground">
@@ -361,10 +377,10 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
                 : 'Normalmente hoy, o el día que fuiste al taller.'}
           </p>
           <div className="grid grid-cols-2 gap-4">
-            {repeat && draft.intervalKm ? (
+            {repeat && form.intervalKm ? (
               <Field
                 label={<span className="text-xs text-muted-foreground">A los km</span>}
-                hint={!ruled && draft.baseKm == null ? MISSING_LAST_KM : undefined}
+                hint={!ruled && form.baseKm == null ? MISSING_LAST_KM : undefined}
               >
                 <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
               </Field>
@@ -380,12 +396,12 @@ function RuleEditor({ car, rule }: { car: Car; rule?: MaintenanceRule }) {
         <summary className="cursor-pointer text-sm font-medium">Cuándo avisar (opcional)</summary>
         <p className="mt-2 text-xs text-muted-foreground">Si lo dejás vacío, lo calculamos según cada cuánto es.</p>
         <div className="mt-4 grid grid-cols-2 gap-4">
-          {draft.intervalKm ? (
+          {form.intervalKm ? (
             <Field label={<span className="text-xs text-muted-foreground">Km antes</span>}>
               <Input value={warnKm} onChange={e => setWarnKm(e.target.value)} inputMode="numeric" placeholder={String(auto.warnKm)} />
             </Field>
           ) : null}
-          {draft.intervalTime ? (
+          {form.intervalTime ? (
             <Field label={<span className="text-xs text-muted-foreground">Días antes</span>}>
               <Input value={warnDays} onChange={e => setWarnDays(e.target.value)} inputMode="numeric" placeholder={String(auto.warnDays)} />
             </Field>

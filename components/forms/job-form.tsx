@@ -17,11 +17,12 @@ import { formatDate, formatInterval, formatKm, formatMoney, formatNumber, parseN
 import { describeProjectionChange, formatLastDoneKm, isCompleted, jobChangeDiff, jobDoneKm, kmRulesOf } from '@/lib/maintenance'
 import { checkCarRuleEscalations, notifyJobInBackground, readingsWithLinked } from '@/lib/notify-client'
 import { entryKmWarning, linkedReadingId } from '@/lib/odometer'
+import { draftSeed, newOutboxId, originalFields, outboxEntry, type OutboxEntryOf } from '@/lib/outbox'
 import { approvesOwnJobs, authorLabel, canEditJob, isApproved, isCarOwner } from '@/lib/sharing'
 import { errorMessage, toast } from '@/lib/toast'
 import { INTERVAL_PRESETS, JOB_CATEGORY_LABELS, type Car, type Job, type JobCategory, type MaintenanceRule, type OdometerReading, type TimeInterval } from '@/lib/types'
 import { removeWithUndo, settle, toastSaved, useSaver, type SaveStatus } from '@/lib/use-saver'
-import { CompletedBadge, StatusBadge } from '../common'
+import { CompletedBadge, StatusBadge, carName } from '../common'
 
 const CATEGORY_FOR_RULE: [RegExp, JobCategory][] = [
   [/service|aceite|filtro/i, 'service'],
@@ -207,11 +208,22 @@ function JobDetails({ car, job }: { car: Car; job: Job }) {
 
 /**
  * Alta y edición de un trabajo. Si el trabajo no se puede editar (`canEditJob`), se muestra en modo solo lectura.
+ * `draft`: un trabajo de la bandeja que el servidor no guardó (`?borrador=`), para corregirlo y volver a guardarlo.
  */
-export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
+export function JobForm({
+  car,
+  job,
+  preselectedRuleId,
+  draft,
+}: {
+  car: Car
+  job?: Job
+  preselectedRuleId?: string | null
+  draft?: OutboxEntryOf<'job'> | null
+}) {
   const { uid } = useData()
   if (job && !canEditJob(car, uid, job)) return <JobDetails car={car} job={job} />
-  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} />
+  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} draft={draft ?? null} />
 }
 
 /**
@@ -229,8 +241,22 @@ export function JobForm({ car, job, preselectedRuleId }: { car: Car; job?: Job; 
  * obligatorio.
  * Al guardar, los cambios se miden contra el trabajo como estaba al abrir el formulario (`original`): lo que otro
  * dispositivo cambió mientras tanto en otros campos no se pisa, y si no cambió nada no se escribe ("Sin cambios").
+ * Con un borrador (`draft`), los campos (y la vuelta al taller) arrancan con lo que se había cargado (`draftSeed`): al
+ * editar, el trabajo como está ahora con los cambios del borrador encima, y se mide contra el trabajo de ahora. Lo
+ * guardado va a la bandeja (`settle` con la entrada; la misma del borrador, si hay) con el id del trabajo generado
+ * antes de escribir.
  */
-function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; preselectedRuleId?: string | null }) {
+function JobEditor({
+  car,
+  job,
+  preselectedRuleId,
+  draft,
+}: {
+  car: Car
+  job?: Job
+  preselectedRuleId?: string | null
+  draft: OutboxEntryOf<'job'> | null
+}) {
   const router = useRouter()
   const confirm = useConfirm()
   const { getToken } = useAuth()
@@ -245,18 +271,19 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
   const selectable = [...rules.map(r => r.rule), ...completedHere]
 
   const preRule = rules.find(r => r.rule.id === preselectedRuleId)?.rule
-  const [date, setDate] = useState(job?.date ?? toISODate(new Date()))
-  const [km, setKm] = useState(job?.km != null ? String(job.km) : '')
-  const [title, setTitle] = useState(job?.title ?? preRule?.name ?? '')
+  const seed: JobInput | undefined = draftSeed(job, draft)
+  const [date, setDate] = useState(seed?.date ?? toISODate(new Date()))
+  const [km, setKm] = useState(seed?.km != null ? String(seed.km) : '')
+  const [title, setTitle] = useState(seed?.title ?? preRule?.name ?? '')
   const [category, setCategory] = useState<JobCategory>(
-    job?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
+    seed?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
   )
-  const [cost, setCost] = useState(job ? toNumberInput(job.cost) : '')
-  const [workshop, setWorkshop] = useState(job?.workshop ?? '')
-  const [notes, setNotes] = useState(job?.notes ?? '')
-  const [ruleIds, setRuleIds] = useState<string[]>(job?.ruleIds ?? (preRule ? [preRule.id] : []))
-  const [comeBack, setComeBack] = useState(false)
-  const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>({ amount: 1, unit: 'month' })
+  const [cost, setCost] = useState(seed ? toNumberInput(seed.cost) : '')
+  const [workshop, setWorkshop] = useState(seed?.workshop ?? '')
+  const [notes, setNotes] = useState(seed?.notes ?? '')
+  const [ruleIds, setRuleIds] = useState<string[]>(seed?.ruleIds ?? (preRule ? [preRule.id] : []))
+  const [comeBack, setComeBack] = useState(Boolean(draft?.payload.followUp))
+  const [comeBackIn, setComeBackIn] = useState<TimeInterval | null>(draft?.payload.followUp?.intervalTime ?? { amount: 1, unit: 'month' })
   const [original] = useState(job)
 
   const kmNum = parseNumberInput(km)
@@ -349,7 +376,13 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
     })
     if (!confirmed) return
 
-    const jobId = job?.id ?? newChildId(car.id, 'jobs')
+    const jobId = job?.id ?? draft?.payload.recordId ?? newChildId(car.id, 'jobs')
+    const entry = outboxEntry({
+      id: draft?.id ?? newOutboxId(),
+      carId: car.id,
+      carLabel: carName(car),
+      write: { kind: 'job', payload: { recordId: jobId, data: input, original: original ? originalFields(original, input) : null, followUp } },
+    })
     let status: SaveStatus = 'saved'
     const ok = await run(async () => {
       const p = saveJob(actor, ctx, input, original, followUp, jobId)
@@ -358,7 +391,7 @@ function JobEditor({ car, job, preselectedRuleId }: { car: Car; job?: Job; prese
           if (out !== 'unchanged') notifyJobInBackground({ carId: car.id, jobId, event: 'submitted' }, getToken)
         }).catch(() => {})
       }
-      status = await settle(p)
+      status = await settle(p, { uid, entry })
     })
     if (!ok) return
     const note = applies
