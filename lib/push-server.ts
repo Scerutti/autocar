@@ -82,7 +82,6 @@ export function serverCarFrom(id: string, x: DocumentData): Car {
     createdAt: toDate(x.createdAt) ?? new Date(0),
     ownerUid: str(x.ownerUid) ?? '',
     ownerName: str(x.ownerName),
-    members: strings(x.members),
     memberUids: strings(x.memberUids),
     memberProfiles: profilesFrom(x.memberProfiles),
     deletedAt: toDate(x.deletedAt),
