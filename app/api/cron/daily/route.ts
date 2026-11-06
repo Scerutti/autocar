@@ -45,11 +45,18 @@ const SWEEP_BUDGET_MS = 30_000
 const SWEEP_LIMIT = 20
 
 /**
- * Lo que hizo el barrido de autos borrados: cuántos encontró, cuántos terminó de borrar, cuántos quedaron con la foto
- * pendiente (Cloudinary falló; el auto marcado queda para la próxima corrida), cuántos dieron error, y el error de la
- * consulta si no pudo arrancar.
+ * Lo que hizo el barrido de autos borrados: cuántos encontró, cuántos terminó de borrar (`photoAbandoned` de ellos con
+ * la foto huérfana en Cloudinary, `photoFailureAction`), cuántos quedaron con la foto pendiente (Cloudinary falló; el
+ * auto marcado queda para la próxima corrida), cuántos dieron error, y el error de la consulta si no pudo arrancar.
  */
-type SweepReport = { found: number; purged: number; photoPending: number; errors: number; error?: string }
+type SweepReport = {
+  found: number
+  purged: number
+  photoPending: number
+  photoAbandoned: number
+  errors: number
+  error?: string
+}
 
 const toDate = (v: unknown) => (v instanceof Timestamp ? v.toDate() : null)
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -244,10 +251,12 @@ async function processUser(uid: string, now: Date): Promise<CronUserReport> {
  * `PURGE_DELAY_MS` (`purgeCutoff`), que la app no llegó a borrar (se cerró antes de llamar a `DELETE /api/cars/[carId]`,
  * la marca se sincronizó sin la app abierta, o Cloudinary falló). La consulta usa el índice simple automático de
  * `deletedAt`. Borra de a un auto y no empieza otro pasado `SWEEP_BUDGET_MS`. Nunca tira: un error se cuenta en el
- * reporte y va a los logs, así no frena los avisos.
+ * reporte y va a los logs, así no frena los avisos. Si quedan fotos pendientes, va un `console.error`; un auto cuya foto
+ * falla una y otra vez se borra igual a los `MAX_PURGE_ATTEMPTS` intentos o a los 7 días (`photoFailureAction`), así
+ * no queda primero en el barrido para siempre.
  */
 async function sweepDeletedCars(now: Date, startedAt: number): Promise<SweepReport> {
-  const report: SweepReport = { found: 0, purged: 0, photoPending: 0, errors: 0 }
+  const report: SweepReport = { found: 0, purged: 0, photoPending: 0, photoAbandoned: 0, errors: 0 }
   let docs: QueryDocumentSnapshot[] = []
   try {
     const snap = await adminDb()
@@ -265,13 +274,17 @@ async function sweepDeletedCars(now: Date, startedAt: number): Promise<SweepRepo
   for (const d of docs) {
     if (Date.now() - startedAt >= SWEEP_BUDGET_MS) break
     try {
-      const { photo } = await purgeCar(d.ref, serverCarFrom(d.id, d.data()))
+      const { photo } = await purgeCar(d.ref, d.data(), now)
       if (photo === 'pending') report.photoPending++
       else report.purged++
+      if (photo === 'abandoned') report.photoAbandoned++
     } catch (e) {
       report.errors++
       console.error('Cron: no se pudo terminar de borrar el auto', d.id, e)
     }
+  }
+  if (report.photoPending) {
+    console.error(`Cron: ${report.photoPending} autos borrados quedaron con la foto pendiente en Cloudinary`)
   }
   return report
 }

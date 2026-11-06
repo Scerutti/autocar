@@ -29,6 +29,29 @@ export function purgeCutoff(now: Date) {
   return new Date(now.getTime() - PURGE_DELAY_MS)
 }
 
+/** Intentos de borrar la foto en Cloudinary después de los cuales se borra el auto igual y la foto queda huérfana. */
+export const MAX_PURGE_ATTEMPTS = 3
+
+/** Días desde el primer fallo de la foto (`photoFailedAt`) después de los cuales se borra el auto igual. */
+export const PHOTO_GIVE_UP_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Qué hace `purgeCar` cuando Cloudinary no pudo borrar la foto de un auto marcado, según los fallos anteriores que
+ * guardó en el auto (`purgeAttempts`, `photoFailedAt`; faltan antes del primero): `retry` guarda este fallo y deja el
+ * auto para el barrido; `give-up` borra el auto igual (la foto queda huérfana en Cloudinary) cuando este fallo llega a
+ * `MAX_PURGE_ATTEMPTS` o el primero fue hace `PHOTO_GIVE_UP_MS` o más. Así un auto cuya foto no se puede borrar no
+ * queda primero en el barrido para siempre.
+ */
+export function photoFailureAction(
+  previous: { purgeAttempts?: number | null; photoFailedAt?: Date | null },
+  now: Date,
+): 'retry' | 'give-up' {
+  const attempts = (previous.purgeAttempts ?? 0) + 1
+  if (attempts >= MAX_PURGE_ATTEMPTS) return 'give-up'
+  if (previous.photoFailedAt && now.getTime() - previous.photoFailedAt.getTime() >= PHOTO_GIVE_UP_MS) return 'give-up'
+  return 'retry'
+}
+
 /**
  * Id de un auto que acepta la ruta: el que genera Firestore (20 letras y números) o cualquier otro sin `/` ni
  * caracteres raros, hasta 100. Así `doc(carId)` no falla con `.`, `..` o una ruta.

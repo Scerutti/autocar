@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { PURGE_DELAY_MS, carDeleteDecision, isCarId, purgeCutoff, purgePhotoId } from './cars'
+import {
+  MAX_PURGE_ATTEMPTS,
+  PHOTO_GIVE_UP_MS,
+  PURGE_DELAY_MS,
+  carDeleteDecision,
+  isCarId,
+  photoFailureAction,
+  purgeCutoff,
+  purgePhotoId,
+} from './cars'
+
+describe('photoFailureAction', () => {
+  const now = new Date('2026-11-05T12:00:00Z')
+  const daysAgo = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000)
+
+  it('el primer fallo se reintenta', () => {
+    expect(photoFailureAction({}, now)).toBe('retry')
+    expect(photoFailureAction({ purgeAttempts: null, photoFailedAt: null }, now)).toBe('retry')
+  })
+
+  it('se reintenta mientras no llega al tope de intentos', () => {
+    expect(photoFailureAction({ purgeAttempts: MAX_PURGE_ATTEMPTS - 2, photoFailedAt: daysAgo(1) }, now)).toBe('retry')
+  })
+
+  it('al llegar al tope de intentos se borra el auto igual', () => {
+    expect(photoFailureAction({ purgeAttempts: MAX_PURGE_ATTEMPTS - 1, photoFailedAt: daysAgo(1) }, now)).toBe('give-up')
+    expect(photoFailureAction({ purgeAttempts: 10, photoFailedAt: daysAgo(1) }, now)).toBe('give-up')
+  })
+
+  it('pasados 7 días del primer fallo se borra el auto igual', () => {
+    expect(photoFailureAction({ purgeAttempts: 1, photoFailedAt: daysAgo(7) }, now)).toBe('give-up')
+    expect(photoFailureAction({ purgeAttempts: 1, photoFailedAt: new Date(now.getTime() - PHOTO_GIVE_UP_MS + 1) }, now)).toBe(
+      'retry',
+    )
+  })
+})
 
 describe('carDeleteDecision', () => {
   const marked = new Date('2026-11-05T10:00:00Z')

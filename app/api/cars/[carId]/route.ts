@@ -11,7 +11,8 @@ export const maxDuration = 60
  * después llama a esta ruta; si el auto no tiene la marca, la pone antes de borrar, así nadie carga nada mientras
  * tanto. Es idempotente: un auto que ya no existe responde 200 `{ deleted: true }`. Si Cloudinary falla, responde 200
  * con `photo: 'pending'`: el historial ya se borró, y el auto marcado queda para que el barrido del cron
- * (`/api/cron/daily`) borre la foto y el documento. Sólo el dueño: si no, 403.
+ * (`/api/cron/daily`) borre la foto y el documento (o `photo: 'abandoned'` si ya falló demasiadas veces y se borró
+ * igual, `photoFailureAction`). Sólo el dueño: si no, 403.
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ carId: string }> }) {
   const auth = await authorize(request)
@@ -26,10 +27,10 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ c
     const data = snap.data()
     const car = data ? serverCarFrom(snap.id, data) : null
     const decision = carDeleteDecision(car, uid)
-    if (decision === 'gone' || !car) return Response.json({ deleted: true })
+    if (decision === 'gone' || !data) return Response.json({ deleted: true })
     if (decision === 'forbidden') return Response.json({ error: 'Sólo el dueño puede borrar el auto' }, { status: 403 })
     if (decision === 'mark') await carRef.update({ deletedAt: FieldValue.serverTimestamp() })
-    const { photo } = await purgeCar(carRef, car)
+    const { photo } = await purgeCar(carRef, data)
     return Response.json({ deleted: true, photo })
   } catch (e) {
     if ((e as { code?: number }).code === 5) return Response.json({ deleted: true })
