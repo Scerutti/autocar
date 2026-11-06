@@ -4,8 +4,13 @@ Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión tambi�
 
 ## Próxima versión
 
+### Seguridad
+
+- **Salir borra tus datos de este dispositivo** (#62): al cerrar sesión se borran la copia local de tus autos (la caché de Firestore), lo que quedó sin sincronizar y la suscripción a los avisos de este dispositivo, así la próxima persona que use el navegador no ve tus datos ni recibe tus avisos. Antes espera un instante a que se sincronice lo pendiente (el botón dice "Sincronizando…") y, si igual quedan cambios sin guardar, pregunta ("Tenés 2 cambios sin guardar; si salís se pierden"). Si AutoCar está abierto en otras pestañas, también se cierran; si alguna no suelta los datos, avisa "Cerrá las otras pestañas de AutoCar".
+
 ### Mantenimiento
 
+- **Salir** (#62): `signOut(options?)` de `useAuth()` (y `signingOut` para el botón; un segundo toque no hace nada) espera `waitForPendingWrites` hasta 1,5 s, confirma con la bandeja y lo pendiente (`signOutWarning`), muestra "Cerrando sesión…" y llama a `clearDeviceData(uid)` (`lib/sign-out-client.ts`): desuscribe el navegador y borra `pushSubscriptions/{sha256(endpoint)}` (`deletePushSubscription` recibe `shouldContinue`), avisa por `BroadcastChannel('autocar')` con el id de la pestaña, `resetFirestore` (`terminate` con tope → `clearIndexedDbPersistence`, con reintentos) y borra las claves `autocar:*:{uid}` (`accountLocalKeys`). Toda otra pestaña cuya sesión se cierra suelta Firestore (`releaseFirestore`) y recarga en `/login`, y `/login` sin sesión borra la caché que haya quedado (`clearSignedOutCache`). `ConfirmProvider` pasa a envolver a `AuthProvider`. Lógica pura en `lib/sign-out.ts`, con pruebas. Para borrar la cuenta (#67): `signOut({ skipConfirm: true })`.
 - **Los datos se agrupan por auto una sola vez** (#63): `DataProvider` reparte mantenimientos, trabajos, cargas y lecturas por auto (`groupByCar`, `lib/by-car.ts`, con pruebas), cada lista por separado y sólo cuando cambia, y expone `byCar`. El km de cada auto, `rulesByCar`, la proyección de los mantenimientos (ahora por auto, con una prueba que la compara con la de las listas completas), la corrección del km, la reconciliación y `useCar` leen de ahí en vez de filtrar las listas completas por auto. Las pantallas muestran lo mismo.
 
 ## 1.6.0

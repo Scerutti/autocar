@@ -20,6 +20,20 @@ export function readLocal(key: string): string | null {
   }
 }
 
+/** Todas las claves guardadas en este dispositivo (las de localStorage y las que quedaron en memoria). */
+export function localKeys(): string[] {
+  const keys = new Set(memory.keys())
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key != null) keys.add(key)
+    }
+  } catch {
+    return [...keys]
+  }
+  return [...keys]
+}
+
 /** Guarda un valor en este dispositivo y avisa a los componentes que lo usan (en otras pestañas avisa el evento "storage"). */
 export function writeLocal(key: string, value: string | null) {
   try {
