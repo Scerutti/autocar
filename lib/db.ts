@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   getDocFromServer,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -63,6 +64,7 @@ import {
   type UserSettings,
 } from './types'
 import { changedFields, isUnchanged } from './utils'
+import type { ExportExtras } from './export'
 
 /**
  * Los ajustes, las suscripciones push y los logros cuelgan de users/{uid}. Cada auto es un documento de
@@ -77,7 +79,7 @@ const carCol = (carId: string, name: RelatedName) => collection(firestore(), 'ca
 const invitesCol = () => collection(firestore(), 'invites')
 const inviteDoc = (id: string) => doc(invitesCol(), id)
 
-type UserCollectionName = 'pushSubscriptions' | 'achievements'
+type UserCollectionName = 'pushSubscriptions' | 'achievements' | 'ruleNotices'
 type RelatedName = 'rules' | 'jobs' | 'fuel' | 'odometer'
 
 const RELATED: readonly RelatedName[] = ['rules', 'jobs', 'fuel', 'odometer']
@@ -316,9 +318,25 @@ interface CarQuery {
 }
 
 /**
+ * true mientras esta pestaña espera `DELETE /api/account` (`setAccountClosing`): `subscribeUserData` no vuelve a crear
+ * `users/{uid}` cuando el servidor lo borra, y el layout no intenta registrar de nuevo la cuenta (`Join`) si Firestore
+ * empieza a rechazar la carga porque ya no está en `allowlist`.
+ */
+let accountClosing = false
+
+/** Marca (o desmarca, si el borrado no se hizo) que esta pestaña está borrando la cuenta. */
+export function setAccountClosing(closing: boolean) {
+  accountClosing = closing
+}
+
+/** Si esta pestaña está borrando la cuenta (`setAccountClosing`). */
+export const isAccountClosing = () => accountClosing
+
+/**
  * Escucha en tiempo real los ajustes y todas las colecciones del usuario. En `onChange`, `fromCache`
  * indica que la foto sale de la caché local y puede no tener lo último del servidor. En el primer
- * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron).
+ * ingreso crea el documento del usuario con la configuración por defecto (lo necesita el cron), salvo mientras se
+ * borra la cuenta (`isAccountClosing`).
  *
  * Los autos salen de dos consultas, las que pide la regla de lectura: los míos (`ownerUid`) y los que me
  * compartieron por invitación (`memberUids` contiene mi uid). La lista de autos es la unión por id sin los marcados
@@ -350,7 +368,7 @@ export function subscribeUserData(
       userDoc(uid),
       snap => {
         const x = snap.data()
-        if (!snap.exists() && !snap.metadata.fromCache) {
+        if (!snap.exists() && !snap.metadata.fromCache && !accountClosing) {
           setDoc(userDoc(uid), { ...DEFAULT_SETTINGS, createdAt: Timestamp.now() }, { merge: true }).catch(onError)
         }
         onChange(
@@ -1242,6 +1260,25 @@ export async function deletePushSubscription(uid: string, endpoint: string, shou
   const batch = writeBatch(firestore())
   batch.delete(doc(userCol(uid, 'pushSubscriptions'), id))
   await batch.commit()
+}
+
+/**
+ * Lo de `users/{uid}` que no está en `useData()`, para "Descargar mis datos": los dispositivos con notificaciones
+ * (`pushSubscriptions`, sin `keys`: son las claves de cifrado del navegador y no le sirven a nadie fuera de él) y el
+ * estado de avisado de cada mantenimiento (`ruleNotices`). Lee de la caché si no hay señal.
+ */
+export async function readExportExtras(uid: string): Promise<ExportExtras> {
+  const [subs, notices] = await Promise.all([getDocs(userCol(uid, 'pushSubscriptions')), getDocs(userCol(uid, 'ruleNotices'))])
+  return {
+    pushSubscriptions: subs.docs.map(d => {
+      const x = d.data()
+      return { id: d.id, endpoint: str(x.endpoint), userAgent: str(x.userAgent), createdAt: toDate(x.createdAt) }
+    }),
+    ruleNotices: notices.docs.map(d => {
+      const x = d.data()
+      return { ruleId: d.id, status: x.status === 'soon' || x.status === 'overdue' ? x.status : null, at: toDate(x.at) }
+    }),
+  }
 }
 
 /**

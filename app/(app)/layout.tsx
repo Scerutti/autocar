@@ -11,6 +11,7 @@ import { Loading, SignOutLabel } from '@/components/common'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/providers/auth-provider'
 import { DataProvider, useData } from '@/components/providers/data-provider'
+import { isAccountClosing } from '@/lib/db'
 import { isFirebaseConfigured } from '@/lib/firebase/client'
 import { errorMessage } from '@/lib/toast'
 import { NotConfigured } from '@/components/not-configured'
@@ -21,7 +22,8 @@ const isPermissionDenied = (e: Error | null) => (e as { code?: string } | null)?
  * Primera vez que entra una cuenta: Firestore todavía no la conoce (no está en allowlist) y rechaza la
  * carga. Le pedimos al servidor que la registre y volvemos a cargar. Si falla otra vez no reintenta
  * solo, para no quedar en un bucle. El intento automático corre una sola vez (en desarrollo React corre
- * los efectos dos veces).
+ * los efectos dos veces). Mientras esta pestaña borra la cuenta (`isAccountClosing`) tampoco: el rechazo es porque el
+ * servidor ya la sacó de allowlist.
  */
 function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
   const { getToken, signOut, signingOut } = useAuth()
@@ -81,7 +83,7 @@ function DataGate({ attempt, onRetry, children }: { attempt: number; onRetry: ()
     if (error && !isPermissionDenied(error)) console.error('Error cargando datos', error)
   }, [error])
 
-  if (isPermissionDenied(error)) return <Join auto={attempt === 0} onJoined={onRetry} />
+  if (isPermissionDenied(error)) return <Join auto={attempt === 0 && !isAccountClosing()} onJoined={onRetry} />
   return (
     <AppShell>
       {error ? (
