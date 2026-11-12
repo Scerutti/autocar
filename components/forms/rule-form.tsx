@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { CalendarClock, CircleCheck, Repeat, Trash2 } from 'lucide-react'
+import { CalendarClock, CircleCheck, Repeat, Trash2, Wrench } from 'lucide-react'
 import { useConfirm } from '@/components/confirm-provider'
 import { IntervalPicker } from '@/components/interval-picker'
 import { Button } from '@/components/ui/button'
@@ -31,6 +31,12 @@ import { cn } from '@/lib/utils'
 import { LinkButton, RuleProgress, StatusBadge, carName } from '../common'
 
 const numOrEmpty = (n: number | null | undefined) => (n == null ? '' : String(n))
+
+/**
+ * Respuesta a "¿Se repite?": `repeat` (cada cierto tiempo), `once` (una sola vez, con aviso: "volvé en 3 semanas") o
+ * `done` (ya está hecho y no hay que volver, sólo en el alta): eso no es un mantenimiento, se carga como trabajo.
+ */
+type RepeatMode = 'repeat' | 'once' | 'done'
 
 /** Aviso para quien ve un auto compartido: el plan de mantenimiento es del dueño. */
 export const OWNER_ONLY_PLAN = 'Solo el dueño puede cambiar el plan.'
@@ -137,7 +143,9 @@ export function RuleForm({ car, rule, draft }: { car: Car; rule?: MaintenanceRul
 }
 
 /**
- * Formulario del mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. Márgenes de aviso
+ * Formulario del mantenimiento. Los presets de GNC sólo aparecen si el auto tiene equipo. En el alta, "Ya está hecho"
+ * (`done`) oculta el plazo, la base y los avisos, y ofrece cargarlo como trabajo con el nombre (`?titulo=`): no se
+ * crea un mantenimiento sin plazo. Márgenes de aviso
  * vacíos = automáticos según el intervalo. Si no se repite, se cuenta desde los km actuales. `pickerKey` cambia al
  * aplicar un preset para que el selector de tiempo se reinicie con el valor nuevo.
  * La "última vez" que se carga acá es la base (`baseKm`, `baseDate`): cuenta si no hay un trabajo aprobado que lo
@@ -162,7 +170,9 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
 
   const seed: RuleInput | undefined = draftSeed(rule, outboxDraft)
   const [name, setName] = useState(seed?.name ?? '')
-  const [repeat, setRepeat] = useState(seed?.repeat ?? true)
+  const [mode, setMode] = useState<RepeatMode>(seed?.repeat === false ? 'once' : 'repeat')
+  const repeat = mode !== 'once'
+  const done = mode === 'done'
   const [intervalKm, setIntervalKm] = useState(numOrEmpty(seed?.intervalKm))
   const [intervalTime, setIntervalTime] = useState<TimeInterval | null>(seed?.intervalTime ?? null)
   const [lastKm, setLastKm] = useState(numOrEmpty(seed ? seed.baseKm : car.currentKm))
@@ -198,7 +208,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
 
   function applyPreset(p: RulePreset) {
     setName(p.name)
-    setRepeat(p.repeat)
+    setMode(p.repeat ? 'repeat' : 'once')
     setIntervalKm(numOrEmpty(p.intervalKm))
     setIntervalTime(p.intervalTime)
     if (!p.repeat) setLastDate(today)
@@ -207,15 +217,18 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
     setPickerKey(k => k + 1)
   }
 
-  function changeRepeat(value: 'yes' | 'no') {
-    setRepeat(value === 'yes')
+  function changeMode(value: RepeatMode) {
+    setMode(value)
+    setError(null)
+    if (value === 'done') return
     setIntervalTime(null)
-    if (value === 'no') setLastDate(today)
+    if (value === 'once') setLastDate(today)
     setPickerKey(k => k + 1)
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (done) return
     if (!name.trim()) return setError('Poné un nombre (por ejemplo "Service").')
     if (!form.intervalKm && !form.intervalTime) {
       return setError(repeat ? 'Elegí cada cuánto tiempo y/o cada cuántos km.' : 'Elegí dentro de cuánto tiempo y/o cuántos km.')
@@ -229,7 +242,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
       title: rule ? `¿Guardar los cambios de "${name.trim()}"?` : `¿Agregar "${name.trim()}"?`,
       description: 'Revisá que los datos estén bien.',
       details: [
-        { label: 'Se repite', value: repeat ? 'Sí' : 'No, una sola vez' },
+        { label: 'Se repite', value: repeat ? 'Sí' : 'No, una vez con aviso' },
         { label: repeat ? 'Cada' : 'Dentro de', value: describeRuleInterval(form).replace(/^(Cada|Una sola vez, dentro de) /, '') },
         ...(rulingJob
           ? [
@@ -338,98 +351,117 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
 
       <FieldGroup label="¿Se repite?">
         <Segmented
-          value={repeat ? 'yes' : 'no'}
-          onChange={changeRepeat}
+          value={mode}
+          onChange={changeMode}
           options={[
-            { value: 'yes', label: 'Sí, cada cierto tiempo', icon: Repeat },
-            { value: 'no', label: 'No, una sola vez', icon: CalendarClock },
+            { value: 'repeat', label: 'Sí, cada cierto tiempo', icon: Repeat },
+            { value: 'once', label: 'Una vez, con aviso', icon: CalendarClock },
+            ...(rule ? [] : [{ value: 'done' as const, label: 'Ya está hecho', icon: CircleCheck }]),
           ]}
         />
       </FieldGroup>
 
-      <FieldGroup
-        label={repeat ? '¿Cada cuánto tiempo?' : '¿Dentro de cuánto tiempo?'}
-        hint={repeat ? 'Si también completás los km, te avisamos con lo que llegue primero.' : 'Por ejemplo, cuando el mecánico te dice "volvé en 3 semanas".'}
-      >
-        <IntervalPicker
-          key={pickerKey}
-          value={intervalTime}
-          onChange={setIntervalTime}
-          presets={repeat ? INTERVAL_PRESETS.repeat : INTERVAL_PRESETS.once}
-          noneLabel="Sólo por km"
-          aria-label={repeat ? 'Cada cuánto tiempo' : 'Dentro de cuánto tiempo'}
-        />
-      </FieldGroup>
-
-      <Field label={repeat ? '¿Cada cuántos km?' : '¿Dentro de cuántos km?'} hint="Opcional si ya elegiste un tiempo">
-        <Input value={intervalKm} onChange={e => setIntervalKm(e.target.value)} inputMode="numeric" placeholder={repeat ? '5000' : '1000'} />
-      </Field>
-
-      <div className="space-y-3">
-        <RulingJobNotice car={car} projection={{ ...projection, intervalKm: form.intervalKm }} jobs={jobs} />
-        <div>
-          <p className="text-sm font-medium">{repeat ? 'Última vez (si no hay trabajos)' : 'Desde cuándo se cuenta'}</p>
-          <p className="mb-2 text-xs text-muted-foreground">
-            {ruled
-              ? 'Cuenta sólo si se borra ese trabajo o se le saca este mantenimiento.'
-              : repeat
-                ? 'Si no te acordás, poné una fecha y km aproximados. Cuando registres un trabajo que lo incluya, manda el trabajo.'
-                : 'Normalmente hoy, o el día que fuiste al taller.'}
+      {done ? (
+        <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-4">
+          <p className="text-sm font-medium">Si ya está hecho y no hay que volver, cargalo como trabajo.</p>
+          <p className="text-xs text-muted-foreground">
+            Queda en el historial del auto y suma en los gastos. Un mantenimiento es para que te avisemos cuándo te toca.
           </p>
-          <div className="grid grid-cols-2 gap-4">
-            {repeat && form.intervalKm ? (
-              <Field
-                label={<span className="text-xs text-muted-foreground">A los km</span>}
-                hint={!ruled && form.baseKm == null ? MISSING_LAST_KM : undefined}
-              >
-                <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
-              </Field>
-            ) : null}
-            <Field label={<span className="text-xs text-muted-foreground">Fecha</span>}>
-              <Input type="date" value={lastDate} max={today} onChange={e => setLastDate(e.target.value)} />
-            </Field>
-          </div>
+          <LinkButton
+            href={`/autos/${car.id}/trabajos/nuevo${name.trim() ? `?titulo=${encodeURIComponent(name.trim())}` : ''}`}
+            size="lg"
+            className="h-11 w-full gap-2"
+          >
+            <Wrench /> Cargar el trabajo
+          </LinkButton>
         </div>
-      </div>
+      ) : (
+        <>
+          <FieldGroup
+            label={repeat ? '¿Cada cuánto tiempo?' : '¿Dentro de cuánto tiempo?'}
+            hint={repeat ? 'Si también completás los km, te avisamos con lo que llegue primero.' : 'Por ejemplo, cuando el mecánico te dice "volvé en 3 semanas".'}
+          >
+            <IntervalPicker
+              key={pickerKey}
+              value={intervalTime}
+              onChange={setIntervalTime}
+              presets={repeat ? INTERVAL_PRESETS.repeat : INTERVAL_PRESETS.once}
+              noneLabel="Sólo por km"
+              aria-label={repeat ? 'Cada cuánto tiempo' : 'Dentro de cuánto tiempo'}
+            />
+          </FieldGroup>
 
-      <details className="rounded-xl border border-white/8 p-4">
-        <summary className="cursor-pointer text-sm font-medium">Cuándo avisar (opcional)</summary>
-        <p className="mt-2 text-xs text-muted-foreground">Si lo dejás vacío, lo calculamos según cada cuánto es.</p>
-        <div className="mt-4 grid grid-cols-2 gap-4">
-          {form.intervalKm ? (
-            <Field label={<span className="text-xs text-muted-foreground">Km antes</span>}>
-              <Input value={warnKm} onChange={e => setWarnKm(e.target.value)} inputMode="numeric" placeholder={String(auto.warnKm)} />
-            </Field>
-          ) : null}
-          {form.intervalTime ? (
-            <Field label={<span className="text-xs text-muted-foreground">Días antes</span>}>
-              <Input value={warnDays} onChange={e => setWarnDays(e.target.value)} inputMode="numeric" placeholder={String(auto.warnDays)} />
-            </Field>
-          ) : null}
-        </div>
-      </details>
+          <Field label={repeat ? '¿Cada cuántos km?' : '¿Dentro de cuántos km?'} hint="Opcional si ya elegiste un tiempo">
+            <Input value={intervalKm} onChange={e => setIntervalKm(e.target.value)} inputMode="numeric" placeholder={repeat ? '5000' : '1000'} />
+          </Field>
 
-      {preview.status !== 'unknown' && (
-        <div className="rounded-xl border border-white/8 bg-background/30 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="min-w-0 truncate text-sm font-medium">Próximo {name || 'vencimiento'}</p>
-            <StatusBadge status={preview.status} />
-          </div>
-          <RuleProgress progress={preview.progress} status={preview.status} />
-          <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-            {preview.nextKm != null && (
-              <p>
-                A los {formatKm(preview.nextKm)} · {remaining.km}
+          <div className="space-y-3">
+            <RulingJobNotice car={car} projection={{ ...projection, intervalKm: form.intervalKm }} jobs={jobs} />
+            <div>
+              <p className="text-sm font-medium">{repeat ? 'Última vez (si no hay trabajos)' : 'Desde cuándo se cuenta'}</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {ruled
+                  ? 'Cuenta sólo si se borra ese trabajo o se le saca este mantenimiento.'
+                  : repeat
+                    ? 'Si no te acordás, poné una fecha y km aproximados. Cuando registres un trabajo que lo incluya, manda el trabajo.'
+                    : 'Normalmente hoy, o el día que fuiste al taller.'}
               </p>
-            )}
-            {preview.nextDate && (
-              <p>
-                El {formatDate(preview.nextDate)} · {remaining.date}
-              </p>
-            )}
-            {preview.estimatedKmDate && <p>A tu ritmo de uso llegás a esos km aprox. el {formatDate(preview.estimatedKmDate)}</p>}
+              <div className="grid grid-cols-2 gap-4">
+                {repeat && form.intervalKm ? (
+                  <Field
+                    label={<span className="text-xs text-muted-foreground">A los km</span>}
+                    hint={!ruled && form.baseKm == null ? MISSING_LAST_KM : undefined}
+                  >
+                    <Input value={lastKm} onChange={e => setLastKm(e.target.value)} inputMode="numeric" />
+                  </Field>
+                ) : null}
+                <Field label={<span className="text-xs text-muted-foreground">Fecha</span>}>
+                  <Input type="date" value={lastDate} max={today} onChange={e => setLastDate(e.target.value)} />
+                </Field>
+              </div>
+            </div>
           </div>
-        </div>
+
+          <details className="rounded-xl border border-white/8 p-4">
+            <summary className="cursor-pointer text-sm font-medium">Cuándo avisar (opcional)</summary>
+            <p className="mt-2 text-xs text-muted-foreground">Si lo dejás vacío, lo calculamos según cada cuánto es.</p>
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              {form.intervalKm ? (
+                <Field label={<span className="text-xs text-muted-foreground">Km antes</span>}>
+                  <Input value={warnKm} onChange={e => setWarnKm(e.target.value)} inputMode="numeric" placeholder={String(auto.warnKm)} />
+                </Field>
+              ) : null}
+              {form.intervalTime ? (
+                <Field label={<span className="text-xs text-muted-foreground">Días antes</span>}>
+                  <Input value={warnDays} onChange={e => setWarnDays(e.target.value)} inputMode="numeric" placeholder={String(auto.warnDays)} />
+                </Field>
+              ) : null}
+            </div>
+          </details>
+
+          {preview.status !== 'unknown' && (
+            <div className="rounded-xl border border-white/8 bg-background/30 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-sm font-medium">Próximo {name || 'vencimiento'}</p>
+                <StatusBadge status={preview.status} />
+              </div>
+              <RuleProgress progress={preview.progress} status={preview.status} />
+              <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                {preview.nextKm != null && (
+                  <p>
+                    A los {formatKm(preview.nextKm)} · {remaining.km}
+                  </p>
+                )}
+                {preview.nextDate && (
+                  <p>
+                    El {formatDate(preview.nextDate)} · {remaining.date}
+                  </p>
+                )}
+                {preview.estimatedKmDate && <p>A tu ritmo de uso llegás a esos km aprox. el {formatDate(preview.estimatedKmDate)}</p>}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <FormError>{error}</FormError>
@@ -438,9 +470,11 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
         <Button type="button" variant="outline" className="h-11 flex-1" onClick={() => router.back()}>
           Cancelar
         </Button>
-        <Button type="submit" disabled={saving} className="h-11 flex-1">
-          {saving ? 'Guardando…' : rule ? 'Guardar cambios' : 'Agregar'}
-        </Button>
+        {!done && (
+          <Button type="submit" disabled={saving} className="h-11 flex-1">
+            {saving ? 'Guardando…' : rule ? 'Guardar cambios' : 'Agregar'}
+          </Button>
+        )}
       </div>
 
       {rule && (

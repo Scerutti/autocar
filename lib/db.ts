@@ -47,6 +47,7 @@ import {
 import {
   DEFAULT_SETTINGS,
   isLiquidFuel,
+  jobCategoryOf,
   type Actor,
   type AchievementRecord,
   type Car,
@@ -220,7 +221,7 @@ function jobFrom(d: QueryDocumentSnapshot<DocumentData>): Job {
     date: x.date,
     km: num(x.km),
     title: x.title ?? '',
-    category: x.category ?? 'otros',
+    category: jobCategoryOf(x.category),
     cost: num(x.cost) ?? 0,
     workshop: str(x.workshop),
     notes: str(x.notes),
