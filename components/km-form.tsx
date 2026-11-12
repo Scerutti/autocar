@@ -121,8 +121,8 @@ export function KmForm({
         <p className="text-sm font-medium">
           {past ? `¿Estos son los km que marcaba el tablero el ${formatDate(day)}?` : '¿Estos son los km que marca el tablero?'}
         </p>
-        <div className="rounded-2xl border border-primary/30 bg-primary/10 px-4 py-5 text-center">
-          <p className="text-4xl font-bold tabular-nums tracking-tight">
+        <div className="rounded-md border border-primary/30 bg-primary/10 px-4 py-5 text-center">
+          <p className="font-display text-4xl font-bold tabular-nums">
             {formatNumber(km)} <span className="text-lg font-medium text-muted-foreground">km</span>
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -134,7 +134,7 @@ export function KmForm({
           </p>
         </div>
         {warning && (
-          <p role="alert" className="flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-sm text-warning">
+          <p role="alert" className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning/10 px-3 py-2.5 text-sm text-warning">
             <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
             <span>{warning} Fijate que no te sobre un cero.</span>
           </p>
@@ -170,7 +170,7 @@ export function KmForm({
             setValue(e.target.value)
             setError(null)
           }}
-          className="h-14 rounded-xl border border-white/10 bg-background px-4 text-2xl font-semibold tabular-nums outline-none transition placeholder:text-white/20 focus:border-ring focus:ring-2 focus:ring-ring/40 aria-invalid:border-destructive"
+          className="h-14 rounded-md border border-line-strong bg-background px-4 font-display text-2xl font-semibold tabular-nums outline-none transition placeholder:text-muted-foreground/40 focus:border-ring focus:ring-2 focus:ring-ring/40 aria-invalid:border-destructive"
         />
       </label>
       <p id={hintId} className="text-sm text-muted-foreground">

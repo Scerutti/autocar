@@ -88,8 +88,8 @@ export function ReadOnlyDetails({
         <CreatedBy record={record} car={car} />
         {badge}
       </div>
-      {notice && <p className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-sm text-muted-foreground">{notice}</p>}
-      <dl className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+      {notice && <p className="rounded-md border border-line bg-surface-2 px-3.5 py-3 text-sm text-muted-foreground">{notice}</p>}
+      <dl className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
         {rows.map(r => (
           <div key={r.label} className="flex items-baseline justify-between gap-4 px-4 py-3 text-sm">
             <dt className="shrink-0 text-muted-foreground">{r.label}</dt>
@@ -126,11 +126,11 @@ export function ActivityRow({ activity, car, showCar, uid }: { activity: Activit
   const amount = kind === 'job' ? item.cost : item.total
 
   return (
-    <Link href={href} className="flex items-center gap-3 px-4 py-4 transition hover:bg-white/[0.02] sm:px-5">
+    <Link href={href} className="flex items-center gap-3 px-4 py-4 transition hover:bg-surface-2 sm:px-5">
       <div className="hidden w-12 text-center text-[10px] font-semibold leading-4 text-muted-foreground sm:block">
         {formatShortDate(item.date)}
       </div>
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.06] text-muted-foreground">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-surface-3 text-muted-foreground">
         <Icon className="size-4" />
       </div>
       <div className="min-w-0 flex-1">
@@ -152,7 +152,7 @@ export function ActivityRow({ activity, car, showCar, uid }: { activity: Activit
 export function ActivityList({ items, carById, showCar }: { items: Activity[]; carById: Map<string, Car>; showCar?: boolean }) {
   const { uid } = useData()
   return (
-    <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+    <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
       {items.map(a => (
         <ActivityRow key={`${a.kind}-${a.item.id}`} activity={a} car={carById.get(a.item.carId)} showCar={showCar} uid={uid} />
       ))}

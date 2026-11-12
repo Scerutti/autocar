@@ -35,8 +35,8 @@ function AchievementTile({ status, car }: { status: AchievementStatus; car: Car 
   return (
     <article
       className={cn(
-        'flex flex-col items-center rounded-2xl border p-3.5 text-center sm:p-4',
-        state === 'unlocked' ? 'border-amber-300/15 bg-card/80' : 'border-white/8 bg-card/40',
+        'flex flex-col items-center rounded-md border p-3.5 text-center sm:p-4',
+        state === 'unlocked' ? 'border-amber-300/15 bg-card/80' : 'border-line bg-card/40',
       )}
     >
       <Medal id={def.id} category={def.category} state={state} className="size-16 sm:size-[4.5rem]" />
@@ -109,7 +109,7 @@ export default function AchievementsPage() {
           />
         ) : (
           <>
-            <section aria-label="Progreso general" className="flex items-center gap-4 rounded-2xl border border-white/8 bg-card/60 p-4 sm:gap-6 sm:p-5">
+            <section aria-label="Progreso general" className="flex items-center gap-4 rounded-md border border-line bg-card/60 p-4 sm:gap-6 sm:p-5">
               <ProgressRing value={unlocked} total={total} className="size-24 sm:size-28" />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">
@@ -162,7 +162,7 @@ export default function AchievementsPage() {
                     </span>
                   </div>
                   {cat.id === 'constancia' && (
-                    <p className="mb-3 flex items-start gap-2 rounded-xl border border-white/8 bg-white/[0.02] px-3 py-2.5 text-xs text-muted-foreground">
+                    <p className="mb-3 flex items-start gap-2 rounded-md border border-line bg-surface-2 px-3 py-2.5 text-xs text-muted-foreground">
                       <Info aria-hidden className="mt-px size-3.5 shrink-0 text-primary" />
                       <span>
                         Cada semana va de lunes a domingo y alcanza con un registro de km (el recordatorio semanal te avisa). Si una semana queda sin
@@ -187,7 +187,7 @@ export default function AchievementsPage() {
               />
             )}
 
-            <p className="flex items-start gap-2 rounded-xl border border-success/15 bg-success/5 px-3.5 py-3 text-xs text-muted-foreground">
+            <p className="flex items-start gap-2 rounded-md border border-success/15 bg-success/5 px-3.5 py-3 text-xs text-muted-foreground">
               <CircleCheck aria-hidden className="mt-px size-4 shrink-0 text-success" />
               <span>
                 Los logros son permanentes: no se pierden ni se repiten si después editás o borrás registros. Premian la constancia al anotar, no

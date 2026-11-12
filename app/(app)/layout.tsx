@@ -51,7 +51,7 @@ function Join({ auto, onJoined }: { auto: boolean; onJoined: () => void }) {
   if (failure == null) return <Loading label="Preparando tu cuenta…" />
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border border-white/8 bg-card/60 p-8 text-center">
+      <div className="w-full max-w-md rounded-md border border-line bg-card/60 p-8 text-center">
         <BrandLogo className="mx-auto w-32" />
         <h1 className="mt-6 text-xl font-semibold">No pudimos entrar</h1>
         <p className="mt-2 text-sm text-muted-foreground">{failure}</p>

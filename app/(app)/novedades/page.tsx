@@ -23,7 +23,7 @@ export default function NovedadesPage() {
       <PageHeader back title="Novedades" subtitle="Qué hay de nuevo en la app." />
       <PageBody className="mx-auto max-w-2xl space-y-5">
         {NOVEDADES.map(n => (
-          <section key={n.version} className="rounded-2xl border border-white/8 bg-card/60 p-5">
+          <section key={n.version} className="rounded-md border border-line bg-card/60 p-5">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="font-semibold">Versión {n.version}</h2>
               {fresh?.has(n.version) && (

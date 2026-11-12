@@ -19,7 +19,7 @@ function DropdownMenuContent({
       <MenuPrimitive.Positioner className="z-50 outline-none" sideOffset={sideOffset} align={align}>
         <MenuPrimitive.Popup
           className={cn(
-            'min-w-52 origin-[var(--transform-origin)] rounded-xl border border-white/10 bg-popover p-1 text-popover-foreground shadow-2xl shadow-black/50 outline-none',
+            'min-w-52 origin-[var(--transform-origin)] rounded-lg border border-line-strong bg-popover p-1 text-popover-foreground outline-none',
             'transition-[scale,opacity] duration-150 ease-out data-starting-style:scale-95 data-starting-style:opacity-0 data-ending-style:scale-95 data-ending-style:opacity-0 motion-reduce:transition-none',
             className,
           )}
@@ -31,7 +31,7 @@ function DropdownMenuContent({
 }
 
 const itemClass =
-  'flex cursor-default items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none select-none data-highlighted:bg-white/[0.07] data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground'
+  'flex cursor-default items-center gap-2.5 rounded-md px-3 py-2.5 text-sm outline-none select-none data-highlighted:bg-surface-3 data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground'
 
 function DropdownMenuItem({ className, ...props }: MenuPrimitive.Item.Props) {
   return <MenuPrimitive.Item className={cn(itemClass, className)} {...props} />

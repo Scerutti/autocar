@@ -270,7 +270,7 @@ export function FailedWriteRow({ item, onNavigate }: { item: Extract<PendingItem
   return (
     <div className="px-4 py-3.5">
       <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-destructive/10 text-destructive">
           <CircleAlert className="size-4" />
         </div>
         <div className="min-w-0 flex-1">

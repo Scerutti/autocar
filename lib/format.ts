@@ -63,8 +63,10 @@ export function formatShortDate(date: ISODate) {
   return shortDateFmt.format(parseISODate(date)).replace('.', '').toUpperCase()
 }
 
+/** La fecha de hoy para el encabezado de Inicio, con mayúscula sólo al principio: "Miércoles, 11 de nov de 2026". */
 export function formatToday(d = new Date()) {
-  return longTodayFmt.format(d).replace('.', '').toUpperCase()
+  const text = longTodayFmt.format(d).replace('.', '')
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 export function timeAgo(d: Date, now = new Date()) {

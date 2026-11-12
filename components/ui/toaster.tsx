@@ -31,7 +31,7 @@ function ToastList() {
     <Toast.Root
       key={t.id}
       toast={t}
-      className="toast-root rounded-xl border border-white/10 bg-popover text-popover-foreground shadow-2xl shadow-black/50 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="toast-root rounded-lg border border-line-strong bg-popover text-popover-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Toast.Content className="toast-content flex items-start gap-3 overflow-hidden py-3 pl-3.5 pr-2">
         <span aria-hidden className="mt-px shrink-0 [&_svg]:size-5">
@@ -44,7 +44,7 @@ function ToastList() {
         <Toast.Action className="-my-0.5 shrink-0 rounded-lg px-2.5 py-1.5 text-sm font-semibold text-primary outline-none transition hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring" />
         <Toast.Close
           aria-label="Cerrar notificación"
-          className="-my-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition hover:bg-white/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="-my-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="size-4" />
         </Toast.Close>

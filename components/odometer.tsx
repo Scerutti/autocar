@@ -49,7 +49,7 @@ export function Odometer({
                 {STRIP.map((n, k) => (
                   <span
                     key={k}
-                    className="flex h-14 items-center justify-center text-4xl font-bold tabular-nums sm:h-18 sm:text-5xl"
+                    className="flex h-14 items-center justify-center font-display text-4xl font-bold tabular-nums sm:h-18 sm:text-5xl"
                   >
                     {n}
                   </span>

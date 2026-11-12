@@ -30,7 +30,7 @@ const DAY_OPTIONS = WEEK_ORDER.map(i => ({ value: String(i), label: WEEKDAYS[i].
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-white/8 bg-card/60 p-5">
+    <section className="rounded-md border border-line bg-card/60 p-5">
       <h2 className="font-semibold">{title}</h2>
       {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
       <div className="mt-5">{children}</div>
@@ -388,7 +388,7 @@ function DeleteAccount() {
     >
       <div className="space-y-4">
         {blocked && (
-          <div role="alert" className="rounded-xl border border-warning/30 bg-warning/5 p-4 text-sm">
+          <div role="alert" className="rounded-md border border-warning/30 bg-warning/5 p-4 text-sm">
             <p className="font-medium">Primero resolvé tus autos compartidos</p>
             <p className="mt-1 text-muted-foreground">
               Estos autos son tuyos y los compartís con otras personas. Borrar la cuenta se llevaría lo que cargaron ellas. En cada uno, entrá a{' '}
@@ -420,8 +420,8 @@ function DeleteAccount() {
 function NovedadesLink() {
   const { unseen } = useNovedades()
   return (
-    <Link href="/novedades" className="flex items-center gap-3 rounded-2xl border border-white/8 bg-card/60 p-5 hover:bg-card/80">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+    <Link href="/novedades" className="flex items-center gap-3 rounded-md border border-line bg-card/60 p-5 hover:bg-card/80">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <Sparkles className="size-5" />
       </div>
       <div className="min-w-0 flex-1">

@@ -82,8 +82,8 @@ export default function HomePage() {
             {kmDue.length > 0 && (
               <section aria-label="Km pendientes" className="mb-8 space-y-3">
                 {kmDue.map(({ car, since }) => (
-                  <div key={car.id} className="flex items-center gap-3 rounded-xl border border-warning/25 bg-warning/5 p-4">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+                  <div key={car.id} className="flex items-center gap-3 rounded-md border border-warning/25 bg-warning/5 p-4">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-warning/10 text-warning">
                       <Gauge className="size-5" />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -102,11 +102,10 @@ export default function HomePage() {
               subtitle={alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'cosa para revisar' : 'cosas para revisar'}.` : 'Todo bajo control, sin sorpresas.'}
             />
             <div className="grid gap-5 xl:grid-cols-2">
-              {cars.map((car, i) => (
+              {cars.map(car => (
                 <CarCard
                   key={car.id}
                   car={car}
-                  index={i}
                   rules={rulesByCar.get(car.id) ?? []}
                   kmDue={kmDue.some(k => k.car.id === car.id)}
                   onUpdateKm={() => setKmCarId(car.id)}
@@ -117,17 +116,17 @@ export default function HomePage() {
             {alerts.length > 0 && (
               <section className="mt-10">
                 <SectionTitle title="Para revisar" subtitle="Mantenimientos vencidos o por vencer." />
-                <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+                <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
                   {alerts.map(({ car, rule, state }) => {
                     const r = describeRemaining(state)
                     return (
                       <Link
                         key={rule.id}
                         href={`/autos/${car.id}/mantenimientos/${rule.id}`}
-                        className="flex items-center gap-3 px-4 py-4 hover:bg-white/[0.02] sm:px-5"
+                        className="flex items-center gap-3 px-4 py-4 hover:bg-surface-2 sm:px-5"
                       >
                         <div
-                          className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${state.status === 'overdue' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning'}`}
+                          className={`flex size-10 shrink-0 items-center justify-center rounded-md ${state.status === 'overdue' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning'}`}
                         >
                           <AlertTriangle className="size-4" />
                         </div>
@@ -162,7 +161,7 @@ export default function HomePage() {
               {activity.length ? (
                 <ActivityList items={activity} carById={carById} showCar={cars.length > 1} />
               ) : (
-                <p className="rounded-xl border border-dashed border-white/10 p-5 text-sm text-muted-foreground">
+                <p className="rounded-md border border-dashed border-line-strong p-5 text-sm text-muted-foreground">
                   Cuando registres un trabajo o una carga de combustible va a aparecer acá.
                 </p>
               )}

@@ -23,7 +23,7 @@ export function AchievementsCard() {
   return (
     <Link
       href="/logros"
-      className="flex items-center gap-4 rounded-xl border border-white/8 bg-card/60 p-4 transition hover:bg-card"
+      className="flex items-center gap-4 rounded-md border border-line bg-card/60 p-4 transition hover:bg-card"
     >
       {shown && <Medal id={shown.def.id} category={shown.def.category} state={shown.state} className="size-12" />}
       <div className="min-w-0 flex-1">

@@ -24,7 +24,7 @@ function Km() {
       <PageHeader back={`/autos/${car.id}`} eyebrow={carName(car)} title="Cargar km" />
       <PageBody>
         {canWrite(car, uid) ? (
-          <div className="mx-auto max-w-md rounded-2xl border border-white/8 bg-card/60 p-5">
+          <div className="mx-auto max-w-md rounded-md border border-line bg-card/60 p-5">
             <KmForm
               key={draft?.id}
               car={car}

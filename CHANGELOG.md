@@ -2,6 +2,16 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Novedades
+
+- **Nueva cara, más de tablero**: la app usa una tipografía nueva (Barlow) y los números grandes (los km de cada auto, los montos de Gastos, el odómetro y los títulos) van en una versión angosta, más fácil de leer de un vistazo. Las tarjetas son planas, sin degradés ni sombras, con esquinas más rectas, y el estado de cada mantenimiento se muestra como una luz de tablero (verde, amarilla o roja) con su nombre. El próximo mantenimiento del auto queda como una fila debajo del kilometraje, y las pantallas vacías dejan de ser un recuadro punteado. No cambia nada de lo que hace la app.
+
+### Mantenimiento
+
+- `app/globals.css` queda con una sola paleta oscura en `:root` (sale el tema claro sin uso y los tokens `chart-*` y `sidebar-*`) y suma `--line`, `--line-strong`, `--surface-2`, `--surface-3` y `--track` (clases `border-line`, `bg-surface-2`, `bg-track`…) en lugar de los `white/…` sueltos; `--radius` baja a 0.5rem y `--popover` es más claro que `--card`. Fuentes con `next/font/google` (`font-sans` = Barlow, `font-display` = Barlow Semi Condensed). Sale `CAR_ACCENTS` de `components/common.tsx`. Bordes: `rounded-md` para superficies de datos, `rounded-lg` para lo que se toca o flota; sin `shadow-2xl`.
+
 ## 1.8.0
 
 Repuestos como gasto propio y un atajo para lo que ya está hecho. Sin cambios en Firestore ni pasos manuales.

@@ -49,7 +49,7 @@ export function NovedadesHost() {
         {shown.length > 0 && (
           <>
             <DialogHeader>
-              <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <div className="mb-2 flex size-11 items-center justify-center rounded-md bg-primary/10 text-primary">
                 <Sparkles className="size-5" />
               </div>
               <DialogTitle>{shown.length === 1 ? `Novedades de la versión ${shown[0].version}` : 'Novedades de AutoCar'}</DialogTitle>

@@ -56,7 +56,7 @@ export default function NotFound() {
       <div className="relative my-auto flex flex-col items-center py-10">
         <p className="text-xs font-semibold uppercase tracking-[0.25em] text-primary">Error 404</p>
         <Odometer value={404} className="mt-5" />
-        <h1 className="mt-9 text-4xl font-semibold tracking-tight sm:text-5xl">Recalculando…</h1>
+        <h1 className="mt-9 font-display text-4xl font-semibold sm:text-5xl">Recalculando…</h1>
         <p className="mt-4 max-w-md text-balance text-muted-foreground sm:text-lg">
           Te fuiste de ruta: esta página no existe o la movimos de lugar.
         </p>

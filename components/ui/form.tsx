@@ -3,7 +3,7 @@ import { CircleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const control =
-  'w-full rounded-xl border border-input bg-background/60 px-3.5 text-base text-foreground outline-none transition placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50 aria-invalid:border-destructive sm:text-sm'
+  'w-full rounded-md border border-input bg-background/60 px-3.5 text-base text-foreground outline-none transition placeholder:text-muted-foreground/60 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50 aria-invalid:border-destructive sm:text-sm'
 
 export function Input({ className, ...props }: React.ComponentProps<'input'>) {
   return <input data-slot="input" className={cn(control, 'h-11', className)} {...props} />
@@ -50,7 +50,7 @@ export function Checkbox({
   return (
     <label
       className={cn(
-        'flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-background/40 p-3 transition has-checked:border-primary/40 has-checked:bg-primary/5',
+        'flex cursor-pointer items-start gap-3 rounded-md border border-border bg-background/40 p-3 transition has-checked:border-primary/40 has-checked:bg-primary/5',
         className,
       )}
     >
@@ -69,7 +69,7 @@ export function FormError({ children, className }: { children?: React.ReactNode;
   return (
     <p
       role="alert"
-      className={cn('flex items-start gap-2 rounded-xl border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive', className)}
+      className={cn('flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2.5 text-sm text-destructive', className)}
     >
       <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
       <span>{children}</span>

@@ -209,7 +209,7 @@ export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'
         <div>
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
           {currentPhoto ? (
-            <div className="relative overflow-hidden rounded-2xl border border-white/8">
+            <div className="relative overflow-hidden rounded-md border border-line">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={currentPhoto} alt="Foto del auto" className="aspect-video w-full object-cover" />
               <div className="absolute bottom-3 right-3 flex gap-2">
@@ -241,9 +241,9 @@ export function CarForm({ car, draft }: { car?: Car; draft?: OutboxEntryOf<'car'
               type="button"
               onClick={() => fileRef.current?.click()}
               disabled={preparing}
-              className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.02] text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:pointer-events-none"
+              className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong bg-surface-2 text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:pointer-events-none"
             >
-              <div className="flex size-12 items-center justify-center rounded-2xl bg-white/[0.06]">
+              <div className="flex size-12 items-center justify-center rounded-md bg-surface-3">
                 <CarFront className="size-6" />
               </div>
               <span className="flex items-center gap-2 text-sm font-medium">
@@ -491,7 +491,7 @@ function ShareSection({ car }: { car: Car }) {
   const rows = members.length + open.length + closed.length
 
   return (
-    <section className="rounded-2xl border border-white/8 bg-card/60 p-4">
+    <section className="rounded-md border border-line bg-card/60 p-4">
       <p className="flex items-center gap-2 text-sm font-medium">
         <Users aria-hidden className="size-4 text-primary" /> Compartir
       </p>
@@ -501,7 +501,7 @@ function ShareSection({ car }: { car: Car }) {
       </p>
 
       {rows > 0 && (
-        <ul className="mt-3 divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8">
+        <ul className="mt-3 divide-y divide-line overflow-hidden rounded-md border border-line">
           {members.map(m => (
             <li key={m.uid} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
@@ -657,7 +657,7 @@ function DeleteCarSection({ car, disabled }: { car: Car; disabled: boolean }) {
   }
 
   return (
-    <div className="rounded-2xl border border-destructive/20 bg-destructive/[0.04] p-4">
+    <div className="rounded-md border border-destructive/20 bg-destructive/[0.04] p-4">
       <p className="text-sm font-medium">Borrar auto</p>
       <p className="mt-1 text-xs text-muted-foreground">Se borra el auto con todo su historial. No se puede deshacer.</p>
       <Button type="button" variant="destructive" size="sm" className="mt-3 gap-1.5" onClick={handleDelete} disabled={disabled}>

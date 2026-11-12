@@ -36,14 +36,14 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
       onValueChange={v => onChange(v as T)}
       disabled={disabled}
       aria-label={aria['aria-label']}
-      className={cn('grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-muted p-1', className)}
+      className={cn('grid auto-cols-fr grid-flow-col gap-1 rounded-lg bg-muted p-1', className)}
     >
       {options.map(o => (
         <Radio.Root
           key={o.value}
           value={o.value}
           aria-label={o.ariaLabel}
-          className="flex min-h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-center text-sm font-medium leading-tight text-muted-foreground outline-none transition data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-background data-checked:text-foreground data-checked:shadow-sm data-checked:ring-1 data-checked:ring-white/15 data-disabled:opacity-50 [&_svg]:size-4"
+          className="flex min-h-9 cursor-pointer select-none items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-center text-sm font-medium leading-tight text-muted-foreground outline-none transition data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-background data-checked:text-foreground data-checked:shadow-sm data-checked:ring-1 data-checked:ring-line-strong data-disabled:opacity-50 [&_svg]:size-4"
         >
           {o.icon && <o.icon aria-hidden />}
           {o.label}
@@ -68,7 +68,7 @@ export function ChoiceChips<T extends string>({ value, onChange, options, classN
           key={o.value}
           value={o.value}
           aria-label={o.ariaLabel}
-          className="flex min-h-10 cursor-pointer select-none items-center justify-center gap-2 rounded-xl border border-white/10 bg-background/40 px-3.5 py-2 text-sm text-muted-foreground outline-none transition data-unchecked:hover:border-white/20 data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:border-primary/50 data-checked:bg-primary/10 data-checked:font-medium data-checked:text-primary data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0"
+          className="flex min-h-10 cursor-pointer select-none items-center justify-center gap-2 rounded-lg border border-line-strong bg-background/40 px-3.5 py-2 text-sm text-muted-foreground outline-none transition data-unchecked:hover:border-foreground/20 data-unchecked:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-checked:border-primary/50 data-checked:bg-primary/10 data-checked:font-medium data-checked:text-primary data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0"
         >
           {o.icon && <o.icon aria-hidden />}
           {o.label}

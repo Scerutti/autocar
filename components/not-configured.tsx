@@ -3,7 +3,7 @@ import { BrandLogo } from '@/components/brand'
 export function NotConfigured() {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
-      <div className="max-w-md rounded-2xl border border-white/8 bg-card/60 p-8 text-center">
+      <div className="max-w-md rounded-md border border-line bg-card/60 p-8 text-center">
         <BrandLogo className="mx-auto w-32" />
         <h1 className="mt-6 text-xl font-semibold">Falta configurar Firebase</h1>
         <p className="mt-2 text-sm text-muted-foreground">

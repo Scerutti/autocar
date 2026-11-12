@@ -44,9 +44,9 @@ type Tab = (typeof TABS)[number]
 
 function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+    <div className="rounded-md border border-line bg-card/60 p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight">{value}</p>
+      <p className="mt-1 font-display text-2xl font-semibold leading-tight tabular-nums">{value}</p>
       {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
@@ -59,9 +59,9 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
 function CompletedRules({ car, completed, jobs }: { car: Car; completed: MaintenanceRule[]; jobs: Job[] }) {
   if (!completed.length) return null
   return (
-    <details className="rounded-xl border border-white/8 bg-card/40 p-4">
+    <details className="rounded-md border border-line bg-card/40 p-4">
       <summary className="cursor-pointer text-sm font-medium">Cumplidos ({completed.length})</summary>
-      <div className="mt-3 divide-y divide-white/8">
+      <div className="mt-3 divide-y divide-line">
         {completed.map(rule => {
           const job = jobs.find(j => j.id === rule.completedByJobId)
           return (
@@ -138,7 +138,7 @@ function RulesTab({
           <Link
             key={rule.id}
             href={`/autos/${car.id}/mantenimientos/${rule.id}`}
-            className="block rounded-xl border border-white/8 bg-card/60 p-4 transition hover:bg-card"
+            className="block rounded-md border border-line bg-card/60 p-4 transition hover:bg-card"
           >
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -368,7 +368,7 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
       </ChartCard>
       <section>
         <h2 className="mb-3 text-base font-semibold">Registros de km</h2>
-      <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+      <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
         {readings.map(r => {
           const origin = readingOrigin(r, fuel, jobs)
           const text = (
@@ -382,7 +382,7 @@ function KmTab({ car, readings, fuel, jobs }: { car: Car; readings: OdometerRead
           )
           if (origin) {
             return (
-              <Link key={r.id} href={origin.href} className="flex items-center gap-3 px-4 py-3 transition hover:bg-white/[0.03]">
+              <Link key={r.id} href={origin.href} className="flex items-center gap-3 px-4 py-3 transition hover:bg-surface-2">
                 {text}
                 <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
               </Link>
@@ -434,7 +434,7 @@ function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
   if (owner) {
     if (!members.length) return null
     return (
-      <Link href={`/autos/${car.id}/editar`} className="flex items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3 text-sm hover:bg-card">
+      <Link href={`/autos/${car.id}/editar`} className="flex items-center gap-3 rounded-md border border-line bg-card/60 px-4 py-3 text-sm hover:bg-card">
         <Users aria-hidden className="size-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate">
           Compartido con {members.map(m => m.name ?? m.email).join(' y ')}
@@ -444,7 +444,7 @@ function SharingBanner({ car, owner }: { car: Car; owner: boolean }) {
     )
   }
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/8 bg-card/60 px-4 py-3">
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-card/60 px-4 py-3">
       <Users aria-hidden className="size-4 shrink-0 text-primary" />
       <p className="min-w-0 flex-1 text-sm">
         Compartido por <span className="font-medium">{car.ownerName ?? 'otra persona'}</span>
@@ -490,7 +490,7 @@ function CarDetail() {
         subtitle={carDetail(car) || undefined}
         actions={
           owner ? (
-            <LinkButton href={`/autos/${car.id}/editar`} variant="outline" size="icon" aria-label="Editar auto" className="size-9 border-white/10 bg-white/[0.03]">
+            <LinkButton href={`/autos/${car.id}/editar`} variant="outline" size="icon" aria-label="Editar auto" className="size-9 border-line-strong bg-surface-2">
               <Pencil />
             </LinkButton>
           ) : undefined
@@ -498,7 +498,7 @@ function CarDetail() {
       />
       <PageBody className="space-y-6">
         <SharingBanner car={car} owner={owner} />
-        <div className="overflow-hidden rounded-2xl border border-white/8 bg-card/60">
+        <div className="overflow-hidden rounded-md border border-line bg-card/60">
           {car.photoUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={cloudinaryUrl(car.photoUrl, 'c_fill,g_auto,w_1200,h_500')} alt={carName(car)} className="aspect-[12/5] w-full object-cover" />
@@ -508,8 +508,8 @@ function CarDetail() {
               {!car.photoUrl && <CarAvatar car={car} className="size-14" />}
               <div>
                 <p className="text-xs text-muted-foreground">Kilometraje actual</p>
-                <p className="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
-                  {formatNumber(car.currentKm)} <span className="text-sm font-normal text-muted-foreground">km</span>
+                <p className="mt-0.5 font-display text-4xl font-semibold leading-none tabular-nums">
+                  {formatNumber(car.currentKm)} <span className="font-sans text-sm font-normal text-muted-foreground">km</span>
                 </p>
                 {car.kmUpdatedAt && <p className="mt-0.5 text-xs text-muted-foreground">Actualizado {timeAgo(car.kmUpdatedAt)}</p>}
               </div>
@@ -521,12 +521,12 @@ function CarDetail() {
             )}
           </div>
           {quickActions.length > 0 && (
-            <div className={`grid border-t border-white/8 ${quickActions.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
+            <div className={`grid border-t border-line ${quickActions.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}`}>
               {quickActions.map(({ href, icon: Icon, label }) => (
                 <Link
                   key={href}
                   href={href}
-                  className="flex flex-col items-center gap-1.5 border-r border-white/8 py-3.5 text-xs text-muted-foreground transition last:border-r-0 hover:bg-white/[0.03] hover:text-foreground sm:flex-row sm:justify-center sm:text-sm"
+                  className="flex flex-col items-center gap-1.5 border-r border-line py-3.5 text-xs text-muted-foreground transition last:border-r-0 hover:bg-surface-2 hover:text-foreground sm:flex-row sm:justify-center sm:text-sm"
                 >
                   <Icon className="size-4 text-primary" />+ {label}
                 </Link>
@@ -556,7 +556,7 @@ function CarDetail() {
           </TabsContent>
         </Tabs>
 
-        <Link href={`/gastos?auto=${car.id}`} className="flex items-center justify-between rounded-xl border border-white/8 bg-card/60 px-4 py-3.5 text-sm hover:bg-card">
+        <Link href={`/gastos?auto=${car.id}`} className="flex items-center justify-between rounded-md border border-line bg-card/60 px-4 py-3.5 text-sm hover:bg-card">
           Ver resumen de gastos de este auto <ChevronRight className="size-4 text-muted-foreground" />
         </Link>
       </PageBody>

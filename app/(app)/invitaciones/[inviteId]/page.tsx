@@ -157,8 +157,8 @@ export default function InvitePage() {
     )
   } else {
     content = (
-      <section className="mx-auto max-w-md rounded-2xl border border-white/8 bg-card/60 p-6 text-center">
-        <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+      <section className="mx-auto max-w-md rounded-md border border-line bg-card/60 p-6 text-center">
+        <div className="mx-auto flex size-12 items-center justify-center rounded-md bg-primary/10 text-primary">
           <Users className="size-6" />
         </div>
         <h2 className="mt-4 text-lg font-semibold">
