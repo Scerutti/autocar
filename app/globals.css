@@ -5,24 +5,18 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
+  --font-sans: var(--font-barlow), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-barlow-semi-condensed), var(--font-barlow), ui-sans-serif, system-ui, sans-serif;
   --color-series-1: var(--series-1);
   --color-series-2: var(--series-2);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-brand-navy: var(--brand-navy);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-track: var(--track);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -50,52 +44,22 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
-  color-scheme: light;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-/* --primary es el azul del logo: el texto sobre el azul va en navy porque el blanco no llega al contraste AA (2.9:1).
-   --success y --warning son estados reservados (no se usan como color de marca).
+/* Paleta única (la app es sólo oscura; `.dark` en <html> sigue valiendo para la variante `dark:`).
+   --primary es el azul del logo: el texto sobre el azul va en navy porque el blanco no llega al contraste AA (2.9:1).
+   --success, --warning y --destructive son estados reservados (no se usan como color de marca).
+   --line separa superficies (bordes y divisores), --line-strong marca controles y cosas que flotan; --surface-2 y
+   --surface-3 son fondos apenas más claros que la superficie que los contiene; --track es el riel de las barras.
+   --popover es más claro que --card para que lo que flota se separe sin sombras.
    --series-* es la paleta de gráficos validada para CVD sobre la superficie oscura. */
+:root,
 .dark {
   color-scheme: dark;
+  --radius: 0.5rem;
   --background: #0b0d0f;
   --foreground: oklch(0.985 0 0);
   --card: #121417;
   --card-foreground: oklch(0.985 0 0);
-  --popover: #15181b;
+  --popover: #1b1e22;
   --popover-foreground: oklch(0.985 0 0);
   --primary: #1a9cfb;
   --primary-foreground: #04101d;
@@ -109,19 +73,11 @@
   --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 12%);
   --ring: #1a9cfb;
-  --chart-1: #1a9cfb;
-  --chart-2: oklch(0.746 0.16 232.661);
-  --chart-3: oklch(0.828 0.189 84.429);
-  --chart-4: oklch(0.714 0.203 305.504);
-  --chart-5: oklch(0.704 0.191 22.216);
-  --sidebar: #0b0d0f;
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: #1a9cfb;
-  --sidebar-primary-foreground: #04101d;
-  --sidebar-accent: oklch(1 0 0 / 8%);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: #1a9cfb;
+  --line: oklch(1 0 0 / 8%);
+  --line-strong: oklch(1 0 0 / 12%);
+  --surface-2: oklch(1 0 0 / 4%);
+  --surface-3: oklch(1 0 0 / 8%);
+  --track: oklch(1 0 0 / 10%);
   --success: #34d399;
   --warning: #fbbf24;
   --brand-navy: #0a111c;
@@ -134,7 +90,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background font-sans text-foreground;
     -webkit-tap-highlight-color: transparent;
   }
   /* Si algún <select> nativo quedara, que su lista no salga blanca con texto claro (Windows) */
