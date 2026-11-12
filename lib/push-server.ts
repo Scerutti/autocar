@@ -6,6 +6,7 @@ import { isPushEndpoint, type PushPayload } from './notifications'
 import { fuelTypesFromDoc, intervalFromDoc } from './parse'
 import {
   DEFAULT_SETTINGS,
+  jobCategoryOf,
   type Car,
   type Job,
   type JobStatus,
@@ -123,7 +124,7 @@ export function serverJobFrom(id: string, x: DocumentData): Job {
     date: x.date,
     km: num(x.km),
     title: x.title ?? '',
-    category: x.category ?? 'otros',
+    category: jobCategoryOf(x.category),
     cost: num(x.cost) ?? 0,
     workshop: str(x.workshop),
     notes: str(x.notes),
