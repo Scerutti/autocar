@@ -34,6 +34,21 @@ function monthOf(date: string) {
   return Number(date.slice(5, 7)) - 1
 }
 
+/**
+ * Porcentaje entero de cada monto sobre la suma, redondeado para que sumen 100 (al mayor resto): 71,4 + 18,7 + 9,9
+ * da 71 + 19 + 10 y no 101. Sin nada que sumar, todos 0.
+ */
+export function percentShares(amounts: number[]): number[] {
+  const total = amounts.reduce((s, a) => s + a, 0)
+  if (total <= 0) return amounts.map(() => 0)
+  const exact = amounts.map(a => (a / total) * 100)
+  const shares = exact.map(Math.floor)
+  const order = exact.map((e, i) => ({ i, rest: e - shares[i] })).sort((a, b) => b.rest - a.rest)
+  const missing = 100 - shares.reduce((s, x) => s + x, 0)
+  for (let k = 0; k < missing; k++) shares[order[k].i]++
+  return shares
+}
+
 export function expenseYears(jobs: Job[], fuel: FuelLoad[], currentYear: number): number[] {
   const years = new Set<number>([currentYear])
   for (const j of jobs) years.add(yearOf(j.date))

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
 import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
 import { computeAvgKmPerDay, entryKmWarning, readingDateOf, validateKmReading } from './odometer'
-import { summarizeExpenses } from './expenses'
+import { percentShares, summarizeExpenses } from './expenses'
 import { everyWeekday, parseNumberInput, toNumberInput } from './format'
 import { niceMax } from './scale'
 import type { FuelLoad, Job } from './types'
@@ -170,6 +170,18 @@ describe('summarizeExpenses', () => {
   it('en un año pasado promedia hasta diciembre', () => {
     const jobs = [{ date: '2025-11-01', cost: 1000, category: 'otros' }] as Job[]
     expect(summarizeExpenses(jobs, [], 2025, new Date('2026-03-15')).monthlyAverage).toBe(500)
+  })
+})
+
+describe('percentShares', () => {
+  it('redondea para que los porcentajes sumen 100', () => {
+    expect(percentShares([2278000, 604000, 340119])).toEqual([71, 19, 10])
+    expect(percentShares([1, 1, 1])).toEqual([34, 33, 33])
+    expect(percentShares([100, 0, 0])).toEqual([100, 0, 0])
+  })
+
+  it('sin gastos da todo 0', () => {
+    expect(percentShares([0, 0, 0])).toEqual([0, 0, 0])
   })
 })
 

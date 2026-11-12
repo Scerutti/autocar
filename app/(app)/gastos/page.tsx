@@ -9,7 +9,7 @@ import { EmptyState, Loading, PageBody, PageHeader } from '@/components/common'
 import { PendingBell } from '@/components/pending/pending-bell'
 import { Select } from '@/components/ui/select'
 import { useData } from '@/components/providers/data-provider'
-import { expenseYears, summarizeExpenses } from '@/lib/expenses'
+import { expenseYears, percentShares, summarizeExpenses } from '@/lib/expenses'
 import { computeCostPerKm } from '@/lib/fuel'
 import { formatMoney, formatMoneyPrecise } from '@/lib/format'
 import { approvedJobs } from '@/lib/sharing'
@@ -38,6 +38,7 @@ function Expenses() {
   const years = expenseYears(carJobs, carFuel, now.getFullYear())
   const s = summarizeExpenses(carJobs, carFuel, year, now)
   const costPerKm = carId !== 'all' ? computeCostPerKm(carFuel) : null
+  const [jobsShare, partsShare, fuelShare] = percentShares([s.jobsTotal, s.partsTotal, s.fuelTotal]).map(p => `${p}% del total`)
 
   return (
     <>
@@ -61,12 +62,12 @@ function Expenses() {
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <Tile label={`Total ${year}`} value={formatMoney(s.total)} className="col-span-2 lg:col-span-1" />
               <Tile label="Promedio mensual" value={formatMoney(s.monthlyAverage)} />
-              <Tile label="Trabajos" value={formatMoney(s.jobsTotal)} hint={`${s.total ? Math.round((s.jobsTotal / s.total) * 100) : 0}% del total`} />
-              <Tile label="Repuestos" value={formatMoney(s.partsTotal)} hint={`${s.total ? Math.round((s.partsTotal / s.total) * 100) : 0}% del total`} />
+              <Tile label="Trabajos" value={formatMoney(s.jobsTotal)} hint={jobsShare} />
+              <Tile label="Repuestos" value={formatMoney(s.partsTotal)} hint={partsShare} />
               <Tile
                 label="Combustible"
                 value={formatMoney(s.fuelTotal)}
-                hint={costPerKm != null ? `${formatMoneyPrecise(costPerKm)} por km` : `${s.total ? Math.round((s.fuelTotal / s.total) * 100) : 0}% del total`}
+                hint={costPerKm != null ? `${fuelShare} · ${formatMoneyPrecise(costPerKm)} por km` : fuelShare}
               />
             </div>
 
