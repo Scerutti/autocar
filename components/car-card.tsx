@@ -20,7 +20,6 @@ export function CarCard({
   onUpdateKm,
 }: {
   car: Car
-  index: number
   rules: RuleWithState[]
   /** Faltan los km del recordatorio semanal: se resalta el botón para cargarlos. */
   kmDue?: boolean

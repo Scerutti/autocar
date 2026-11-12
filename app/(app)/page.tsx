@@ -102,11 +102,10 @@ export default function HomePage() {
               subtitle={alerts.length ? `${alerts.length} ${alerts.length === 1 ? 'cosa para revisar' : 'cosas para revisar'}.` : 'Todo bajo control, sin sorpresas.'}
             />
             <div className="grid gap-5 xl:grid-cols-2">
-              {cars.map((car, i) => (
+              {cars.map(car => (
                 <CarCard
                   key={car.id}
                   car={car}
-                  index={i}
                   rules={rulesByCar.get(car.id) ?? []}
                   kmDue={kmDue.some(k => k.car.id === car.id)}
                   onUpdateKm={() => setKmCarId(car.id)}
