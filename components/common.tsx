@@ -4,25 +4,24 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, CarFront, Eye, LoaderCircle, LogOut, MapPinOff } from 'lucide-react'
 import type { SignOutPhase } from '@/components/providers/auth-provider'
-import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import type { RuleStatus } from '@/lib/maintenance'
 import type { Car } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
-const STATUS: Record<RuleStatus, { label: string; className: string }> = {
-  ok: { label: 'Al día', className: 'border-success/25 bg-success/10 text-success' },
-  soon: { label: 'Próximo', className: 'border-warning/25 bg-warning/10 text-warning' },
-  overdue: { label: 'Vencido', className: 'border-destructive/25 bg-destructive/10 text-destructive' },
-  unknown: { label: 'Sin datos', className: 'border-white/15 bg-white/5 text-muted-foreground' },
+const STATUS_LABEL: Record<RuleStatus, string> = {
+  ok: 'Al día',
+  soon: 'Próximo',
+  overdue: 'Vencido',
+  unknown: 'Sin datos',
 }
 
 export const STATUS_BAR: Record<RuleStatus, string> = {
   ok: 'bg-success',
   soon: 'bg-warning',
   overdue: 'bg-destructive',
-  unknown: 'bg-white/30',
+  unknown: 'bg-muted-foreground/60',
 }
 
 export const STATUS_TEXT: Record<RuleStatus, string> = {
@@ -51,40 +50,34 @@ export function LinkButton({
   )
 }
 
-export function StatusBadge({ status, className }: { status: RuleStatus; className?: string }) {
+/** Testigo de tablero: una luz del color del estado y su nombre, sin caja. */
+function Telltale({ dot, text, label, className }: { dot: string; text: string; label: string; className?: string }) {
   return (
-    <Badge variant="outline" className={cn(STATUS[status].className, className)}>
-      {STATUS[status].label}
-    </Badge>
+    <span className={cn('inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-medium', text, className)}>
+      <span aria-hidden className={cn('size-2 shrink-0 rounded-full', dot)} />
+      {label}
+    </span>
   )
+}
+
+/** Estado de un mantenimiento como testigo de tablero (`STATUS_BAR` / `STATUS_TEXT`). */
+export function StatusBadge({ status, className }: { status: RuleStatus; className?: string }) {
+  return <Telltale dot={STATUS_BAR[status]} text={STATUS_TEXT[status]} label={STATUS_LABEL[status]} className={className} />
 }
 
 /** Etiqueta de un recordatorio de una vez que ya cumplió un trabajo (`completedByJobId`). */
 export function CompletedBadge({ className }: { className?: string }) {
-  return (
-    <Badge variant="outline" className={cn('border-primary/25 bg-primary/10 text-primary', className)}>
-      Cumplido
-    </Badge>
-  )
+  return <Telltale dot="bg-primary" text="text-primary" label="Cumplido" className={className} />
 }
 
 /** Barra de progreso del intervalo consumido, coloreada por estado. */
 export function RuleProgress({ progress, status, className }: { progress: number; status: RuleStatus; className?: string }) {
   return (
-    <div className={cn('h-1.5 w-full overflow-hidden rounded-full bg-white/10', className)}>
-      <div className={cn('h-full rounded-full transition-all', STATUS_BAR[status])} style={{ width: `${Math.min(100, progress)}%` }} />
+    <div className={cn('h-1 w-full overflow-hidden rounded-sm bg-track', className)}>
+      <div className={cn('h-full rounded-sm transition-all', STATUS_BAR[status])} style={{ width: `${Math.min(100, progress)}%` }} />
     </div>
   )
 }
-
-/** Tonos decorativos por auto; se evitan verde/amarillo/rojo para no confundirlos con los estados. */
-export const CAR_ACCENTS = [
-  'from-primary/20 via-primary/5',
-  'from-violet-400/20 via-violet-400/5',
-  'from-fuchsia-400/15 via-fuchsia-400/5',
-  'from-indigo-400/20 via-indigo-400/5',
-  'from-cyan-400/15 via-cyan-400/5',
-]
 
 export function carName(car: Pick<Car, 'brand' | 'model'>) {
   return `${car.brand} ${car.model}`.trim()
@@ -101,12 +94,12 @@ export function CarAvatar({ car, className }: { car: Pick<Car, 'photoUrl' | 'bra
       <img
         src={cloudinaryUrl(car.photoUrl, 'c_fill,g_auto,w_160,h_160')}
         alt={carName(car)}
-        className={cn('size-11 shrink-0 rounded-xl object-cover', className)}
+        className={cn('size-11 shrink-0 rounded-md object-cover', className)}
       />
     )
   }
   return (
-    <div className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/[0.08] text-foreground', className)}>
+    <div className={cn('flex size-11 shrink-0 items-center justify-center rounded-md bg-surface-3 text-foreground', className)}>
       <CarFront className="size-5" />
     </div>
   )
@@ -130,14 +123,14 @@ export function PageHeader({
 }) {
   const router = useRouter()
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-white/8 px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8 lg:px-10">
+    <header className="flex items-center justify-between gap-3 border-b border-line px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8 lg:px-10">
       <div className="flex min-w-0 items-center gap-3">
         {back &&
           (typeof back === 'string' ? (
             <Link
               href={back}
               aria-label="Volver"
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-muted-foreground hover:text-foreground"
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line-strong text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
             >
               <ArrowLeft className="size-4" />
             </Link>
@@ -145,15 +138,15 @@ export function PageHeader({
             <button
               onClick={() => router.back()}
               aria-label="Volver"
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-muted-foreground hover:text-foreground"
+              className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line-strong text-muted-foreground transition hover:bg-surface-2 hover:text-foreground"
             >
               <ArrowLeft className="size-4" />
             </button>
           ))}
         {!back && leading}
         <div className="min-w-0">
-          {eyebrow && <p className="truncate text-xs font-medium uppercase text-primary">{eyebrow}</p>}
-          <h1 className="mt-0.5 line-clamp-2 break-words text-xl font-semibold leading-tight tracking-tight sm:line-clamp-1 sm:text-3xl">{title}</h1>
+          {eyebrow && <p className="truncate text-sm text-muted-foreground">{eyebrow}</p>}
+          <h1 className="mt-0.5 line-clamp-2 break-words font-display text-2xl font-semibold leading-tight tabular-nums sm:line-clamp-1 sm:text-3xl">{title}</h1>
           {subtitle && <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p>}
         </div>
       </div>
@@ -190,11 +183,13 @@ export function EmptyState({
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-white/10 px-6 py-12 text-center">
-      <Icon className="size-8 text-primary" />
-      <p className="font-medium">{title}</p>
-      {description && <p className="max-w-sm text-sm text-muted-foreground">{description}</p>}
-      {action && <div className="mt-2">{action}</div>}
+    <div className="py-8">
+      <div className="flex items-center gap-2.5">
+        <Icon className="size-5 shrink-0 text-muted-foreground" />
+        <p className="font-medium">{title}</p>
+      </div>
+      {description && <p className="mt-1.5 max-w-md text-sm text-muted-foreground">{description}</p>}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   )
 }
@@ -202,7 +197,7 @@ export function EmptyState({
 export function Loading({ label }: { label?: string }) {
   return (
     <div role="status" className="flex min-h-[50vh] flex-col items-center justify-center gap-3">
-      <div aria-hidden className="size-6 animate-spin rounded-full border-2 border-white/15 border-t-primary" />
+      <div aria-hidden className="size-6 animate-spin rounded-full border-2 border-line-strong border-t-primary" />
       {label ? <p className="text-sm text-muted-foreground">{label}</p> : <span className="sr-only">Cargando…</span>}
     </div>
   )

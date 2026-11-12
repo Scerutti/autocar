@@ -11,11 +11,10 @@ import { describeRemaining, type RuleWithState } from '@/lib/maintenance'
 import { canWrite, isCarOwner } from '@/lib/sharing'
 import type { Car } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { CAR_ACCENTS, CarAvatar, RuleProgress, STATUS_TEXT, StatusBadge, carDetail, carName } from './common'
+import { CarAvatar, RuleProgress, STATUS_TEXT, StatusBadge, carDetail, carName } from './common'
 
 export function CarCard({
   car,
-  index,
   rules,
   kmDue = false,
   onUpdateKm,
@@ -32,12 +31,7 @@ export function CarCard({
   const remaining = next ? describeRemaining(next.state) : null
 
   return (
-    <Card
-      className={cn(
-        'relative gap-0 overflow-hidden border-white/8 bg-card/80 bg-gradient-to-br to-transparent py-0 shadow-2xl shadow-black/10 ring-white/8',
-        CAR_ACCENTS[index % CAR_ACCENTS.length],
-      )}
-    >
+    <Card className="relative gap-0 overflow-hidden py-0">
       {car.photoUrl && (
         <Link href={`/autos/${car.id}`} className="relative block aspect-[16/7] overflow-hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -45,23 +39,22 @@ export function CarCard({
           <div className="absolute inset-0 bg-gradient-to-t from-card via-card/10 to-transparent" />
         </Link>
       )}
-      <div className="absolute right-[-20px] top-[-30px] size-36 rounded-full bg-white/[0.03] blur-2xl" />
       <Link href={`/autos/${car.id}`} className={cn('relative flex items-start justify-between gap-3 px-4 pb-4', car.photoUrl ? '-mt-8 pt-0' : 'pt-4')}>
         <div className="flex min-w-0 items-start gap-3">
           {!car.photoUrl && <CarAvatar car={car} />}
           <div className="min-w-0">
-            <h3 className="truncate text-lg font-semibold tracking-tight">{carName(car)}</h3>
+            <h3 className="truncate text-lg font-semibold">{carName(car)}</h3>
             <p className="mt-1 truncate text-xs text-muted-foreground">{carDetail(car) || 'Tocá para ver el detalle'}</p>
           </div>
         </div>
         <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
       </Link>
-      <CardContent className="relative space-y-5 pb-4">
-        <div className="flex items-end justify-between">
+      <CardContent className="relative space-y-4 pb-4">
+        <div className="flex items-end justify-between gap-3">
           <div>
             <p className="text-xs text-muted-foreground">Kilometraje actual</p>
-            <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-              {formatNumber(car.currentKm)} <span className="text-sm font-normal text-muted-foreground">km</span>
+            <p className="mt-0.5 font-display text-4xl font-semibold leading-none tabular-nums">
+              {formatNumber(car.currentKm)} <span className="font-sans text-sm font-normal text-muted-foreground">km</span>
             </p>
           </div>
           {kmDue ? (
@@ -74,7 +67,7 @@ export function CarCard({
           )}
         </div>
         {next ? (
-          <Link href={`/autos/${car.id}/mantenimientos/${next.rule.id}`} className="block rounded-xl border border-white/8 bg-background/30 p-3.5 hover:bg-background/50">
+          <Link href={`/autos/${car.id}/mantenimientos/${next.rule.id}`} className="-mx-4 block border-t border-line px-4 py-3.5 transition hover:bg-surface-2">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
                 <Wrench className={cn('size-4 shrink-0', STATUS_TEXT[next.state.status])} />
@@ -89,11 +82,11 @@ export function CarCard({
             </div>
           </Link>
         ) : !isCarOwner(car, uid) ? (
-          <p className="rounded-xl border border-dashed border-white/10 p-3.5 text-sm text-muted-foreground">Todavía no tiene mantenimientos cargados.</p>
+          <p className="-mx-4 border-t border-line px-4 pt-3.5 text-sm text-muted-foreground">Todavía no tiene mantenimientos cargados.</p>
         ) : (
           <Link
             href={`/autos/${car.id}/mantenimientos/nuevo`}
-            className="flex items-center gap-2 rounded-xl border border-dashed border-white/10 p-3.5 text-sm text-muted-foreground hover:text-foreground"
+            className="-mx-4 flex items-center gap-2 border-t border-line px-4 pt-3.5 text-sm text-muted-foreground hover:text-foreground"
           >
             <Plus className="size-4" /> Agregá el primer mantenimiento (service, VTV…)
           </Link>
