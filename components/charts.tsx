@@ -56,7 +56,7 @@ export function Legend({ items }: { items: { label: string; color: string }[] })
 }
 
 /**
- * Barras apiladas por mes: trabajos (abajo) + combustible (arriba). El detalle del mes activo (hover / tap)
+ * Barras apiladas por mes: trabajos (abajo), combustible y repuestos (arriba), en el orden de la paleta. El detalle del mes activo (hover / tap)
  * va en texto, así no depende del color.
  */
 export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; currentMonth: number | null }) {
@@ -79,6 +79,7 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
         {months.map(m => {
           const jobsPct = (m.jobs / top) * 100
           const fuelPct = (m.fuel / top) * 100
+          const partsPct = (m.parts / top) * 100
           return (
             <button
               key={m.month}
@@ -92,12 +93,21 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
               className={cn('relative flex flex-1 flex-col-reverse items-stretch rounded-t transition', shown === m.month && 'bg-white/[0.04]')}
             >
               {m.jobs > 0 && (
-                <div className={cn('w-full bg-series-1', m.fuel === 0 && 'rounded-t-[4px]')} style={{ height: `${jobsPct}%` }} />
+                <div
+                  className={cn('w-full bg-series-1', m.fuel === 0 && m.parts === 0 && 'rounded-t-[4px]')}
+                  style={{ height: `${jobsPct}%` }}
+                />
               )}
               {m.fuel > 0 && (
                 <div
-                  className={cn('w-full rounded-t-[4px] bg-series-2', m.jobs > 0 && 'mb-[2px]')}
+                  className={cn('w-full bg-series-2', m.parts === 0 && 'rounded-t-[4px]', m.jobs > 0 && 'mb-[2px]')}
                   style={{ height: `${fuelPct}%` }}
+                />
+              )}
+              {m.parts > 0 && (
+                <div
+                  className={cn('w-full rounded-t-[4px] bg-series-3', (m.jobs > 0 || m.fuel > 0) && 'mb-[2px]')}
+                  style={{ height: `${partsPct}%` }}
                 />
               )}
             </button>
@@ -126,6 +136,10 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <span className="size-2.5 rounded-sm bg-series-2" /> Combustible{' '}
               <span className="tabular-nums text-foreground">{formatMoney(months[shown].fuel)}</span>
+            </span>
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="size-2.5 rounded-sm bg-series-3" /> Repuestos{' '}
+              <span className="tabular-nums text-foreground">{formatMoney(months[shown].parts)}</span>
             </span>
             <span className="font-semibold tabular-nums">{formatMoney(months[shown].total)}</span>
           </>

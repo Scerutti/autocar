@@ -14,10 +14,11 @@ import { computeCostPerKm } from '@/lib/fuel'
 import { formatMoney, formatMoneyPrecise } from '@/lib/format'
 import { approvedJobs } from '@/lib/sharing'
 import { JOB_CATEGORY_LABELS } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
-function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Tile({ label, value, hint, className }: { label: string; value: string; hint?: string; className?: string }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+    <div className={cn('rounded-xl border border-white/8 bg-card/60 p-4', className)}>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl">{value}</p>
       {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
@@ -42,7 +43,7 @@ function Expenses() {
     <>
       <PageHeader
         title="Gastos"
-        subtitle="Trabajos y combustible."
+        subtitle="Trabajos, repuestos y combustible."
         actions={
           <>
             <Select value={year} onChange={setYear} items={years.map(y => ({ value: y, label: String(y) }))} className="h-10 w-28" aria-label="Año" />
@@ -57,10 +58,11 @@ function Expenses() {
           <EmptyState icon={Wallet} title={`Sin gastos en ${year}`} description="Registrá trabajos y cargas de combustible para ver el resumen." />
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Tile label={`Total ${year}`} value={formatMoney(s.total)} />
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+              <Tile label={`Total ${year}`} value={formatMoney(s.total)} className="col-span-2 lg:col-span-1" />
               <Tile label="Promedio mensual" value={formatMoney(s.monthlyAverage)} />
               <Tile label="Trabajos" value={formatMoney(s.jobsTotal)} hint={`${s.total ? Math.round((s.jobsTotal / s.total) * 100) : 0}% del total`} />
+              <Tile label="Repuestos" value={formatMoney(s.partsTotal)} hint={`${s.total ? Math.round((s.partsTotal / s.total) * 100) : 0}% del total`} />
               <Tile
                 label="Combustible"
                 value={formatMoney(s.fuelTotal)}
@@ -70,12 +72,13 @@ function Expenses() {
 
             <ChartCard
               title={`¿Cuánto gastaste cada mes de ${year}?`}
-              description="Cada barra es un mes: en azul lo que gastaste en trabajos y en naranja en combustible. Tocá una barra para ver el detalle."
+              description="Cada barra es un mes: en azul lo que gastaste en trabajos, en naranja en combustible y en verde en repuestos. Tocá una barra para ver el detalle."
               legend={
                 <Legend
                   items={[
                     { label: 'Trabajos', color: 'var(--series-1)' },
                     { label: 'Combustible', color: 'var(--series-2)' },
+                    { label: 'Repuestos', color: 'var(--series-3)' },
                   ]}
                 />
               }

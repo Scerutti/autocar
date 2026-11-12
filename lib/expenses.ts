@@ -5,7 +5,10 @@ export type ExpenseCategory = JobCategory | 'combustible'
 export interface MonthTotals {
   /** Mes de 0 (enero) a 11 (diciembre). */
   month: number
+  /** Trabajos sin los de `repuestos`. */
   jobs: number
+  /** Trabajos de la categoría `repuestos`. */
+  parts: number
   fuel: number
   total: number
 }
@@ -13,7 +16,9 @@ export interface MonthTotals {
 export interface ExpenseSummary {
   year: number
   total: number
+  /** Trabajos sin los de `repuestos`. */
   jobsTotal: number
+  partsTotal: number
   fuelTotal: number
   months: MonthTotals[]
   byCategory: { category: ExpenseCategory; total: number }[]
@@ -37,12 +42,13 @@ export function expenseYears(jobs: Job[], fuel: FuelLoad[], currentYear: number)
 }
 
 export function summarizeExpenses(jobs: Job[], fuel: FuelLoad[], year: number, today: Date): ExpenseSummary {
-  const months: MonthTotals[] = Array.from({ length: 12 }, (_, month) => ({ month, jobs: 0, fuel: 0, total: 0 }))
+  const months: MonthTotals[] = Array.from({ length: 12 }, (_, month) => ({ month, jobs: 0, parts: 0, fuel: 0, total: 0 }))
   const byCategory = new Map<ExpenseCategory, number>()
 
   for (const j of jobs) {
     if (yearOf(j.date) !== year) continue
-    months[monthOf(j.date)].jobs += j.cost
+    if (j.category === 'repuestos') months[monthOf(j.date)].parts += j.cost
+    else months[monthOf(j.date)].jobs += j.cost
     byCategory.set(j.category, (byCategory.get(j.category) ?? 0) + j.cost)
   }
   for (const f of fuel) {
@@ -50,11 +56,12 @@ export function summarizeExpenses(jobs: Job[], fuel: FuelLoad[], year: number, t
     months[monthOf(f.date)].fuel += f.total
     byCategory.set('combustible', (byCategory.get('combustible') ?? 0) + f.total)
   }
-  for (const m of months) m.total = m.jobs + m.fuel
+  for (const m of months) m.total = m.jobs + m.parts + m.fuel
 
   const jobsTotal = months.reduce((s, m) => s + m.jobs, 0)
+  const partsTotal = months.reduce((s, m) => s + m.parts, 0)
   const fuelTotal = months.reduce((s, m) => s + m.fuel, 0)
-  const total = jobsTotal + fuelTotal
+  const total = jobsTotal + partsTotal + fuelTotal
   const firstMonth = months.findIndex(m => m.total > 0)
   const lastMonth = year < today.getFullYear() ? 11 : today.getMonth()
   const elapsedMonths = firstMonth === -1 || year > today.getFullYear() ? 0 : Math.max(1, lastMonth - firstMonth + 1)
@@ -63,6 +70,7 @@ export function summarizeExpenses(jobs: Job[], fuel: FuelLoad[], year: number, t
     year,
     total,
     jobsTotal,
+    partsTotal,
     fuelTotal,
     months,
     byCategory: [...byCategory.entries()]

@@ -9,6 +9,7 @@ import {
   Ellipsis,
   FileText,
   Fuel,
+  Package,
   PaintBucket,
   ShieldCheck,
   Wrench,
@@ -31,6 +32,7 @@ export const CATEGORY_ICONS: Record<JobCategory, LucideIcon> = {
   electricidad: BatteryCharging,
   carroceria: PaintBucket,
   documentacion: FileText,
+  repuestos: Package,
   otros: Ellipsis,
 }
 
