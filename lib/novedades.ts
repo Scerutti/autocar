@@ -13,6 +13,24 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.8.0',
+    date: '2026-11-11',
+    items: [
+      {
+        title: 'Repuestos',
+        text: 'Al cargar un trabajo podés elegir la categoría "Repuestos", por ejemplo si compraste una pieza. En Gastos los repuestos tienen su propio total y su color en el gráfico de cada mes, al lado de los trabajos y el combustible.',
+      },
+      {
+        title: '¿Ya está hecho?',
+        text: 'Al agregar un mantenimiento, si ya lo hiciste y no hay que volver, elegí "Ya está hecho": te lleva a cargarlo como trabajo con el nombre puesto, sin pedirte plazos ni avisos.',
+      },
+      {
+        title: 'Los porcentajes cierran',
+        text: 'En Gastos, cada tarjeta muestra su parte del total, también la de combustible cuando elegís un auto, y los porcentajes suman 100.',
+      },
+    ],
+  },
+  {
     version: '1.7.0',
     date: '2026-11-06',
     items: [

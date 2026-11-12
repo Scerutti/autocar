@@ -159,6 +159,7 @@ export type JobCategory =
   | 'electricidad'
   | 'carroceria'
   | 'documentacion'
+  | 'repuestos'
   | 'otros'
 
 export const JOB_CATEGORY_LABELS: Record<JobCategory, string> = {
@@ -169,7 +170,13 @@ export const JOB_CATEGORY_LABELS: Record<JobCategory, string> = {
   electricidad: 'Electricidad',
   carroceria: 'Carrocería',
   documentacion: 'Documentación',
+  repuestos: 'Repuestos',
   otros: 'Otros',
+}
+
+/** La categoría guardada si la app la conoce; si no (falta, o la escribió una versión más nueva), `otros`. */
+export function jobCategoryOf(value: unknown): JobCategory {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(JOB_CATEGORY_LABELS, value) ? (value as JobCategory) : 'otros'
 }
 
 export type JobStatus = 'approved' | 'pending' | 'rejected'

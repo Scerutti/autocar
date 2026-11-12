@@ -2,6 +2,24 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## 1.8.0
+
+Repuestos como gasto propio y un atajo para lo que ya está hecho. Sin cambios en Firestore ni pasos manuales.
+
+### Novedades
+
+- **Categoría Repuestos** (#114): un trabajo puede ser "Repuestos" (la compra de una pieza, aunque no la cambie un taller). En Gastos tiene su propia tarjeta con su % del total, una serie verde en las barras por mes y su fila en "¿En qué se fue la plata?"; la tarjeta Trabajos ya no los incluye.
+- **"Ya está hecho" al agregar un mantenimiento** (#114): "¿Se repite?" ofrece "Sí, cada cierto tiempo", "Una vez, con aviso" (lo que antes era "No, una sola vez": volver al taller dentro de un tiempo) y, sólo al agregar uno, "Ya está hecho". Con esa opción no pide plazo, km ni avisos y ofrece cargarlo como trabajo con el nombre ya puesto.
+
+### Arreglos
+
+- **Los porcentajes de Gastos suman 100** (#114): con un auto elegido, la tarjeta Combustible mostraba el $ por km en lugar de su % del total; ahora muestra los dos. Los % se redondean para que entre trabajos, repuestos y combustible sumen siempre 100.
+
+### Mantenimiento
+
+- `JobCategory` suma `repuestos`. Una categoría que la app no conoce se lee como `otros` (`jobCategoryOf` en `jobFrom` y `serverJobFrom`), así una categoría nueva no rompe una versión anterior a partir de esta. `summarizeExpenses` separa `partsTotal` y `parts` por mes, y `percentShares` reparte los % al mayor resto, con pruebas. `/autos/[carId]/trabajos/nuevo?titulo=` precarga el título y la categoría.
+- Una PWA de la 1.7.0 o anterior que siga abierta puede fallar al mostrar un trabajo de Repuestos hasta que se actualice (recargar la app).
+
 ## 1.7.0
 
 Cierra la epic de higiene y privacidad. Salir borra tus datos de este dispositivo, podés descargar todos tus datos y borrar tu cuenta, y las rutas viejas de antes de la 1.1.2 se cierran. Antes de publicar hay que subir las reglas y los índices de Firestore; la limpieza de los datos viejos es un script opcional (ver "Pasos manuales").

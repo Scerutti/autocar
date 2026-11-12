@@ -30,6 +30,7 @@ const CATEGORY_FOR_RULE: [RegExp, JobCategory][] = [
   [/fren/i, 'frenos'],
   [/vtv|seguro|patente|oblea|hidr/i, 'documentacion'],
   [/bater|el[eé]ctr/i, 'electricidad'],
+  [/repuesto/i, 'repuestos'],
 ]
 
 const CATEGORY_OPTIONS = (Object.keys(JOB_CATEGORY_LABELS) as JobCategory[]).map(value => ({
@@ -214,16 +215,19 @@ export function JobForm({
   car,
   job,
   preselectedRuleId,
+  presetTitle,
   draft,
 }: {
   car: Car
   job?: Job
   preselectedRuleId?: string | null
+  /** Título de un trabajo nuevo (`?titulo=`, desde "Ya está hecho" del mantenimiento nuevo). */
+  presetTitle?: string | null
   draft?: OutboxEntryOf<'job'> | null
 }) {
   const { uid } = useData()
   if (job && !canEditJob(car, uid, job)) return <JobDetails car={car} job={job} />
-  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} draft={draft ?? null} />
+  return <JobEditor car={car} job={job} preselectedRuleId={preselectedRuleId} presetTitle={presetTitle} draft={draft ?? null} />
 }
 
 /**
@@ -250,11 +254,13 @@ function JobEditor({
   car,
   job,
   preselectedRuleId,
+  presetTitle,
   draft,
 }: {
   car: Car
   job?: Job
   preselectedRuleId?: string | null
+  presetTitle?: string | null
   draft: OutboxEntryOf<'job'> | null
 }) {
   const router = useRouter()
@@ -274,9 +280,10 @@ function JobEditor({
   const seed: JobInput | undefined = draftSeed(job, draft)
   const [date, setDate] = useState(seed?.date ?? toISODate(new Date()))
   const [km, setKm] = useState(seed?.km != null ? String(seed.km) : '')
-  const [title, setTitle] = useState(seed?.title ?? preRule?.name ?? '')
+  const initialTitle = preRule?.name ?? presetTitle?.trim().slice(0, 200) ?? ''
+  const [title, setTitle] = useState(seed?.title ?? initialTitle)
   const [category, setCategory] = useState<JobCategory>(
-    seed?.category ?? CATEGORY_FOR_RULE.find(([re]) => preRule && re.test(preRule.name))?.[1] ?? 'service',
+    seed?.category ?? CATEGORY_FOR_RULE.find(([re]) => initialTitle && re.test(initialTitle))?.[1] ?? 'service',
   )
   const [cost, setCost] = useState(seed ? toNumberInput(seed.cost) : '')
   const [workshop, setWorkshop] = useState(seed?.workshop ?? '')
@@ -494,7 +501,7 @@ function JobEditor({
       </Field>
 
       <FieldGroup label="Categoría">
-        <ChoiceChips value={category} onChange={setCategory} options={CATEGORY_OPTIONS} className="grid grid-cols-2 sm:grid-cols-4" />
+        <ChoiceChips value={category} onChange={setCategory} options={CATEGORY_OPTIONS} className="grid grid-cols-3" />
       </FieldGroup>
 
       <div className="grid grid-cols-2 gap-4">

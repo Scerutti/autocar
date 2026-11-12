@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
 import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
 import { computeAvgKmPerDay, entryKmWarning, readingDateOf, validateKmReading } from './odometer'
-import { summarizeExpenses } from './expenses'
+import { percentShares, summarizeExpenses } from './expenses'
 import { everyWeekday, parseNumberInput, toNumberInput } from './format'
 import { niceMax } from './scale'
 import type { FuelLoad, Job } from './types'
@@ -151,9 +151,37 @@ describe('summarizeExpenses', () => {
     expect(s.monthlyAverage).toBeCloseTo(160000 / 2)
   })
 
+  it('separa los repuestos de los trabajos y los suma al total', () => {
+    const jobs = [
+      { date: '2026-02-12', cost: 100000, category: 'service' },
+      { date: '2026-02-15', cost: 30000, category: 'repuestos' },
+      { date: '2026-03-02', cost: 12000, category: 'repuestos' },
+    ] as Job[]
+    const s = summarizeExpenses(jobs, [load({ date: '2026-02-20', total: 40000 })], 2026, new Date('2026-03-15'))
+    expect(s.jobsTotal).toBe(100000)
+    expect(s.partsTotal).toBe(42000)
+    expect(s.fuelTotal).toBe(40000)
+    expect(s.total).toBe(182000)
+    expect(s.months[1]).toMatchObject({ jobs: 100000, parts: 30000, fuel: 40000, total: 170000 })
+    expect(s.months[2]).toMatchObject({ jobs: 0, parts: 12000, fuel: 0, total: 12000 })
+    expect(s.byCategory).toContainEqual({ category: 'repuestos', total: 42000 })
+  })
+
   it('en un año pasado promedia hasta diciembre', () => {
     const jobs = [{ date: '2025-11-01', cost: 1000, category: 'otros' }] as Job[]
     expect(summarizeExpenses(jobs, [], 2025, new Date('2026-03-15')).monthlyAverage).toBe(500)
+  })
+})
+
+describe('percentShares', () => {
+  it('redondea para que los porcentajes sumen 100', () => {
+    expect(percentShares([2278000, 604000, 340119])).toEqual([71, 19, 10])
+    expect(percentShares([1, 1, 1])).toEqual([34, 33, 33])
+    expect(percentShares([100, 0, 0])).toEqual([100, 0, 0])
+  })
+
+  it('sin gastos da todo 0', () => {
+    expect(percentShares([0, 0, 0])).toEqual([0, 0, 0])
   })
 })
 

@@ -8,10 +8,12 @@ import { useDraft } from '@/components/outbox/outbox'
 import { useCar, useData } from '@/components/providers/data-provider'
 import { canWrite } from '@/lib/sharing'
 
-/** Trabajo nuevo (`?regla=` precarga un mantenimiento) o, con `?borrador=<id>`, uno de la bandeja que el servidor no guardó. */
+/** Trabajo nuevo (`?regla=` precarga un mantenimiento, `?titulo=` el título) o, con `?borrador=<id>`, uno de la bandeja que el servidor no guardó. */
 function NewJob() {
   const { carId } = useParams<{ carId: string }>()
-  const ruleId = useSearchParams().get('regla')
+  const params = useSearchParams()
+  const ruleId = params.get('regla')
+  const title = params.get('titulo')
   const { uid } = useData()
   const { car } = useCar(carId)
   const draft = useDraft('job', carId)
@@ -20,7 +22,7 @@ function NewJob() {
     <>
       <PageHeader back eyebrow={carName(car)} title="Nuevo trabajo" />
       <PageBody>
-        {canWrite(car, uid) ? <JobForm key={draft?.id} car={car} preselectedRuleId={ruleId} draft={draft} /> : <ViewerOnly car={car} />}
+        {canWrite(car, uid) ? <JobForm key={draft?.id} car={car} preselectedRuleId={ruleId} presetTitle={title} draft={draft} /> : <ViewerOnly car={car} />}
       </PageBody>
     </>
   )
