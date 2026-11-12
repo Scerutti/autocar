@@ -96,14 +96,14 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               </div>
 
               {request.warning && (
-                <p className="flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-sm text-warning">
+                <p className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning/10 px-3 py-2.5 text-sm text-warning">
                   <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
                   <span>{request.warning}</span>
                 </p>
               )}
 
               {request.details && request.details.length > 0 && (
-                <dl className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-background/40">
+                <dl className="divide-y divide-line overflow-hidden rounded-md border border-line bg-background/40">
                   {request.details.map(d => (
                     <div key={d.label} className="flex items-baseline justify-between gap-4 px-3.5 py-2.5 text-sm">
                       <dt className="shrink-0 text-muted-foreground">{d.label}</dt>

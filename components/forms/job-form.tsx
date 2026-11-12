@@ -166,7 +166,7 @@ function ReviewCard({ car, job }: { car: Car; job: Job }) {
   const { approve, reject } = useJobReview()
   const back = () => router.replace(`/autos/${car.id}?tab=trabajos`)
   return (
-    <div className="rounded-2xl border border-warning/25 bg-warning/5 p-4">
+    <div className="rounded-md border border-warning/25 bg-warning/5 p-4">
       <p className="text-sm font-medium">Este trabajo espera tu aprobación</p>
       <p className="mt-1 text-xs text-muted-foreground">Hasta que lo apruebes no cuenta en gastos ni marca los mantenimientos.</p>
       <div className="mt-3 flex gap-2">
@@ -484,7 +484,7 @@ function JobEditor({
       )}
       {job && owner && job.status === 'pending' && <ReviewCard car={car} job={job} />}
       {job && !owner && job.status === 'rejected' && (
-        <p className="rounded-xl border border-destructive/25 bg-destructive/5 px-3.5 py-3 text-sm text-muted-foreground">
+        <p className="rounded-md border border-destructive/25 bg-destructive/5 px-3.5 py-3 text-sm text-muted-foreground">
           {ownerName} rechazó este trabajo. Corregilo y volvé a mandarlo, o borralo.
         </p>
       )}

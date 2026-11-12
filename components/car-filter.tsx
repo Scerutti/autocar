@@ -19,7 +19,7 @@ export function CarFilter({ cars, value, onChange }: { cars: Car[]; value: strin
             'shrink-0 rounded-full border px-3.5 py-1.5 text-sm transition',
             value === o.id
               ? 'border-primary/40 bg-primary/10 text-primary'
-              : 'border-white/10 text-muted-foreground hover:text-foreground',
+              : 'border-line-strong text-muted-foreground hover:text-foreground',
           )}
         >
           {o.label}

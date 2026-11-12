@@ -127,11 +127,11 @@ export function Medal({
         strokeWidth={2.2}
         className={cn(
           'absolute left-1/2 top-1/2 size-[36%] -translate-x-1/2 -translate-y-1/2',
-          unlocked ? 'text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]' : state === 'in-progress' ? 'text-white/70' : 'text-white/35',
+          unlocked ? 'text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]' : state === 'in-progress' ? 'text-foreground/70' : 'text-foreground/35',
         )}
       />
       {state === 'locked' && (
-        <span className="absolute -bottom-0.5 -right-0.5 flex size-[34%] items-center justify-center rounded-full border border-white/10 bg-background text-muted-foreground">
+        <span className="absolute -bottom-0.5 -right-0.5 flex size-[34%] items-center justify-center rounded-full border border-line-strong bg-background text-muted-foreground">
           <Lock className="size-[55%]" />
         </span>
       )}

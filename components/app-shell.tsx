@@ -42,7 +42,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <div className="mx-auto flex min-h-dvh max-w-7xl">
-        <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-white/8 px-5 py-7 lg:flex">
+        <aside className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-line px-5 py-7 lg:flex">
           <Link href="/" aria-label="AutoCar, ir al inicio" className="flex items-center gap-2.5 px-1">
             <BrandMark className="size-11" />
             <BrandWordmark className="h-[19px]" />
@@ -54,10 +54,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={href}
                 aria-current={isActive(pathname, href) ? 'page' : undefined}
                 className={cn(
-                  'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition',
+                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition',
                   isActive(pathname, href)
-                    ? 'bg-white/8 text-foreground'
-                    : 'text-muted-foreground hover:bg-white/5 hover:text-foreground',
+                    ? 'bg-surface-3 text-foreground'
+                    : 'text-muted-foreground hover:bg-surface-2 hover:text-foreground',
                 )}
               >
                 <Icon className={cn('size-4', isActive(pathname, href) && 'text-primary')} />
@@ -68,7 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-auto space-y-3">
             {outbox && <OutboxIndicator text={outbox} />}
             {user && (
-              <Link href="/ajustes" className="block rounded-2xl border border-white/8 bg-white/[0.03] p-4 hover:bg-white/[0.05]">
+              <Link href="/ajustes" className="block rounded-md border border-line bg-surface-2 p-4 hover:bg-surface-2">
                 <div className="flex items-center gap-3">
                   {user.photoURL ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -98,7 +98,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-white/8 bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
+      <nav aria-label="Principal" className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-background/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden">
         {outbox && <OutboxIndicator text={outbox} className="mx-auto mb-1.5" />}
         <div className="mx-auto flex max-w-md items-center">
           {NAV.map(({ href, label, icon: Icon }) => (
@@ -107,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               href={href}
               aria-current={isActive(pathname, href) ? 'page' : undefined}
               className={cn(
-                'flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1 py-2 text-[10px]',
+                'flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-2 text-[10px]',
                 isActive(pathname, href) ? 'text-primary' : 'text-muted-foreground',
               )}
             >

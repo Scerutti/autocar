@@ -19,7 +19,7 @@ import { kmDueDay, pendingItems, urgentCount, type PendingItem } from '@/lib/pen
 import { authorLabel } from '@/lib/sharing'
 import { cn } from '@/lib/utils'
 
-const ROW = 'flex items-center gap-3 px-4 py-3.5 hover:bg-white/[0.02]'
+const ROW = 'flex items-center gap-3 px-4 py-3.5 hover:bg-surface-2'
 
 function RuleRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'rule' }>; onNavigate: () => void }) {
   const { car, rule, state } = item
@@ -28,7 +28,7 @@ function RuleRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'rul
     <Link href={`/autos/${car.id}/mantenimientos/${rule.id}`} onClick={onNavigate} className={ROW}>
       <div
         className={cn(
-          'flex size-9 shrink-0 items-center justify-center rounded-xl',
+          'flex size-9 shrink-0 items-center justify-center rounded-md',
           state.status === 'overdue' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning',
         )}
       >
@@ -56,7 +56,7 @@ function ReviewRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'r
   return (
     <div className="px-4 py-3.5">
       <Link href={`/autos/${car.id}/trabajos/${job.id}`} onClick={onNavigate} className="flex items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-warning/10 text-warning">
           <Wrench className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
@@ -104,7 +104,7 @@ function InviteRow({ item, onNavigate }: { item: Extract<PendingItem, { kind: 'i
   return (
     <div className="px-4 py-3.5">
       <Link href={`/invitaciones/${encodeURIComponent(invite.id)}`} onClick={onNavigate} className="flex items-center gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
           <Users className="size-4" />
         </div>
         <div className="min-w-0 flex-1">
@@ -169,7 +169,7 @@ export function PendingBell() {
         size="icon"
         onClick={() => setOpen(true)}
         aria-label={count ? `Pendientes: ${count}` : 'Pendientes'}
-        className="relative size-9 border-white/10 bg-white/[0.03]"
+        className="relative size-9 border-line-strong bg-surface-2"
       >
         <Bell />
         {count > 0 && (
@@ -198,10 +198,10 @@ export function PendingBell() {
               <p className="text-sm text-muted-foreground">Cuando haya algo para revisar te lo mostramos acá.</p>
             </div>
           ) : (
-            <div className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+            <div className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
               {unseen.length > 0 && (
                 <Link href="/novedades" onClick={close} className={ROW}>
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
                     <Sparkles className="size-4" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -216,7 +216,7 @@ export function PendingBell() {
                 if (item.kind === 'km') {
                   return (
                     <div key={`km-${item.car.id}`} className="flex items-center gap-3 px-4 py-3.5">
-                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-warning/10 text-warning">
                         <Gauge className="size-4" />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -241,7 +241,7 @@ export function PendingBell() {
                 if (item.kind === 'rejected') {
                   return (
                     <Link key={`rejected-${item.job.id}`} href={`/autos/${item.car.id}/trabajos/${item.job.id}`} onClick={close} className={ROW}>
-                      <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-destructive/10 text-destructive">
                         <CircleX className="size-4" />
                       </div>
                       <div className="min-w-0 flex-1">

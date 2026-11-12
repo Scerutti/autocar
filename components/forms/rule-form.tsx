@@ -56,7 +56,7 @@ function RulingJobNotice({
   return (
     <Link
       href={`/autos/${car.id}/trabajos/${job.id}`}
-      className="block rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-3 text-sm transition hover:bg-primary/10"
+      className="block rounded-md border border-primary/20 bg-primary/5 px-3.5 py-3 text-sm transition hover:bg-primary/10"
     >
       <span className="font-medium">
         {projection.completedByJobId ? 'Cumplido con' : 'Según'} el trabajo «{job.title}» del {formatDayMonth(job.date)}
@@ -78,15 +78,15 @@ function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
   const remaining = state ? describeRemaining(state) : null
   return (
     <div className="mx-auto max-w-xl space-y-4">
-      <p className="rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-sm text-muted-foreground">{OWNER_ONLY_PLAN}</p>
+      <p className="rounded-md border border-line bg-surface-2 px-3.5 py-3 text-sm text-muted-foreground">{OWNER_ONLY_PLAN}</p>
       <RulingJobNotice car={car} projection={rule} jobs={jobs} />
       {missingLastKm(rule) && !rule.lastDoneJobId && (
-        <p className="rounded-xl border border-warning/25 bg-warning/5 px-3.5 py-3 text-sm text-warning">
+        <p className="rounded-md border border-warning/25 bg-warning/5 px-3.5 py-3 text-sm text-warning">
           {MISSING_LAST_KM}: hasta que {car.ownerName ?? 'el dueño'} lo complete, se calcula sólo por fecha.
         </p>
       )}
       {state && state.status !== 'unknown' && (
-        <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+        <div className="rounded-md border border-line bg-card/60 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="min-w-0 truncate text-sm font-medium">Próximo {rule.name}</p>
             <StatusBadge status={state.status} />
@@ -106,7 +106,7 @@ function RuleDetails({ car, rule }: { car: Car; rule: MaintenanceRule }) {
           </div>
         </div>
       )}
-      <dl className="divide-y divide-white/8 overflow-hidden rounded-xl border border-white/8 bg-card/60">
+      <dl className="divide-y divide-line overflow-hidden rounded-md border border-line bg-card/60">
         {[
           { label: 'Cada cuánto', value: describeRuleInterval(rule) },
           {
@@ -322,7 +322,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
                   'rounded-full border px-3 py-1.5 text-xs transition',
                   name === p.name
                     ? 'border-primary/40 bg-primary/10 text-primary'
-                    : 'border-white/10 text-muted-foreground hover:text-foreground',
+                    : 'border-line-strong text-muted-foreground hover:text-foreground',
                 )}
               >
                 {p.name}
@@ -392,7 +392,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
         </div>
       </div>
 
-      <details className="rounded-xl border border-white/8 p-4">
+      <details className="rounded-md border border-line p-4">
         <summary className="cursor-pointer text-sm font-medium">Cuándo avisar (opcional)</summary>
         <p className="mt-2 text-xs text-muted-foreground">Si lo dejás vacío, lo calculamos según cada cuánto es.</p>
         <div className="mt-4 grid grid-cols-2 gap-4">
@@ -410,7 +410,7 @@ function RuleEditor({ car, rule, draft: outboxDraft }: { car: Car; rule?: Mainte
       </details>
 
       {preview.status !== 'unknown' && (
-        <div className="rounded-xl border border-white/8 bg-background/30 p-4">
+        <div className="rounded-md border border-line bg-background/30 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <p className="min-w-0 truncate text-sm font-medium">Próximo {name || 'vencimiento'}</p>
             <StatusBadge status={preview.status} />

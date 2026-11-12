@@ -63,7 +63,7 @@ export function IntervalPicker({
     <div className="space-y-3">
       <ChoiceChips value={selected} onChange={pick} options={options} aria-label={ariaLabel} />
       {custom && (
-        <div className="flex flex-col gap-2 rounded-xl border border-white/8 bg-background/30 p-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-2 rounded-md border border-line bg-background/30 p-3 sm:flex-row sm:items-center">
           <Input
             value={amountText}
             onChange={e => setAmount(e.target.value.replace(/\D/g, ''))}

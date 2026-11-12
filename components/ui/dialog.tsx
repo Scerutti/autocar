@@ -29,9 +29,9 @@ function DialogContent({
         <DialogPrimitive.Popup
           data-slot="dialog-content"
           className={cn(
-            'relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-2xl border border-white/10 bg-popover p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-popover-foreground shadow-2xl shadow-black/50 outline-none',
+            'relative flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-lg border border-line-strong bg-popover p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] text-popover-foreground outline-none',
             'transition-[translate,scale,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] data-starting-style:translate-y-full data-ending-style:translate-y-full motion-reduce:transition-none',
-            'sm:rounded-2xl sm:pb-5 sm:data-starting-style:translate-y-0 sm:data-starting-style:scale-95 sm:data-starting-style:opacity-0 sm:data-ending-style:translate-y-0 sm:data-ending-style:scale-95 sm:data-ending-style:opacity-0',
+            'sm:rounded-lg sm:pb-5 sm:data-starting-style:translate-y-0 sm:data-starting-style:scale-95 sm:data-starting-style:opacity-0 sm:data-ending-style:translate-y-0 sm:data-ending-style:scale-95 sm:data-ending-style:opacity-0',
             className,
           )}
           {...props}
@@ -40,7 +40,7 @@ function DialogContent({
           {showClose && (
             <DialogPrimitive.Close
               aria-label="Cerrar"
-              className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition hover:bg-white/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               <X className="size-4" />
             </DialogPrimitive.Close>
@@ -60,7 +60,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
 }
 
 function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
-  return <DialogPrimitive.Title data-slot="dialog-title" className={cn('text-lg font-semibold tracking-tight', className)} {...props} />
+  return <DialogPrimitive.Title data-slot="dialog-title" className={cn('text-lg font-semibold', className)} {...props} />
 }
 
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props) {

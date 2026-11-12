@@ -150,7 +150,7 @@ export function CelebrationDialog({
                       <Trophy aria-hidden className="size-9 text-white drop-shadow" />
                     </div>
                   </div>
-                  <DialogPrimitive.Title className="mt-4 text-2xl font-semibold tracking-tight">
+                  <DialogPrimitive.Title className="mt-4 text-2xl font-semibold">
                     ¡{items.length} logros nuevos!
                   </DialogPrimitive.Title>
                   <DialogPrimitive.Description className="mt-1 text-sm text-muted-foreground">
@@ -181,7 +181,7 @@ export function CelebrationDialog({
                   <p className={cn('text-xs font-semibold uppercase tracking-wide', milestone ? 'text-amber-300' : 'text-primary')}>
                     {milestone ? '¡Un hito!' : '¡Nuevo logro!'}
                   </p>
-                  <DialogPrimitive.Title className="mt-1.5 text-2xl font-semibold tracking-tight">{current.def.name}</DialogPrimitive.Title>
+                  <DialogPrimitive.Title className="mt-1.5 text-2xl font-semibold">{current.def.name}</DialogPrimitive.Title>
                   <DialogPrimitive.Description className="mx-auto mt-2 max-w-xs text-sm text-muted-foreground">
                     {current.def.description}
                   </DialogPrimitive.Description>

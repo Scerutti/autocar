@@ -93,7 +93,7 @@ export function ExportReportDialog({ car, open, onClose }: { car: Car; open: boo
 
         {step.kind === 'ready' ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl border border-success/25 bg-success/5 p-4">
+            <div className="flex items-center gap-3 rounded-md border border-success/25 bg-success/5 p-4">
               <FileText aria-hidden className="size-8 shrink-0 text-success" />
               <div className="min-w-0">
                 <p className="font-medium">Tu PDF está listo</p>

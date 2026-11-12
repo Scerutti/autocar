@@ -37,7 +37,7 @@ export function DismissibleHint({
   }
 
   return (
-    <div className={cn('flex gap-3 rounded-xl border border-warning/20 bg-warning/5 p-4 text-sm', className)}>
+    <div className={cn('flex gap-3 rounded-md border border-warning/20 bg-warning/5 p-4 text-sm', className)}>
       <Icon aria-hidden className="size-5 shrink-0 text-warning" />
       <div className="min-w-0 flex-1">
         {children}

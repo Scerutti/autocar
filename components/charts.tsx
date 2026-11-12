@@ -29,7 +29,7 @@ export function ChartCard({
   className?: string
 }) {
   return (
-    <section className={cn('rounded-2xl border border-white/8 bg-card/60 p-5', className)}>
+    <section className={cn('rounded-md border border-line bg-card/60 p-5', className)}>
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-base font-semibold">{title}</h2>
@@ -72,7 +72,7 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
           {ticks.map(t => (
             <div key={t} className="absolute left-0 right-0 flex items-center" style={{ bottom: `${(t / top) * 100}%` }}>
               <span className="w-10 -translate-y-px pr-2 text-right text-[10px] tabular-nums text-muted-foreground">{compactMoney(t)}</span>
-              <div className={cn('h-px flex-1', t === 0 ? 'bg-white/20' : 'bg-white/[0.06]')} />
+              <div className={cn('h-px flex-1', t === 0 ? 'bg-foreground/20' : 'bg-line')} />
             </div>
           ))}
         </div>
@@ -89,7 +89,7 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
               onFocus={() => setActive(m.month)}
               onBlur={() => setActive(null)}
               onClick={() => setActive(a => (a === m.month ? null : m.month))}
-              className={cn('relative flex flex-1 flex-col-reverse items-stretch rounded-t transition', shown === m.month && 'bg-white/[0.04]')}
+              className={cn('relative flex flex-1 flex-col-reverse items-stretch rounded-t transition', shown === m.month && 'bg-surface-2')}
             >
               {m.jobs > 0 && (
                 <div className={cn('w-full bg-series-1', m.fuel === 0 && 'rounded-t-[4px]')} style={{ height: `${jobsPct}%` }} />
@@ -115,7 +115,7 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
           </span>
         ))}
       </div>
-      <div className="mt-4 flex min-h-12 flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-background/30 px-4 py-3 text-sm">
+      <div className="mt-4 flex min-h-12 flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-background/30 px-4 py-3 text-sm">
         {shown != null ? (
           <>
             <span className="font-medium">{MONTHS_SHORT[shown]}</span>
@@ -127,7 +127,7 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
               <span className="size-2.5 rounded-sm bg-series-2" /> Combustible{' '}
               <span className="tabular-nums text-foreground">{formatMoney(months[shown].fuel)}</span>
             </span>
-            <span className="font-semibold tabular-nums">{formatMoney(months[shown].total)}</span>
+            <span className="font-display text-base font-semibold tabular-nums">{formatMoney(months[shown].total)}</span>
           </>
         ) : (
           <span className="text-muted-foreground">Tocá un mes para ver el detalle.</span>
@@ -152,7 +152,7 @@ export function CategoryBars({ rows }: { rows: { label: string; value: number }[
               <span className="text-xs text-muted-foreground">{total ? Math.round((r.value / total) * 100) : 0}%</span>
             </span>
           </div>
-          <div className="h-2 rounded-full bg-white/[0.06]">
+          <div className="h-2 rounded-full bg-track">
             <div className="h-full rounded-full bg-series-1" style={{ width: `${(r.value / max) * 100}%` }} />
           </div>
         </div>

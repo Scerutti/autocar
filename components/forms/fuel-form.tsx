@@ -287,7 +287,7 @@ function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: Ou
           onChange={e => setQuantity(e.target.value)}
           inputMode="decimal"
           placeholder={fuelType === 'gnc' ? '12,5' : '40'}
-          className="h-14 text-2xl font-semibold tabular-nums"
+          className="h-14 font-display text-2xl font-semibold tabular-nums"
           required
         />
       </Field>
@@ -307,7 +307,7 @@ function FuelEditor({ car, load, draft }: { car: Car; load?: FuelLoad; draft: Ou
           inputMode="decimal"
           placeholder={mode === 'unit' ? (fuelType === 'gnc' ? '560' : '1250') : '50000'}
           aria-label={mode === 'unit' ? `Precio por ${unit}` : 'Total pagado'}
-          className="h-14 text-2xl font-semibold tabular-nums"
+          className="h-14 font-display text-2xl font-semibold tabular-nums"
         />
         {amounts && (
           <p className="text-sm text-muted-foreground">

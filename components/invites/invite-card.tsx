@@ -85,8 +85,8 @@ export function InviteCard({ invite }: { invite: Invite }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 p-4">
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-primary/25 bg-primary/5 p-4">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <Users className="size-5" />
       </div>
       <div className="min-w-0 flex-1">

@@ -17,9 +17,9 @@ import { JOB_CATEGORY_LABELS } from '@/lib/types'
 
 function Tile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-card/60 p-4">
+    <div className="rounded-md border border-line bg-card/60 p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold tabular-nums tracking-tight sm:text-2xl">{value}</p>
+      <p className="mt-1 font-display text-2xl font-semibold leading-tight tabular-nums sm:text-3xl">{value}</p>
       {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
