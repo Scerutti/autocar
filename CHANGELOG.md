@@ -2,6 +2,20 @@
 
 Las versiones siguen [SemVer](https://semver.org/lang/es/). Cada versión también tiene su [release en GitHub](https://github.com/Scerutti/autocar/releases).
 
+## Próxima versión
+
+### Novedades
+
+- **Costo por km de cada combustible**: en la pestaña Combustible de un auto con nafta y GNC, la tarjeta "Costo por km" muestra debajo cuánto pone cada uno (por ejemplo "Nafta $ 129,90 · GNC $ 10,09"); con un solo combustible dice cuál es. Es lo gastado en cada combustible sobre los mismos km, así las partes suman el total.
+
+### Arreglos
+
+- **El detalle del mes en Gastos se lee bien en el celular**: al tocar una barra, el mes y el total van arriba y cada serie en su renglón, con los montos alineados; en pantallas anchas las series van en una línea. Las series van siempre en el orden de las tarjetas: Trabajos, Repuestos y Combustible.
+
+### Mantenimiento
+
+- `costPerKmByFuel` en `lib/fuel.ts`, con pruebas; `computeCostPerKm` devuelve su total.
+
 ## 1.8.0
 
 Repuestos como gasto propio y un atajo para lo que ya está hecho. Sin cambios en Firestore ni pasos manuales.

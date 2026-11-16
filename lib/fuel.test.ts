@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
+import { computeCostPerKm, computeFuelStats, costPerKmByFuel, fuelLabel, lastPrices, resolveFuelAmounts } from './fuel'
 import { fuelTypeFromDoc, fuelTypesFromDoc } from './parse'
 import { computeAvgKmPerDay, entryKmWarning, readingDateOf, validateKmReading } from './odometer'
 import { percentShares, summarizeExpenses } from './expenses'
@@ -105,6 +105,62 @@ describe('computeCostPerKm', () => {
       load({ date: '2026-03-25', km: null, total: 77777 }),
     ]
     expect(computeCostPerKm(loads)).toBe(50)
+  })
+})
+
+describe('costPerKmByFuel', () => {
+  it('con un solo combustible, el renglón es el total', () => {
+    const loads = [load({ km: 1000, total: 99999 }), load({ km: 1500, total: 30000 }), load({ km: 2000, total: 10000 })]
+    expect(costPerKmByFuel(loads)).toEqual({ total: 40, byFuel: [{ fuelType: 'nafta', perKm: 40 }] })
+  })
+  it('separa nafta y GNC, en ese orden, y las partes suman el total', () => {
+    const loads = [
+      load({ km: 1000, total: 99999 }),
+      load({ km: 2000, fuelType: 'gnc', grade: null, quantity: 10, total: 10000 }),
+      load({ km: 4000, total: 10000 }),
+    ]
+    const r = costPerKmByFuel(loads)!
+    expect(r.total).toBe(6.67)
+    expect(r.byFuel).toEqual([
+      { fuelType: 'nafta', perKm: 3.33 },
+      { fuelType: 'gnc', perKm: 3.33 },
+    ])
+    expect(Math.abs(r.byFuel.reduce((s, f) => s + f.perKm, 0) - r.total)).toBeLessThan(0.011)
+  })
+  it('una carga sin km entre la primera y la última cuenta para su combustible; una después de la última, no', () => {
+    const loads = [
+      load({ date: '2026-03-01', km: 1000, total: 99999 }),
+      load({ date: '2026-03-10', km: null, fuelType: 'gnc', grade: null, total: 6000 }),
+      load({ date: '2026-03-20', km: 2000, total: 30000 }),
+      load({ date: '2026-03-25', km: null, fuelType: 'gnc', grade: null, total: 77777 }),
+    ]
+    expect(costPerKmByFuel(loads)).toEqual({
+      total: 36,
+      byFuel: [
+        { fuelType: 'nafta', perKm: 30 },
+        { fuelType: 'gnc', perKm: 6 },
+      ],
+    })
+  })
+  it('la primera carga no suma a su combustible: sólo las siguientes', () => {
+    const gnc = { fuelType: 'gnc' as const, grade: null }
+    expect(costPerKmByFuel([load({ km: 1000, ...gnc, total: 99999 }), load({ km: 2000, total: 30000 })])).toEqual({
+      total: 30,
+      byFuel: [{ fuelType: 'nafta', perKm: 30 }],
+    })
+    expect(
+      costPerKmByFuel([load({ km: 1000, ...gnc, total: 99999 }), load({ km: 2000, total: 30000 }), load({ km: 3000, ...gnc, total: 4000 })])
+    ).toEqual({
+      total: 17,
+      byFuel: [
+        { fuelType: 'nafta', perKm: 15 },
+        { fuelType: 'gnc', perKm: 2 },
+      ],
+    })
+  })
+  it('con menos de dos cargas con km da null', () => {
+    expect(costPerKmByFuel([load({ km: 1000 }), load({ date: '2026-03-10', km: null })])).toBeNull()
+    expect(costPerKmByFuel([])).toBeNull()
   })
 })
 
