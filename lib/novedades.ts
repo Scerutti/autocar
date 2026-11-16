@@ -13,6 +13,20 @@ export interface Novedad {
  */
 export const NOVEDADES: Novedad[] = [
   {
+    version: '1.9.0',
+    date: '2026-11-15',
+    items: [
+      {
+        title: 'Costo por km de cada combustible',
+        text: 'Si tu auto anda a nafta y GNC, en la pestaña Combustible la tarjeta "Costo por km" muestra cuánto pone cada uno, por ejemplo "Nafta $ 129,90 · GNC $ 10,09". Las dos partes suman el total.',
+      },
+      {
+        title: 'Gastos más claro en el celular',
+        text: 'Al tocar un mes en el gráfico de Gastos, arriba ves el mes y el total, y abajo trabajos, repuestos y combustible, cada uno en su renglón.',
+      },
+    ],
+  },
+  {
     version: '1.8.0',
     date: '2026-11-11',
     items: [
