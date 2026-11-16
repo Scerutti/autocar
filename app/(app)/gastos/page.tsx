@@ -73,13 +73,13 @@ function Expenses() {
 
             <ChartCard
               title={`¿Cuánto gastaste cada mes de ${year}?`}
-              description="Cada barra es un mes: en azul lo que gastaste en trabajos, en naranja en combustible y en verde en repuestos. Tocá una barra para ver el detalle."
+              description="Cada barra es un mes: en azul lo que gastaste en trabajos, en verde en repuestos y en naranja en combustible. Tocá una barra para ver el detalle."
               legend={
                 <Legend
                   items={[
                     { label: 'Trabajos', color: 'var(--series-1)' },
-                    { label: 'Combustible', color: 'var(--series-2)' },
                     { label: 'Repuestos', color: 'var(--series-3)' },
+                    { label: 'Combustible', color: 'var(--series-2)' },
                   ]}
                 />
               }

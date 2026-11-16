@@ -55,6 +55,13 @@ export function Legend({ items }: { items: { label: string; color: string }[] })
   )
 }
 
+/** Series del detalle del mes, en el orden de las tarjetas de Gastos; el color es el de su barra. */
+const MONTH_SERIES = [
+  { key: 'jobs', label: 'Trabajos', color: 'bg-series-1' },
+  { key: 'parts', label: 'Repuestos', color: 'bg-series-3' },
+  { key: 'fuel', label: 'Combustible', color: 'bg-series-2' },
+] as const
+
 /**
  * Barras apiladas por mes: trabajos (abajo), combustible y repuestos (arriba), en el orden de la paleta. El detalle del mes activo (hover / tap)
  * va en texto, así no depende del color.
@@ -125,23 +132,23 @@ export function MonthlyBars({ months, currentMonth }: { months: MonthTotals[]; c
           </span>
         ))}
       </div>
-      <div className="mt-4 flex min-h-12 flex-wrap items-center justify-between gap-3 rounded-xl border border-white/8 bg-background/30 px-4 py-3 text-sm">
+      <div className="mt-4 flex min-h-12 flex-col justify-center gap-2 rounded-xl border border-white/8 bg-background/30 px-4 py-3 text-sm">
         {shown != null ? (
           <>
-            <span className="font-medium">{MONTHS_SHORT[shown]}</span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="size-2.5 rounded-sm bg-series-1" /> Trabajos{' '}
-              <span className="tabular-nums text-foreground">{formatMoney(months[shown].jobs)}</span>
-            </span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="size-2.5 rounded-sm bg-series-2" /> Combustible{' '}
-              <span className="tabular-nums text-foreground">{formatMoney(months[shown].fuel)}</span>
-            </span>
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="size-2.5 rounded-sm bg-series-3" /> Repuestos{' '}
-              <span className="tabular-nums text-foreground">{formatMoney(months[shown].parts)}</span>
-            </span>
-            <span className="font-semibold tabular-nums">{formatMoney(months[shown].total)}</span>
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="font-medium">{MONTHS_SHORT[shown]}</span>
+              <span className="font-semibold tabular-nums">{formatMoney(months[shown].total)}</span>
+            </div>
+            <div className="space-y-1 sm:flex sm:flex-wrap sm:gap-x-5 sm:space-y-0">
+              {MONTH_SERIES.map(serie => (
+                <div key={serie.key} className="flex items-center justify-between gap-3 sm:justify-start sm:gap-1.5">
+                  <span className="flex items-center gap-1.5 text-muted-foreground">
+                    <span className={cn('size-2.5 rounded-sm', serie.color)} /> {serie.label}
+                  </span>
+                  <span className="tabular-nums text-foreground">{formatMoney(months[shown][serie.key])}</span>
+                </div>
+              ))}
+            </div>
           </>
         ) : (
           <span className="text-muted-foreground">Tocá un mes para ver el detalle.</span>

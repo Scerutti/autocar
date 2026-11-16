@@ -29,7 +29,7 @@ import { useCar, useData } from '@/components/providers/data-provider'
 import { cloudinaryUrl } from '@/lib/cloudinary-url'
 import { toISODate } from '@/lib/dates'
 import { deleteReading, leaveCar, restoreReading } from '@/lib/db'
-import { computeCostPerKm, computeFuelStats, fuelLabel, lastPrices } from '@/lib/fuel'
+import { computeFuelStats, costPerKmByFuel, fuelLabel, lastPrices, type CostPerKmByFuel } from '@/lib/fuel'
 import { formatDate, formatKm, formatMoney, formatMoneyPrecise, formatNumber, timeAgo } from '@/lib/format'
 import { describeRemaining, describeRuleInterval, MISSING_LAST_KM, missingLastKm, type RuleWithState } from '@/lib/maintenance'
 import { checkCarRuleEscalations } from '@/lib/notify-client'
@@ -50,6 +50,17 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
       {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
+}
+
+/**
+ * Debajo del costo por km: con un combustible, cuál es; con varios, lo que pone cada uno sobre el mismo recorrido
+ * ("Nafta $ 129,90 · GNC $ 10,09").
+ */
+function costPerKmHint(cost: CostPerKmByFuel | null) {
+  if (cost == null) return 'Necesita dos cargas con km'
+  if (cost.byFuel.length === 0) return 'Todos los combustibles'
+  if (cost.byFuel.length === 1) return FUEL_LABELS[cost.byFuel[0].fuelType]
+  return cost.byFuel.map(f => `${FUEL_LABELS[f.fuelType]} ${formatMoneyPrecise(f.perKm)}`).join(' · ')
 }
 
 /**
@@ -255,7 +266,7 @@ function FuelTab({ car, fuel, carById, writable }: { car: Car; fuel: FuelLoad[];
     )
   }
   const single = car.fuelTypes.length === 1
-  const costPerKm = computeCostPerKm(fuel)
+  const costPerKm = costPerKmByFuel(fuel)
   const types = car.fuelTypes.filter(t => fuel.some(f => f.fuelType === t))
   return (
     <div className="space-y-6">
@@ -263,7 +274,7 @@ function FuelTab({ car, fuel, carById, writable }: { car: Car; fuel: FuelLoad[];
         <h2 className="text-base font-semibold">Resumen de combustible</h2>
         <p className="mb-3 mt-0.5 text-sm text-muted-foreground">Cuánto te cuesta andar y lo último que pagaste.</p>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Costo por km" value={costPerKm != null ? formatMoneyPrecise(costPerKm) : '—'} hint={costPerKm == null ? 'Necesita dos cargas con km' : 'Todos los combustibles'} />
+        <Stat label="Costo por km" value={costPerKm != null ? formatMoneyPrecise(costPerKm.total) : '—'} hint={costPerKmHint(costPerKm)} />
         {types.map(t => {
           const s = computeFuelStats(fuel, t, single)
           const unit = FUEL_UNITS[t]

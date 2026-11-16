@@ -90,12 +90,21 @@ function sumBetween(loads: FuelLoad[], from: FuelLoad, to: FuelLoad, value: (l: 
   return loads.filter(l => loadOrder(from, l) < 0 && loadOrder(l, to) < 0).reduce((s, l) => s + value(l), 0)
 }
 
+/** Costo por km del total y de cada combustible: lo gastado en ese combustible sobre el mismo recorrido. */
+export interface CostPerKmByFuel {
+  total: number
+  /** Un renglón por combustible con gasto en el recorrido, en el orden de `FUEL_LABELS`. */
+  byFuel: { fuelType: FuelType; perKm: number }[]
+}
+
 /**
- * Costo de combustible por km, sumando todos los combustibles.
+ * Costo de combustible por km, en total y separado por combustible, sobre el mismo recorrido.
  * Toma las cargas con km; la primera no cuenta (ese combustible se gasta después). Las cargas sin km
  * que caen por fecha entre la primera y la última también se pagaron en ese recorrido.
+ * Las partes suman el total (salvo el redondeo a centavos). No reparte los km entre combustibles:
+ * en un auto con dos no se sabe cuántos se hicieron con cada uno.
  */
-export function computeCostPerKm(loads: FuelLoad[]): number | null {
+export function costPerKmByFuel(loads: FuelLoad[]): CostPerKmByFuel | null {
   const withKm = loads.filter(l => l.km != null).sort((a, b) => a.km! - b.km!)
   if (withKm.length < 2) return null
   const first = withKm[0]
@@ -103,8 +112,24 @@ export function computeCostPerKm(loads: FuelLoad[]): number | null {
   const distance = last.km! - first.km!
   if (distance <= 0) return null
   const withoutKm = loads.filter(l => l.km == null)
-  const spent = withKm.slice(1).reduce((s, l) => s + l.total, 0) + sumBetween(withoutKm, first, last, l => l.total)
-  return round2(spent / distance)
+  const spentOn = (counts: (l: FuelLoad) => boolean) => {
+    const value = (l: FuelLoad) => (counts(l) ? l.total : 0)
+    return withKm.slice(1).reduce((s, l) => s + value(l), 0) + sumBetween(withoutKm, first, last, value)
+  }
+  const byFuel = (Object.keys(FUEL_LABELS) as FuelType[])
+    .map(fuelType => ({ fuelType, spent: spentOn(l => l.fuelType === fuelType) }))
+    .filter(f => f.spent > 0)
+    .map(f => ({ fuelType: f.fuelType, perKm: round2(f.spent / distance) }))
+  return { total: round2(spentOn(() => true) / distance), byFuel }
+}
+
+/**
+ * Costo de combustible por km, sumando todos los combustibles (el `total` de `costPerKmByFuel`).
+ * Toma las cargas con km; la primera no cuenta (ese combustible se gasta después). Las cargas sin km
+ * que caen por fecha entre la primera y la última también se pagaron en ese recorrido.
+ */
+export function computeCostPerKm(loads: FuelLoad[]): number | null {
+  return costPerKmByFuel(loads)?.total ?? null
 }
 
 /** "Nafta Súper", "Gasoil Premium", "GNC" (o "Nafta" en cargas viejas sin el dato). */

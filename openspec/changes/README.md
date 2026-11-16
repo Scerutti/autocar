@@ -8,6 +8,7 @@
 | transfer-car-ownership | El dueño le pasa el auto a un miembro (#65, E2) | P3 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/65-transfer-car`; faltan CI, simulador de reglas y publicar reglas) |
 | member-roles | Roles por miembro: aprobación automática o solo lectura (#71, E2) | P4 | M | invite-members-by-uid | IN PROGRESS (implementado en `feat/71-member-roles`; faltan CI, simulador de reglas y publicar reglas) |
 | cron-push-users-and-run-log | El cron recorre solo usuarios con push, lee en paralelo y registra cada corrida (#58, E3) | P2 | M | — | IN PROGRESS (implementado en `feat/58-cron-push-users`; faltan CI y una semana de `cronRuns` sin salteados) |
+| fuel-cost-per-km-by-fuel | Costo por km de cada combustible y detalle del mes de Gastos en el celular | P3 | S | — | DONE (salió en la 1.9.0 el 2026-11-15) |
 | member-and-instant-notifications | Avisar a los miembros y avisar aprobaciones, rechazos y trabajos para revisar (#61, E2) | P2 | L | invite-members-by-uid, cron-push-users-and-run-log | IN PROGRESS (implementado en `feat/61-member-notifications`; faltan CI, simulador de reglas, publicar reglas y prueba con dos cuentas) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale) | ARCHIVED.
